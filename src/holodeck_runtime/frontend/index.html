@@ -3,76 +3,88 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#24221d" />
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%23302f2a'/%3E%3Ctext x='9' y='23' fill='%23d8b29f' font-size='20' font-family='serif' font-style='italic'%3EH%3C/text%3E%3C/svg%3E" />
-    <title>Holodeck — Development Workspace</title>
+    <meta name="theme-color" content="#292822" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='15' fill='%232e2d27'/%3E%3Ctext x='8' y='23' fill='%23d3a58d' font-size='20' font-family='serif' font-style='italic'%3EH%3C/text%3E%3C/svg%3E" />
+    <title>Holodeck — Autonomous Development Control Plane</title>
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
     <div class="grain" aria-hidden="true"></div>
     <div class="shell">
       <aside class="rail">
-        <a class="brand" href="/" aria-label="Holodeck home">
+        <a class="brand" href="/" aria-label="Holodeck overview">
           <span class="brand-mark">H</span>
-          <span><strong>holodeck</strong><small>local workspace</small></span>
+          <span><strong>holodeck</strong><small>development control plane</small></span>
         </a>
-        <nav class="nav" aria-label="Workspace">
+        <nav class="nav" aria-label="Holodeck sections">
           <button class="nav-item is-active" data-view="overview"><span>01</span>Overview</button>
           <button class="nav-item" data-view="work"><span>02</span>Work</button>
-          <button class="nav-item" data-view="guardrails"><span>03</span>Guardrails</button>
+          <button class="nav-item" data-view="runs"><span>03</span>Runs &amp; claims</button>
+          <button class="nav-item" data-view="configuration"><span>04</span>Configuration</button>
         </nav>
-        <div class="rail-foot">
-          <span class="health-dot" id="health-dot"></span>
-          <span><small>runtime</small><strong id="health-label">checking</strong></span>
-        </div>
+        <div class="rail-scope"><small>Current boundary</small><strong id="rail-workspace">No workspace</strong><span id="rail-roots">—</span></div>
+        <div class="rail-foot"><span class="health-dot" id="health-dot"></span><span><small>runtime</small><strong id="health-label">checking</strong></span></div>
       </aside>
 
       <main class="main">
         <header class="header">
-          <div>
-            <p class="overline">AUTONOMOUS DEVELOPMENT / LOCAL AUTHORITY</p>
-            <h1 id="workspace-title">Workspace overview</h1>
-          </div>
+          <div><p class="overline" id="view-kicker">LOCAL AUTHORITY / COMPLETE STATE</p><h1 id="view-title">Workspace overview</h1><p class="header-note" id="view-note">Intent, motion, and boundaries in one place.</p></div>
           <div class="header-actions">
-            <label class="workspace-picker"><span>Workspace</span><select id="workspace-select"></select></label>
-            <button class="sync" id="refresh" type="button">Refresh <span>↻</span></button>
+            <label class="workspace-picker"><span>Workspace</span><select id="workspace-select" aria-label="Current workspace"></select></label>
+            <button class="button button--quiet" id="refresh" type="button">Refresh ↻</button>
+            <button class="button button--ink" data-open="workspace-dialog" type="button">New workspace</button>
           </div>
         </header>
 
-        <section class="metrics" aria-label="Workspace summary">
-          <article class="metric"><span class="metric-index">I</span><p>Open work</p><strong id="metric-open">—</strong><small>tasks requiring attention</small></article>
-          <article class="metric"><span class="metric-index">II</span><p>In motion</p><strong id="metric-active">—</strong><small>active development</small></article>
-          <article class="metric"><span class="metric-index">III</span><p>Review</p><strong id="metric-review">—</strong><small>waiting for judgment</small></article>
-          <article class="metric metric--accent"><span class="metric-index">IV</span><p>Completion</p><strong id="metric-done">—</strong><small>verified outcomes</small></article>
+        <section class="view is-active" data-page="overview">
+          <section class="metrics" aria-label="Workspace summary">
+            <article class="metric"><span class="metric-index">I</span><p>Open work</p><strong id="metric-open">—</strong><small>tasks requiring attention</small></article>
+            <article class="metric"><span class="metric-index">II</span><p>Active runs</p><strong id="metric-runs">—</strong><small>agents currently moving</small></article>
+            <article class="metric"><span class="metric-index">III</span><p>Path claims</p><strong id="metric-claims">—</strong><small>protected active surfaces</small></article>
+            <article class="metric metric--accent"><span class="metric-index">IV</span><p>Completion</p><strong id="metric-done">—</strong><small>closed task outcomes</small></article>
+          </section>
+          <div class="overview-grid">
+            <section class="paper-card intent-card"><div class="section-head"><div><p class="overline">WORKSPACE INTENT</p><h2 id="workspace-goal">Select a workspace</h2></div><span class="seal" id="workspace-state">—</span></div><p id="workspace-purpose" class="lead-copy"></p><dl class="definition-grid" id="workspace-meta"></dl></section>
+            <section class="paper-card"><div class="section-head"><div><p class="overline">RECENT MOTION</p><h2>Agent activity</h2></div><button class="text-button" data-go="runs">View all</button></div><div id="recent-runs" class="stack-list"></div></section>
+            <section class="paper-card"><div class="section-head"><div><p class="overline">POLICY POSTURE</p><h2>Autonomy boundary</h2></div><button class="text-button" data-go="configuration">Inspect</button></div><div class="policy-summary" id="policy-summary"></div></section>
+            <section class="paper-card"><div class="section-head"><div><p class="overline">CAPABILITY MAP</p><h2>System coverage</h2></div><span class="mini-count" id="capability-count">—</span></div><div id="capability-summary" class="capability-stripe"></div></section>
+          </div>
         </section>
 
-        <section class="content-grid">
-          <section class="work-panel">
-            <div class="section-head">
-              <div><p class="overline">THE WORK</p><h2>Current movement</h2></div>
-              <p id="workspace-purpose" class="section-note">A quiet view of what is moving and what needs intervention.</p>
-            </div>
-            <div class="board" id="task-board"></div>
-          </section>
+        <section class="view" data-page="work">
+          <div class="view-toolbar"><div><p class="overline">COMPLETE TASK LEDGER</p><h2>Workboard</h2><p>Every task field is available through its detail card.</p></div><button class="button button--rust" data-open="task-dialog" type="button">Add task</button></div>
+          <div class="task-board" id="task-board"></div>
+        </section>
 
-          <aside class="inspector">
-            <section class="focus-card">
-              <p class="overline">WORKSPACE INTENT</p>
-              <h2 id="workspace-goal">Select a workspace</h2>
-              <dl id="workspace-meta"></dl>
-            </section>
-            <section class="guard-card">
-              <div class="section-head compact"><div><p class="overline">BOUNDARIES</p><h2>Guardrails</h2></div><span class="seal">local</span></div>
-              <ul class="guard-list">
-                <li><span class="guard-symbol automatic">○</span><span><strong>Observe freely</strong><small>Repository reads and workspace state</small></span></li>
-                <li><span class="guard-symbol approval">△</span><span><strong>Ask before acting</strong><small>Writes, network, dependencies, push, deploy</small></span></li>
-                <li><span class="guard-symbol denied">×</span><span><strong>Never ambient</strong><small>Destructive commands remain denied</small></span></li>
-              </ul>
-            </section>
-          </aside>
+        <section class="view" data-page="runs">
+          <div class="view-toolbar"><div><p class="overline">AUTONOMOUS EXECUTION</p><h2>Runs &amp; file claims</h2><p>Path overlap protection is enforced by the local runtime.</p></div><button class="button button--rust" data-open="run-dialog" type="button">Begin run</button></div>
+          <div class="run-layout">
+            <section class="paper-card run-ledger"><div class="section-head"><div><p class="overline">RUN LEDGER</p><h2>Agent runs</h2></div><span class="mini-count" id="run-count">0</span></div><div id="run-list" class="run-list"></div></section>
+            <aside class="paper-card claim-ledger"><div class="section-head"><div><p class="overline">PATH AUTHORITY</p><h2>Claims</h2></div><span class="seal seal--moss" id="claim-count">0 active</span></div><div id="claim-list" class="claim-list"></div></aside>
+          </div>
+        </section>
+
+        <section class="view" data-page="configuration">
+          <div class="view-toolbar"><div><p class="overline">EFFECTIVE CONFIGURATION</p><h2>Runtime &amp; project settings</h2><p>Values below come from the running service—not a frontend approximation.</p></div><span class="config-stamp">schema 1.0</span></div>
+          <div class="config-grid">
+            <form class="paper-card config-form" id="workspace-form"><div class="section-head"><div><p class="overline">WORKSPACE MANIFEST</p><h2>Intent and boundaries</h2></div><button class="button button--quiet" type="submit">Save settings</button></div><label>Label<input name="label" /></label><label>Goal<textarea name="goal" rows="2"></textarea></label><label>Purpose<textarea name="purpose" rows="3"></textarea></label><div class="field-pair"><label>Artifact roots<textarea name="artifact_roots" rows="4" placeholder="One path per line"></textarea></label><label>Out of scope<textarea name="scope_out" rows="4" placeholder="One boundary per line"></textarea></label></div><div class="record-times" id="workspace-times"></div></form>
+            <section class="paper-card runtime-card"><div class="section-head"><div><p class="overline">SERVICE BINDING</p><h2>Runtime</h2></div><span class="health-dot is-live"></span></div><dl class="definition-grid" id="runtime-config"></dl></section>
+            <section class="paper-card policy-card"><div class="section-head"><div><p class="overline">PROJECT ONBOARDING</p><h2>Action policy</h2></div><span class="seal">read only</span></div><p class="fine-print">Generated by <code>holodeck init</code>. These settings guide project actions; runtime enforcement adapters are planned.</p><div class="policy-table" id="policy-table"></div></section>
+            <section class="paper-card manifest-card"><div class="section-head"><div><p class="overline">GENERATED DEFAULT</p><h2>Project manifest</h2></div></div><dl class="definition-grid" id="manifest-config"></dl></section>
+            <section class="paper-card capability-card"><div class="section-head"><div><p class="overline">PRODUCT BOUNDARY</p><h2>Capability ledger</h2></div></div><div id="capability-ledger" class="capability-ledger"></div></section>
+          </div>
         </section>
       </main>
     </div>
+
+    <dialog id="workspace-dialog"><form method="dialog" class="dialog-card" id="create-workspace-form"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="overline">NEW BOUNDARY</p><h2>Create workspace</h2><div class="field-pair"><label>Workspace ID<input name="workspace_id" required placeholder="my-project" /></label><label>Label<input name="label" placeholder="My project" /></label></div><label>Goal<textarea name="goal" rows="2"></textarea></label><label>Purpose<textarea name="purpose" rows="3"></textarea></label><div class="field-pair"><label>Artifact roots<textarea name="artifact_roots" rows="3" placeholder="One path per line"></textarea></label><label>Out of scope<textarea name="scope_out" rows="3" placeholder="One boundary per line"></textarea></label></div><div class="dialog-actions"><button class="button button--quiet" value="cancel">Cancel</button><button class="button button--ink" value="default" type="submit">Create workspace</button></div></form></dialog>
+
+    <dialog id="task-dialog"><form method="dialog" class="dialog-card" id="create-task-form"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="overline">NEW WORK ITEM</p><h2>Add task</h2><div class="field-pair"><label>Task ID<input name="task_id" placeholder="Generated if blank" /></label><label>Status<select name="status"><option>backlog</option><option>ready</option><option>in-progress</option><option>review</option><option>blocked</option><option>done</option><option>cancelled</option></select></label></div><label>Title<input name="title" required /></label><label>Acceptance criteria<textarea name="acceptance_criteria" rows="4" placeholder="One criterion per line"></textarea></label><label>Constraints<textarea name="constraints" rows="3" placeholder="One constraint per line"></textarea></label><div class="dialog-actions"><button class="button button--quiet" value="cancel">Cancel</button><button class="button button--ink" value="default" type="submit">Create task</button></div></form></dialog>
+
+    <dialog id="run-dialog"><form method="dialog" class="dialog-card" id="create-run-form"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="overline">CLAIM WORK</p><h2>Begin agent run</h2><label>Task<select name="task_id" id="run-task" required></select></label><div class="field-pair"><label>Agent ID<input name="agent_id" required placeholder="codex" /></label><label>Intent<input name="intent" placeholder="Implement accepted task" /></label></div><label>Claimed paths<textarea name="claimed_paths" rows="5" placeholder="One file or directory per line"></textarea></label><p class="fine-print">The runtime rejects any path overlapping an active claim in this workspace.</p><div class="dialog-actions"><button class="button button--quiet" value="cancel">Cancel</button><button class="button button--ink" value="default" type="submit">Begin run</button></div></form></dialog>
+
+    <dialog id="task-detail-dialog"><form method="dialog" class="dialog-card" id="task-detail-form"><button class="dialog-close" value="cancel" aria-label="Close">×</button><p class="overline" id="detail-task-id">TASK</p><h2>Task record</h2><input type="hidden" name="task_id" /><div class="field-pair"><label>Title<input name="title" required /></label><label>Status<select name="status"><option>backlog</option><option>ready</option><option>in-progress</option><option>review</option><option>blocked</option><option>done</option><option>cancelled</option></select></label></div><label>Acceptance criteria<textarea name="acceptance_criteria" rows="5"></textarea></label><label>Constraints<textarea name="constraints" rows="4"></textarea></label><div class="record-times" id="task-times"></div><div class="dialog-actions"><button class="button button--quiet" value="cancel">Cancel</button><button class="button button--ink" value="default" type="submit">Save task</button></div></form></dialog>
+
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <script src="/assets/app.js" defer></script>
   </body>

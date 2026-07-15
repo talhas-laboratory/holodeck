@@ -4,6 +4,8 @@ The alpha has one authority: a local SQLite database owned by the runtime. The H
 
 The portable core includes workspaces, tasks, agent runs, and file-path claims. It excludes product-specific conversation memory, semantic retrieval, Telegram, OpenClaw, personal paths, and deployment credentials. Docker Compose supplies a reference deployment, not a required hosting model.
 
+The bundled dashboard is an adapter over that same authority. It reads effective runtime configuration, workspace state, task details, runs, and claims from the API; it can create and update the records supported by the alpha. Completing a run atomically releases its active claims. Planned capabilities are reported separately from available controls so the product boundary remains explicit.
+
 The next extraction phase should port evidence, handoff, and repository-observation contracts from the existing system only after their generic schema and policy boundaries are documented and tested here.
 
 ## Onboarding and safety

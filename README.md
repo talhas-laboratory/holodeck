@@ -26,12 +26,17 @@ Open `http://127.0.0.1:8787/` for the standalone Holodeck dashboard. The fronten
 ## Minimal API
 
 - `GET /health`
+- `GET /api/config`
 - `GET|POST /api/workspaces`
-- `GET /api/workspaces/<workspace_id>`
+- `GET|PATCH /api/workspaces/<workspace_id>`
 - `GET|POST /api/workspaces/<workspace_id>/tasks`
+- `PATCH /api/workspaces/<workspace_id>/tasks/<task_id>`
+- `GET /api/workspaces/<workspace_id>/runs`
 - `POST /api/workspaces/<workspace_id>/runs`
+- `POST /api/workspaces/<workspace_id>/runs/<run_id>/complete`
+- `GET /api/workspaces/<workspace_id>/claims`
 
-The alpha refuses overlapping active file claims inside a workspace. Future releases add verification evidence, handoffs, policy classes, repository discovery, and agent/CI adapters.
+The dashboard reflects the complete alpha surface: workspace boundaries, full task records, agent runs, active and released path claims, runtime settings, project manifest defaults, onboarding policy, and the implemented/planned capability boundary. The alpha refuses overlapping active file claims inside a workspace and releases them when a run completes. Future releases add verification evidence, handoffs, repository discovery, and agent/CI adapters.
 
 ## Safe onboarding
 
