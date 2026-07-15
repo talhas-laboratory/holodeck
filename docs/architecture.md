@@ -5,3 +5,7 @@ The alpha has one authority: a local SQLite database owned by the runtime. The H
 The portable core includes workspaces, tasks, agent runs, and file-path claims. It excludes product-specific conversation memory, semantic retrieval, Telegram, OpenClaw, personal paths, and deployment credentials. Docker Compose supplies a reference deployment, not a required hosting model.
 
 The next extraction phase should port evidence, handoff, and repository-observation contracts from the existing system only after their generic schema and policy boundaries are documented and tested here.
+
+## Onboarding and safety
+
+`holodeck init` recognizes only Git repositories and writes a project-local manifest and policy. It is non-invasive by design. The policy is deny-by-default for destructive commands and approval-required for writes, dependencies, network access, pushes, and deployments. This keeps autonomous agents useful inside a bounded repository without granting ambient authority.

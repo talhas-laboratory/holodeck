@@ -1,4 +1,5 @@
 from holodeck_runtime.store import Store
+from holodeck_runtime.project import initialize_project, policy_decision
 
 
 def test_store_creates_workspace_task_and_non_overlapping_run(tmp_path):
@@ -8,3 +9,11 @@ def test_store_creates_workspace_task_and_non_overlapping_run(tmp_path):
     run = store.begin_run("demo", {"task_id": task["task_id"], "agent_id": "codex", "claimed_paths": ["src/api.py"]})
     assert workspace["workspace_id"] == "demo"
     assert run["status"] == "active"
+
+
+def test_project_initialization_requires_git_and_defaults_to_conservative_policy(tmp_path):
+    (tmp_path / ".git").mkdir()
+    result = initialize_project(tmp_path)
+    assert result["manifest"].endswith(".holodeck/manifest.json")
+    assert policy_decision(tmp_path, "deploy") == "approval_required"
+    assert policy_decision(tmp_path, "destructive_command") == "denied"
