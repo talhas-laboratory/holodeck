@@ -6,6 +6,12 @@ services:
     volumes:
       - holodeck-data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; assert urlopen('http://127.0.0.1:8787/health').status == 200"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 3s
 
 volumes:
   holodeck-data:
