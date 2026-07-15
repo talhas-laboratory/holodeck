@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+from importlib.resources import files
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -26,9 +28,25 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return dict(json.loads(self.rfile.read(length) or b"{}"))
 
+    def _asset(self, name: str) -> None:
+        root = files("holodeck_runtime").joinpath("frontend")
+        asset = root.joinpath(name)
+        if not asset.is_file():
+            return self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        body = asset.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self) -> None:  # noqa: N802
         parts = [part for part in self.path.split("?")[0].split("/") if part]
         try:
+            if not parts:
+                return self._asset("index.html")
+            if len(parts) == 2 and parts[0] == "assets":
+                return self._asset(parts[1])
             if parts == ["health"]:
                 return self._send(HTTPStatus.OK, {"status": "ok"})
             if parts == ["api", "workspaces"]:

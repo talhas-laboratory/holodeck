@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#24221d" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%23302f2a'/%3E%3Ctext x='9' y='23' fill='%23d8b29f' font-size='20' font-family='serif' font-style='italic'%3EH%3C/text%3E%3C/svg%3E" />
+    <title>Holodeck — Development Workspace</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="rail">
+        <a class="brand" href="/" aria-label="Holodeck home">
+          <span class="brand-mark">H</span>
+          <span><strong>holodeck</strong><small>local workspace</small></span>
+        </a>
+        <nav class="nav" aria-label="Workspace">
+          <button class="nav-item is-active" data-view="overview"><span>01</span>Overview</button>
+          <button class="nav-item" data-view="work"><span>02</span>Work</button>
+          <button class="nav-item" data-view="guardrails"><span>03</span>Guardrails</button>
+        </nav>
+        <div class="rail-foot">
+          <span class="health-dot" id="health-dot"></span>
+          <span><small>runtime</small><strong id="health-label">checking</strong></span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="header">
+          <div>
+            <p class="overline">AUTONOMOUS DEVELOPMENT / LOCAL AUTHORITY</p>
+            <h1 id="workspace-title">Workspace overview</h1>
+          </div>
+          <div class="header-actions">
+            <label class="workspace-picker"><span>Workspace</span><select id="workspace-select"></select></label>
+            <button class="sync" id="refresh" type="button">Refresh <span>↻</span></button>
+          </div>
+        </header>
+
+        <section class="metrics" aria-label="Workspace summary">
+          <article class="metric"><span class="metric-index">I</span><p>Open work</p><strong id="metric-open">—</strong><small>tasks requiring attention</small></article>
+          <article class="metric"><span class="metric-index">II</span><p>In motion</p><strong id="metric-active">—</strong><small>active development</small></article>
+          <article class="metric"><span class="metric-index">III</span><p>Review</p><strong id="metric-review">—</strong><small>waiting for judgment</small></article>
+          <article class="metric metric--accent"><span class="metric-index">IV</span><p>Completion</p><strong id="metric-done">—</strong><small>verified outcomes</small></article>
+        </section>
+
+        <section class="content-grid">
+          <section class="work-panel">
+            <div class="section-head">
+              <div><p class="overline">THE WORK</p><h2>Current movement</h2></div>
+              <p id="workspace-purpose" class="section-note">A quiet view of what is moving and what needs intervention.</p>
+            </div>
+            <div class="board" id="task-board"></div>
+          </section>
+
+          <aside class="inspector">
+            <section class="focus-card">
+              <p class="overline">WORKSPACE INTENT</p>
+              <h2 id="workspace-goal">Select a workspace</h2>
+              <dl id="workspace-meta"></dl>
+            </section>
+            <section class="guard-card">
+              <div class="section-head compact"><div><p class="overline">BOUNDARIES</p><h2>Guardrails</h2></div><span class="seal">local</span></div>
+              <ul class="guard-list">
+                <li><span class="guard-symbol automatic">○</span><span><strong>Observe freely</strong><small>Repository reads and workspace state</small></span></li>
+                <li><span class="guard-symbol approval">△</span><span><strong>Ask before acting</strong><small>Writes, network, dependencies, push, deploy</small></span></li>
+                <li><span class="guard-symbol denied">×</span><span><strong>Never ambient</strong><small>Destructive commands remain denied</small></span></li>
+              </ul>
+            </section>
+          </aside>
+        </section>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

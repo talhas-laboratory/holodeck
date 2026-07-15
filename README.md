@@ -21,6 +21,8 @@ docker compose up --build -d
 curl http://127.0.0.1:8787/health
 ```
 
+Open `http://127.0.0.1:8787/` for the standalone Holodeck dashboard. The frontend is packaged and served by this runtime; it has no Conversation OS or Inner World dependency.
+
 ## Minimal API
 
 - `GET /health`

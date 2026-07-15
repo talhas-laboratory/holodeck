@@ -1,5 +1,6 @@
 from holodeck_runtime.store import Store
 from holodeck_runtime.project import initialize_project, policy_decision
+from holodeck_runtime.service import Handler
 
 
 def test_store_creates_workspace_task_and_non_overlapping_run(tmp_path):
@@ -17,3 +18,12 @@ def test_project_initialization_requires_git_and_defaults_to_conservative_policy
     assert result["manifest"].endswith(".holodeck/manifest.json")
     assert policy_decision(tmp_path, "deploy") == "approval_required"
     assert policy_decision(tmp_path, "destructive_command") == "denied"
+
+
+def test_frontend_is_packaged_and_owned_by_runtime():
+    assert Handler
+    from importlib.resources import files
+
+    page = files("holodeck_runtime").joinpath("frontend/index.html").read_text(encoding="utf-8")
+    assert "Holodeck — Development Workspace" in page
+    assert "conversation os" not in page.lower()
