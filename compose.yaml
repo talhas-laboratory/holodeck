@@ -1,0 +1,11 @@
+services:
+  holodeck:
+    build: .
+    ports:
+      - "127.0.0.1:${HOLODECK_PORT:-8787}:8787"
+    volumes:
+      - holodeck-data:/data
+    restart: unless-stopped
+
+volumes:
+  holodeck-data:
