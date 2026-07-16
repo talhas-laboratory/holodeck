@@ -2,7 +2,7 @@
 
 Holodeck Runtime is a local-first, self-hosted control plane for bounded autonomous development. It keeps workspace intent, task scope, agent runs, and file-path claims in one portable SQLite-backed service.
 
-It is deliberately independent of Inner Space, OpenClaw, Telegram, and any hosted control plane. The included Compose file is a reference deployment only.
+It is deliberately independent of OpenClaw, Telegram, and any hosted control plane. The included Compose file is a reference deployment only.
 
 ## Run locally
 
