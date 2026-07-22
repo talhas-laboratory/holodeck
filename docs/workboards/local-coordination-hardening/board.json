@@ -1,0 +1,22 @@
+{
+  "board_id": "local-coordination-hardening",
+  "name": "Local Coordination Hardening",
+  "owner": "talha",
+  "created_at": "2026-07-22T17:59:34.722490+00:00",
+  "lanes": [
+    "backlog",
+    "ready",
+    "in-progress",
+    "review",
+    "blocked",
+    "done"
+  ],
+  "gates": [
+    "intake",
+    "readiness",
+    "implementation",
+    "verification",
+    "review",
+    "done"
+  ]
+}

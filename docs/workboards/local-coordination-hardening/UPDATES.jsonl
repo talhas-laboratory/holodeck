@@ -1,0 +1,2 @@
+{"timestamp": "2026-07-22T17:59:34.722595+00:00", "actor": "agent-work-board", "event": "board_created", "board_id": "local-coordination-hardening", "task_count": 6}
+{"timestamp":"2026-07-22T18:00:00+00:00","actor":"codex","event":"design_validated","board_id":"local-coordination-hardening","detail":"Local-only correctness release approved; six dependency-ordered task packets populated."}
