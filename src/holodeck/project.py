@@ -32,7 +32,7 @@ def initialize_project(path: str | Path, *, force: bool = False) -> dict[str, An
         "project_root": ".",
         "workspace_id": root.name,
         "artifact_roots": ["."],
-        "generated_by": "holodeck-runtime",
+        "generated_by": "holodeck",
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     policy_path.write_text(json.dumps({"schema_version": "1.0", "actions": DEFAULT_POLICY}, indent=2) + "\n", encoding="utf-8")

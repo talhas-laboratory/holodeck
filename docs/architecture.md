@@ -10,4 +10,4 @@ The next extraction phase should port evidence, handoff, and repository-observat
 
 ## Onboarding and safety
 
-`holodeck init` recognizes only Git repositories and writes a project-local manifest and policy. It is non-invasive by design. The policy is deny-by-default for destructive commands and approval-required for writes, dependencies, network access, pushes, and deployments. This keeps autonomous agents useful inside a bounded repository without granting ambient authority.
+`holodeck init` recognizes only Git repositories and writes a project-local manifest and policy. It is non-invasive by design. The policy records deny-by-default and approval-required decisions, but it is advisory: the runtime does not intercept, authorize, or block actions until enforcement adapters exist. This keeps the boundary explicit without claiming a sandbox that has not been built.

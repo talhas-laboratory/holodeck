@@ -1,11 +1,11 @@
-from holodeck_runtime.store import Store
-from holodeck_runtime.project import initialize_project, policy_decision
+from holodeck.store import Store
+from holodeck.project import initialize_project, policy_decision
 import json
 import threading
 from urllib.request import Request, urlopen
 
-from holodeck_runtime.http_server import create_http_server
-from holodeck_runtime.service import Handler
+from holodeck.http_server import create_http_server
+from holodeck.service import Handler
 
 
 def test_store_creates_workspace_task_and_non_overlapping_run(tmp_path):
@@ -55,8 +55,8 @@ def test_frontend_is_packaged_and_owned_by_runtime():
     assert Handler
     from importlib.resources import files
 
-    page = files("holodeck_runtime").joinpath("frontend/index.html").read_text(encoding="utf-8")
-    script = files("holodeck_runtime").joinpath("frontend/app.js").read_text(encoding="utf-8")
+    page = files("holodeck").joinpath("frontend/index.html").read_text(encoding="utf-8")
+    script = files("holodeck").joinpath("frontend/app.js").read_text(encoding="utf-8")
     assert "Holodeck — Autonomous Development Control Plane" in page
     assert "conversation os" not in page.lower()
     assert ".dialog-close, .dialog-actions [value=\"cancel\"]" in script
@@ -79,6 +79,7 @@ def test_http_control_plane_exposes_config_and_full_run_lifecycle(tmp_path):
     try:
         config = request("/api/config")
         assert config["onboarding_policy"]["actions"]["destructive_command"] == "denied"
+        assert config["policy_enforcement"] == "advisory"
         request("/api/workspaces", method="POST", payload={"workspace_id": "demo", "goal": "Ship"})
         request("/api/workspaces/demo", method="PATCH", payload={"scope_out": ["production"]})
         task = request("/api/workspaces/demo/tasks", method="POST", payload={"task_id": "HD-001", "title": "Build UI"})

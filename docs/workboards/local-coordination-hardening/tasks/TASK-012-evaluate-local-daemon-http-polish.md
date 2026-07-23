@@ -26,16 +26,19 @@ Out:
 - A written decision: keep stdlib HTTP, or replace with a named alternative and rationale.
 - If keeping: known limits are documented (concurrency, timeouts, TLS).
 - If replacing: change stays dependency-light and preserves the API contract from TASK-009.
+- The decision is based on measured representative API/MCP traffic, stalled-client behavior, and graceful shutdown behavior.
 
 ## Plan
 
+- Define pass/fail thresholds for representative API/MCP traffic, stalled requests, and graceful shutdown before evaluating alternatives.
 - Revisit after TASK-005/008/009 using real adapter traffic.
 - Prefer keep-and-document unless MCP/install smoke exposes real limits.
 - Avoid speculative framework adoption.
 
 ## Verification Evidence
 
-- Not run yet. Planned: decision note in `DECISIONS.md`; optional load smoke if replacing.
+- Not run yet. Planned: run the defined local traffic, stalled-client, and shutdown checks; record measurements and the keep/replace decision. If replacing, rerun the complete API contract and MCP end-to-end suites.
+- Failure mode: a framework change or a decision to retain the current server is made without evidence from the expected client workload.
 
 ## Updates
 

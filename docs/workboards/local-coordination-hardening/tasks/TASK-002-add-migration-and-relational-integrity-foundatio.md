@@ -36,10 +36,12 @@ Out:
 
 ## Verification Evidence
 
-- `python -m pytest -q` → 60 passed (2026-07-23).
-- Migration `002` adds workspace FK, claim/run consistency trigger, active-path unique index, and reconciles legacy duplicate active claims before indexing.
-- Added `test_migration_two_reconciles_duplicate_active_claims` and related integrity coverage in `tests/test_hardening.py`.
-- Residual risks: overlapping (non-identical) active paths from pre-hardening data are not auto-reconciled; only exact duplicate paths are released during migration.
+- `python -m pytest -q` → 63 passed (2026-07-23).
+- `python -m compileall -q src tests` and `git diff --check` passed (2026-07-23).
+- Migration `002` adds workspace FK, claim/run consistency trigger, active-path unique index, and reconciles all canonical-path overlaps before indexing, keeping the earliest active claim per workspace.
+- Added migration coverage for exact duplicates, ancestor/descendant overlaps, and normalized run-path synchronization in `tests/test_hardening.py`.
+- Changed artifacts: `src/holodeck/migrations.py`, `tests/test_hardening.py`.
+- Residual risks: none known for legacy active-claim reconciliation.
 
 ## Updates
 

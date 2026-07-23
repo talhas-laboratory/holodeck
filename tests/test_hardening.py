@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from holodeck_runtime.errors import ConflictError, ContentionError, ValidationError
-from holodeck_runtime.lifecycle import validate_task_transition
-from holodeck_runtime.migrations import configure_connection, migrate
-from holodeck_runtime.paths import format_path, normalize_path, validate_claim_path
-from holodeck_runtime.store import Store
+from holodeck.errors import ConflictError, ContentionError, ValidationError
+from holodeck.lifecycle import validate_task_transition
+from holodeck.migrations import configure_connection, migrate
+from holodeck.paths import format_path, normalize_path, validate_claim_path
+from holodeck.store import Store
 
 
 def test_concurrent_claims_allow_only_one_active_run(tmp_path):
@@ -522,7 +522,7 @@ def test_migration_two_reconciles_duplicate_active_claims(tmp_path):
         )
         """
     )
-    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(
@@ -581,7 +581,7 @@ def test_migration_two_reconciles_duplicate_active_claims(tmp_path):
     assert Store(database).runs("demo")[0]["status"] == "active"
 
 
-def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_path):
+def test_migration_two_releases_cross_run_overlap_and_syncs_normalized_paths(tmp_path):
     database = tmp_path / "v1.db"
     conn = sqlite3.connect(database)
     configure_connection(conn)
@@ -594,7 +594,7 @@ def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_pat
         )
         """
     )
-    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(
@@ -609,9 +609,10 @@ def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_pat
         "INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         ("demo", "task-1", "ready", task_payload, timestamp, timestamp),
     )
-    for run_id, claim_id, created_at in (
-        ("run-1", "claim-1", "2026-01-01T00:00:00+00:00"),
-        ("run-2", "claim-2", "2026-01-02T00:00:00+00:00"),
+    for run_id, claim_id, path, created_at in (
+        ("run-1", "claim-1", "src", "2026-01-01T00:00:00+00:00"),
+        ("run-2", "claim-2", "src/api.py", "2026-01-02T00:00:00+00:00"),
+        ("run-3", "claim-3", "./docs", "2026-01-03T00:00:00+00:00"),
     ):
         run_payload = json.dumps(
             {
@@ -619,7 +620,7 @@ def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_pat
                 "workspace_id": "demo",
                 "task_id": "task-1",
                 "status": "active",
-                "claimed_paths": ["src"],
+                "claimed_paths": [path],
             }
         )
         conn.execute(
@@ -632,16 +633,16 @@ def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_pat
                 "workspace_id": "demo",
                 "task_id": "task-1",
                 "run_id": run_id,
-                "path": "src",
+                "path": path,
             }
         )
         conn.execute(
             """
             INSERT INTO claims(
                 claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
-            ) VALUES (?, 'demo', 'task-1', ?, 'src', 'active', ?, ?, ?)
+            ) VALUES (?, 'demo', 'task-1', ?, ?, 'active', ?, ?, ?)
             """,
-            (claim_id, run_id, claim_payload, created_at, created_at),
+            (claim_id, run_id, path, claim_payload, created_at, created_at),
         )
     conn.commit()
     conn.close()
@@ -653,7 +654,9 @@ def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_pat
     assert runs["run-1"]["claimed_paths"] == ["src"]
     assert runs["run-2"]["status"] == "failed"
     assert runs["run-2"]["claimed_paths"] == []
-    assert len([claim for claim in claims if claim["status"] == "active"]) == 1
+    assert runs["run-3"]["status"] == "active"
+    assert runs["run-3"]["claimed_paths"] == ["docs"]
+    assert len([claim for claim in claims if claim["status"] == "active"]) == 2
     assert len([claim for claim in claims if claim["status"] == "released"]) == 1
 
 
@@ -670,7 +673,7 @@ def test_migration_two_releases_invalid_legacy_path(tmp_path):
         )
         """
     )
-    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(

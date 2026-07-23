@@ -22,6 +22,18 @@ Record durable decisions here.
 
 - Project direction is recorded in root `AGENTS.md`: elegant solutions at each stage; modular boundaries so infrastructure can change quickly.
 
+## 2026-07-23 — TASK-011 advisory policy boundary
+
+- Policy decisions are advisory metadata, not runtime authorization or enforcement.
+- Holodeck does not currently intercept, authorize, or block repository writes, network access, deployments, or other actions named in `.holodeck/policy.json`.
+- Enforcement becomes in scope only with a tool or adapter mediation point plus an auditable approval and evidence model; disclosure must remain explicit until then.
+
+## 2026-07-23 — TASK-008 package identity and licensing
+
+- Holodeck is dual-licensed under `MIT OR Apache-2.0`; both complete license texts ship with source and wheel distributions.
+- The public PyPI distribution is `holodeck-control-plane`, because the shorter `holodeck` distribution name is already occupied. Users invoke `holodeck`; Python imports use `holodeck`.
+- Do not upload a release without explicit owner approval.
+
 ## 2026-07-23 — TASK-001 implementation decisions
 
 - **SQLite connection defaults** (applied in `_connect()` and reused by all store operations):
@@ -29,13 +41,13 @@ Record durable decisions here.
   - `PRAGMA journal_mode = WAL`
   - `PRAGMA busy_timeout = 5000` (milliseconds)
 - **Claim acquisition transaction:** `BEGIN IMMEDIATE` → read active claims → validate overlap → insert run + claims → `COMMIT`. Roll back on any failure.
-- **Contention handling:** on `SQLITE_BUSY` / lock timeout after `busy_timeout`, raise `ContentionError` from `holodeck_runtime.errors`. TASK-005 maps this to HTTP `503`.
+- **Contention handling:** on `SQLITE_BUSY` / lock timeout after `busy_timeout`, raise `ContentionError` from `holodeck.errors`. TASK-005 maps this to HTTP `503`.
 - **Overlap in TASK-001 (interim):** split stored paths on `/`, drop empty segments, compare as component tuples for equality and prefix overlap. Do **not** resolve `.` / `..`, reject absolutes, or normalize trailing slashes yet — TASK-003 owns full canonicalization.
 - **Out of scope for TASK-001:** schema migrations, path grammar enforcement, lifecycle state machines, HTTP error mapping changes.
 
 ## 2026-07-23 — TASK-002 implementation decisions
 
-- **Migration vehicle:** in-package numbered Python migrations in `holodeck_runtime/migrations.py` (or `holodeck_runtime/migrations/`), plus a small `migrate.py` runner. No Alembic, no SQL-file-only runner.
+- **Migration vehicle:** in-package numbered Python migrations in `holodeck/migrations.py` (or `holodeck/migrations/`), plus a small `migrate.py` runner. No Alembic, no SQL-file-only runner.
 - **Ledger table:** `schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`.
 - **Application rules:** on every `Store` connect, run pending migrations in ascending version order inside a transaction; record each version once; migrations must be idempotent-safe when re-run logic is needed for tests.
 - **Bootstrap:**
@@ -69,12 +81,12 @@ Record durable decisions here.
   - Example: `scope_out = ["src/vendor"]` rejects claims `src`, `src/vendor`, and `src/vendor/foo`.
 - **Storage:** persist the canonical string form derived from the tuple (POSIX `/` join; root stored as `.`).
 - **Unicode:** normalize each path segment with Unicode NFC so equivalent composed/decomposed spellings share one identity. Case-folding and symlink resolution remain out of scope.
-- **Module home:** `holodeck_runtime/paths.py` (pure functions + domain errors). Store calls validator on `begin_run` and workspace boundary updates.
+- **Module home:** `holodeck/paths.py` (pure functions + domain errors). Store calls validator on `begin_run` and workspace boundary updates.
 - **Out of scope for TASK-003:** symlink/case behavior, repository observation adapter, lifecycle rules.
 
 ## 2026-07-23 — TASK-004 implementation decisions
 
-- **Module home:** `holodeck_runtime/lifecycle.py` — status sets, transition maps, validators only (no I/O).
+- **Module home:** `holodeck/lifecycle.py` — status sets, transition maps, validators only (no I/O).
 - **Task status domain:** `backlog`, `ready`, `in-progress`, `review`, `blocked`, `done`, `cancelled`.
 - **Run status domain:** `active`, `completed`, `failed`, `cancelled`.
 - **Task transitions** (illegal transitions raise `ValidationError`; no DB write):
@@ -123,7 +135,7 @@ Record durable decisions here.
 
 - **`tasks.workspace_id` FK** to `workspaces(workspace_id)`.
 - **Claim safeguards:** partial unique index on active `(workspace_id, path)`; trigger rejects claims whose `workspace_id`/`task_id` do not match the referenced run.
-- **List validation:** `validate_string_list()` rejects string-shaped list fields, requires list elements to already be strings, and bounds list size/length (see `holodeck_runtime/validation.py`).
+- **List validation:** `validate_string_list()` rejects string-shaped list fields, requires list elements to already be strings, and bounds list size/length (see `holodeck/validation.py`).
 - **Text fields:** `validate_text_field()` bounds scalar strings such as title, goal, intent, and summary.
 - **Migration 002:** before the active-path unique index, normalize claim paths, release invalid legacy paths, release duplicate active claims (keep earliest), and fail active runs that lose all claims during reconciliation.
 - **Task updates:** `update_task` uses `BEGIN IMMEDIATE` plus compare-and-swap on `status`.
@@ -132,9 +144,25 @@ Record durable decisions here.
 
 - **Migrations:** apply each version inside an explicit `BEGIN IMMEDIATE`/`COMMIT` with `ROLLBACK` on failure; legacy upgrades rename tables and rebuild without `executescript` auto-commit. Unknown legacy statuses coerce to safe domain defaults (`task→backlog`, `run→active`, `claim→released`) before insert.
 - **Integrity:** SQLite unique/FK violations map to `ConflictError` (HTTP 409), including duplicate workspace/task IDs.
-- **Identifiers:** `workspace_id` / explicit `task_id` validated with the same URL-safe pattern used by HTTP path params (`holodeck_runtime/ids.py`).
+- **Identifiers:** `workspace_id` / explicit `task_id` validated with the same URL-safe pattern used by HTTP path params (`holodeck/ids.py`).
 - **Artifact roots:** omitted roots default to `["."]`; explicit `[]` is preserved and rejects all claims.
 - **Paths:** reject Windows drive-letter absolutes (`C:/…`) as well as `/…` and backslashes.
+
+## 2026-07-23 — Migration reconciliation follow-up
+
+- **Legacy overlap policy:** after canonicalizing active claims, migration `002` keeps the earliest claim by `created_at`, then `claim_id`, within each workspace. It releases every later claim that has component-path overlap with an already kept claim.
+- **Run payload consistency:** a run is synchronized whenever migration changes or releases any of its claims; an active run with no remaining active claims becomes `failed`.
+
+## 2026-07-23 — Follow-on task verification standard
+
+- **Invariant over example:** verification must prove the product rule, not just one happy-path spelling of it.
+- **Boundary consistency:** when data crosses storage, HTTP, CLI, package, container, or adapter boundaries, tests compare the externally visible result with the authoritative state.
+- **Completion discipline:** a residual risk that violates an acceptance criterion or the track guarantee blocks `done`; external publication or repository disposition needs explicit owner approval.
+
+## 2026-07-23 — TASK-007 canonical repository
+
+- **Canonical repository:** `talhas-laboratory/holodeck` is the sole public repository and the only `origin` push destination.
+- **Legacy repository name:** GitHub resolves the former repository URL to the canonical repository. It is not an independent resource to archive; archiving it would archive the canonical repository, so the redirect is retained as the safe archive/redirect outcome.
 
 ## 2026-07-23 — TASK-006 implementation decisions
 

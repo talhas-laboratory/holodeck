@@ -3,7 +3,7 @@ FROM python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf1
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin holodeck
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE-MIT LICENSE-APACHE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 

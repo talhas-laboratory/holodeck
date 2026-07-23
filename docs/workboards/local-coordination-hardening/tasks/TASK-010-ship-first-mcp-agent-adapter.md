@@ -15,6 +15,7 @@ In:
 - An MCP server (preferred) that talks to the local Holodeck HTTP/store authority.
 - Tools sufficient to inspect workspaces/tasks, begin a run with path claims, and complete a run.
 - Minimal setup docs for pointing an MCP-capable client at a local Holodeck instance.
+- End-to-end verification through the MCP protocol, not direct calls to adapter internals.
 
 Out:
 
@@ -27,16 +28,18 @@ Out:
 - A documented MCP entrypoint can list or create coordination state against a running local runtime.
 - An agent can claim paths and complete a run through MCP without raw HTTP calls.
 - Adapter failures map to understandable tool errors.
+- Two independent MCP client sessions cannot hold overlapping active claims; completion releases only the completed run's claims.
 
 ## Plan
 
-- Define the minimal MCP tool set over the stable API.
+- Define the minimal MCP tool schemas and error mapping over the stable API.
 - Implement adapter as a thin client of the local authority (no second source of truth).
 - Document client configuration for at least one common MCP host.
 
 ## Verification Evidence
 
-- Not run yet. Planned: local runtime + MCP tool smoke against claim/complete lifecycle.
+- Not run yet. Planned: use a real MCP client against a running local runtime to list state, begin and complete a run, validate understandable failures, and race two independent sessions for overlapping paths. Verify released claims and run state through the API afterward.
+- Failure mode: direct adapter tests pass while a real MCP client, concurrent claim, or tool-error path fails.
 
 ## Updates
 

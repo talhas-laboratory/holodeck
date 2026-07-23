@@ -29,6 +29,9 @@ Every task must pass these gates before it is treated as complete.
 - Results are recorded, including failures.
 - Manual checks include artifact paths or screenshots when relevant.
 - Known residual risks are stated.
+- Every acceptance criterion has direct evidence; a happy-path smoke test is not evidence for a broader invariant.
+- When state crosses a boundary (database, API, CLI, adapter, package, or container), verification checks the same result on both sides.
+- Verification-created containers, volumes, files, and temporary state are cleaned up or recorded explicitly.
 
 ## Review Gate
 
@@ -42,3 +45,5 @@ Every task must pass these gates before it is treated as complete.
 - Verification evidence is attached.
 - Task file, `TASKS.md`, and lane placement agree.
 - No hidden follow-up is required for the stated scope.
+- A residual risk must not contradict an acceptance criterion or the track's stated product guarantee; if it does, the task remains in review or is split.
+- Any external publication, archival, deletion, or credentialed release has explicit owner approval and recorded external-state evidence.

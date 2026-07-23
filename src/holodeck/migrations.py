@@ -5,8 +5,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from holodeck_runtime.errors import ValidationError
-from holodeck_runtime.paths import format_path, normalize_path
+from holodeck.errors import ValidationError
+from holodeck.paths import format_path, normalize_path, paths_intersect
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -273,38 +273,34 @@ def _reconcile_claim_paths_before_index(conn: sqlite3.Connection) -> None:
             "UPDATE claims SET path = ?, payload = ? WHERE claim_id = ?",
             (normalized, json.dumps(payload), row["claim_id"]),
         )
+        affected_runs.add(row["run_id"])
 
-    duplicate_groups = conn.execute(
+    active_claims = conn.execute(
         """
-        SELECT workspace_id, path, COUNT(*) AS claim_count
+        SELECT claim_id, workspace_id, run_id, path, payload
         FROM claims
         WHERE status = 'active'
-        GROUP BY workspace_id, path
-        HAVING claim_count > 1
+        ORDER BY created_at ASC, claim_id ASC
         """
     ).fetchall()
 
-    for group in duplicate_groups:
-        extras = conn.execute(
-            """
-            SELECT claim_id, run_id, payload
-            FROM claims
-            WHERE workspace_id = ? AND path = ? AND status = 'active'
-            ORDER BY created_at ASC, claim_id ASC
-            """,
-            (group["workspace_id"], group["path"]),
-        ).fetchall()
-        for extra in extras[1:]:
-            payload = _payload_dict(extra["payload"])
+    accepted_paths: dict[str, list[tuple[str, ...]]] = {}
+    for claim in active_claims:
+        path = normalize_path(claim["path"])
+        workspace_paths = accepted_paths.setdefault(claim["workspace_id"], [])
+        if any(paths_intersect(path, existing) for existing in workspace_paths):
+            payload = _payload_dict(claim["payload"])
             released_run_id = _release_claim(
                 conn,
-                claim_id=extra["claim_id"],
-                run_id=extra["run_id"],
+                claim_id=claim["claim_id"],
+                run_id=claim["run_id"],
                 payload=payload,
                 released_at=released_at,
-                reason="duplicate_active_path",
+                reason="overlapping_active_path",
             )
             affected_runs.add(released_run_id)
+            continue
+        workspace_paths.append(path)
 
     for run_id in affected_runs:
         _sync_run_after_claim_release(conn, run_id, released_at)

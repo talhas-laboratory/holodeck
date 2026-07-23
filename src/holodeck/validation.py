@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from holodeck_runtime.errors import ValidationError
+from holodeck.errors import ValidationError
 
 MAX_STRING_LIST_ITEMS = 256
 MAX_STRING_LIST_ITEM_LENGTH = 1024

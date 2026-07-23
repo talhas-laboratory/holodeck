@@ -53,7 +53,7 @@ class Handler(BaseHTTPRequestHandler):
         return validate_identifier(parts[index], "run_id")
 
     def _asset(self, name: str) -> None:
-        root = files("holodeck_runtime").joinpath("frontend")
+        root = files("holodeck").joinpath("frontend")
         asset = root.joinpath(name)
         if not asset.is_file():
             return self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -89,15 +89,16 @@ class Handler(BaseHTTPRequestHandler):
                             "schema_version": "1.0",
                             "project_root": ".",
                             "artifact_roots": ["."],
-                            "generated_by": "holodeck-runtime",
+                            "generated_by": "holodeck",
                         },
                         "onboarding_policy": {"schema_version": "1.0", "actions": DEFAULT_POLICY},
+                        "policy_enforcement": "advisory",
                         "capabilities": [
                             {"id": "workspaces", "label": "Workspace intent and boundaries", "status": "available"},
                             {"id": "tasks", "label": "Task planning and status", "status": "available"},
                             {"id": "runs", "label": "Agent runs and path claims", "status": "available"},
                             {"id": "overlap", "label": "Overlapping path protection", "status": "available"},
-                            {"id": "policy", "label": "Project onboarding policy", "status": "available"},
+                            {"id": "policy", "label": "Advisory project onboarding policy", "status": "available"},
                             {"id": "evidence", "label": "Verification evidence", "status": "planned"},
                             {"id": "handoffs", "label": "Agent handoffs", "status": "planned"},
                             {"id": "adapters", "label": "Repository, agent, and CI adapters", "status": "planned"},

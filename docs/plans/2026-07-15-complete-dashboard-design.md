@@ -2,7 +2,7 @@
 
 ## Product boundary
 
-The dashboard is the operator surface for the standalone Holodeck Runtime. It reflects every capability implemented by the runtime: workspace intent and scope, tasks and their detailed constraints, agent runs, active and released path claims, runtime binding and database configuration, project manifest defaults, and onboarding action policy. Features that are not implemented remain visible only in an explicit capability ledger; they are never presented as working controls.
+The dashboard is the operator surface for standalone Holodeck. It reflects every capability implemented by the service: workspace intent and scope, tasks and their detailed constraints, agent runs, active and released path claims, service binding and database configuration, project manifest defaults, and onboarding action policy. Features that are not implemented remain visible only in an explicit capability ledger; they are never presented as working controls.
 
 ## Information architecture
 

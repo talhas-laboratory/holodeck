@@ -8,10 +8,10 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from holodeck_runtime.http_request import MAX_BODY_BYTES, validate_bind_host
-from holodeck_runtime.http_server import create_http_server
-from holodeck_runtime.service import Handler
-from holodeck_runtime.store import Store
+from holodeck.http_request import MAX_BODY_BYTES, validate_bind_host
+from holodeck.http_server import create_http_server
+from holodeck.service import Handler
+from holodeck.store import Store
 
 
 def _start_server(store: Store, **server_kwargs):
@@ -274,7 +274,7 @@ def test_http_maps_contention_to_503(tmp_path, monkeypatch):
     server, thread, base = _start_server(store)
 
     def raise_contention(*_args, **_kwargs):
-        from holodeck_runtime.errors import ContentionError
+        from holodeck.errors import ContentionError
 
         raise ContentionError("database is busy")
 

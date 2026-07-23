@@ -7,7 +7,7 @@ from .project import initialize_project, policy_decision
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Holodeck Runtime")
+    parser = argparse.ArgumentParser(description="Holodeck")
     commands = parser.add_subparsers(dest="command", required=True)
     serve_parser = commands.add_parser("serve", help="Run the local coordination API")
     serve_parser.add_argument("--database", default="holodeck.db")
@@ -21,7 +21,11 @@ def main() -> None:
     init_parser = commands.add_parser("init", help="Initialize a project-local Holodeck policy")
     init_parser.add_argument("--path", default=".")
     init_parser.add_argument("--force", action="store_true")
-    policy_parser = commands.add_parser("policy-check", help="Read a project action policy")
+    policy_parser = commands.add_parser(
+        "policy-check",
+        help="Look up an advisory project action policy",
+        description="Look up an advisory policy decision; this command does not enforce or block actions.",
+    )
     policy_parser.add_argument("action")
     policy_parser.add_argument("--path", default=".")
     args = parser.parse_args()

@@ -37,7 +37,7 @@ Out:
 
 - `python -m pytest -q` → 25 passed (2026-07-23).
 - Added lifecycle tests in `tests/test_hardening.py`; updated `tests/test_store.py` for legal transitions.
-- Changed files: `src/holodeck_runtime/lifecycle.py`, `src/holodeck_runtime/store.py`, `src/holodeck_runtime/service.py`.
+- Changed files: `src/holodeck/lifecycle.py`, `src/holodeck/store.py`, `src/holodeck/service.py`.
 - Residual risks: none known for TASK-004 scope.
 
 ## Updates

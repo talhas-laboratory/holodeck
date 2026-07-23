@@ -8,19 +8,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
-from holodeck_runtime.errors import ConflictError, ContentionError, NotFoundError, ValidationError
-from holodeck_runtime.ids import validate_identifier, validate_identifier_input
-from holodeck_runtime.lifecycle import (
+from holodeck.errors import ConflictError, ContentionError, NotFoundError, ValidationError
+from holodeck.ids import validate_identifier, validate_identifier_input
+from holodeck.lifecycle import (
     validate_run_completion_status,
     validate_run_transition,
     validate_task_can_start_run,
     validate_task_status,
     validate_task_transition,
 )
-from holodeck_runtime.migrations import configure_connection, migrate
-from holodeck_runtime.paths import format_path, normalize_path, paths_intersect, validate_claim_path
+from holodeck.migrations import configure_connection, migrate
+from holodeck.paths import format_path, normalize_path, paths_intersect, validate_claim_path
 
-from holodeck_runtime.validation import (
+from holodeck.validation import (
     MAX_CLAIMED_PATHS,
     MAX_SHORT_TEXT_LENGTH,
     MAX_TEXT_FIELD_LENGTH,
