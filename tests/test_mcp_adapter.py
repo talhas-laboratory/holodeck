@@ -9,11 +9,11 @@ from http import HTTPStatus
 
 import pytest
 
-from holodeck.api import API_VERSION
-from holodeck.http_client import HolodeckClientError, HolodeckHttpClient
-from holodeck.http_server import create_http_server
-from holodeck.service import Handler
-from holodeck.store import Store
+from holodeck_control_plane.api import API_VERSION
+from holodeck_control_plane.http_client import HolodeckClientError, HolodeckHttpClient
+from holodeck_control_plane.http_server import create_http_server
+from holodeck_control_plane.service import Handler
+from holodeck_control_plane.store import Store
 
 pytest.importorskip("mcp")
 
@@ -33,7 +33,7 @@ def _start_http_server(store: Store):
 def _mcp_server_params(base_url: str) -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
-        args=["-m", "holodeck.mcp_server", "--base-url", base_url],
+        args=["-m", "holodeck_control_plane.mcp_server", "--base-url", base_url],
         env={**os.environ, "PYTHONPATH": os.pathsep.join([os.path.join(os.getcwd(), "src"), os.environ.get("PYTHONPATH", "")])},
     )
 
@@ -195,3 +195,43 @@ def test_independent_mcp_sessions_cannot_claim_same_path(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_completing_one_run_preserves_other_runs_claims(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    server, thread, base = _start_http_server(store)
+    store.create_workspace({"workspace_id": "demo"})
+    task_a = store.create_task("demo", {"title": "Run A", "status": "ready"})
+    task_b = store.create_task("demo", {"title": "Run B", "status": "ready"})
+    run_a = store.begin_run("demo", {"task_id": task_a["task_id"], "claimed_paths": ["src/a"]})
+    run_b = store.begin_run("demo", {"task_id": task_b["task_id"], "claimed_paths": ["src/b"]})
+    try:
+
+        async def complete_first():
+            return await _call_tool(
+                base,
+                "holodeck_complete_run",
+                {"workspace_id": "demo", "run_id": run_a["run_id"], "summary": "done"},
+            )
+
+        result = asyncio.run(complete_first())
+        assert not result.isError
+
+        claims = store.claims("demo")
+        by_path = {claim["path"]: claim for claim in claims}
+        assert by_path["src/a"]["status"] == "released"
+        assert by_path["src/b"]["status"] == "active"
+        assert run_b["run_id"] in {claim["run_id"] for claim in claims if claim["status"] == "active"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_client_rejects_unsupported_api_version():
+    client = HolodeckHttpClient("http://127.0.0.1:8787")
+    client.get_runtime = lambda: {"api": {"version": "2"}}  # type: ignore[method-assign]
+    with pytest.raises(HolodeckClientError, match="unsupported api.version"):
+        client.ensure_api_compatible()
+    with pytest.raises(HolodeckClientError, match="unsupported api.version"):
+        client.list_workspaces()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any
 
-from holodeck.http_client import HolodeckClientError, HolodeckHttpClient
+from holodeck_control_plane.http_client import HolodeckClientError, HolodeckHttpClient
 
 
 def _tool_error(error: HolodeckClientError) -> RuntimeError:
@@ -155,6 +155,10 @@ def create_mcp_server(client: HolodeckHttpClient):
 
 def run_mcp(*, base_url: str) -> None:
     client = HolodeckHttpClient(base_url)
+    try:
+        client.ensure_api_compatible()
+    except HolodeckClientError as error:
+        raise SystemExit(f"holodeck mcp: {error.message}") from error
     server = create_mcp_server(client)
     server.run(transport="stdio")
 

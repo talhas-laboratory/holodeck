@@ -24,8 +24,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build and health-check container
         run: |
-          docker build -t holodeck-runtime:ci .
-          cid="$(docker run -d -p 127.0.0.1:9876:8787 -v holodeck-ci-data:/data holodeck-runtime:ci)"
+          docker build -t holodeck:ci .
+          cid="$(docker run -d -p 127.0.0.1:9876:8787 -v holodeck-ci-data:/data holodeck:ci)"
           trap 'docker rm -f "$cid"' EXIT
           for _ in $(seq 1 20); do
             if curl -fsS http://127.0.0.1:9876/health; then

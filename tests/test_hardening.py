@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from holodeck.errors import ConflictError, ContentionError, ValidationError
-from holodeck.lifecycle import validate_task_transition
-from holodeck.migrations import configure_connection, migrate
-from holodeck.paths import format_path, normalize_path, validate_claim_path
-from holodeck.store import Store
+from holodeck_control_plane.errors import ConflictError, ContentionError, ValidationError
+from holodeck_control_plane.lifecycle import validate_task_transition
+from holodeck_control_plane.migrations import configure_connection, migrate
+from holodeck_control_plane.paths import format_path, normalize_path, validate_claim_path
+from holodeck_control_plane.store import Store
 
 
 def test_concurrent_claims_allow_only_one_active_run(tmp_path):
@@ -522,7 +522,7 @@ def test_migration_two_reconciles_duplicate_active_claims(tmp_path):
         )
         """
     )
-    from holodeck.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck_control_plane.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(
@@ -594,7 +594,7 @@ def test_migration_two_releases_cross_run_overlap_and_syncs_normalized_paths(tmp
         )
         """
     )
-    from holodeck.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck_control_plane.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(
@@ -673,7 +673,7 @@ def test_migration_two_releases_invalid_legacy_path(tmp_path):
         )
         """
     )
-    from holodeck.migrations import _upgrade_relational_integrity, migration_now
+    from holodeck_control_plane.migrations import _upgrade_relational_integrity, migration_now
 
     _upgrade_relational_integrity(conn)
     conn.execute(

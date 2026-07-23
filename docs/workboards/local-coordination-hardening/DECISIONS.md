@@ -31,7 +31,7 @@ Record durable decisions here.
 ## 2026-07-23 — TASK-008 package identity and licensing
 
 - Holodeck is dual-licensed under `MIT OR Apache-2.0`; both complete license texts ship with source and wheel distributions.
-- The public PyPI distribution is `holodeck-control-plane`, because the shorter `holodeck` distribution name is already occupied. Users invoke `holodeck`; Python imports use `holodeck`.
+- The public PyPI distribution is `holodeck-control-plane`, because the shorter `holodeck` distribution name is already occupied. Users invoke `holodeck`; Python imports use `holodeck_control_plane`.
 - Do not upload a release without explicit owner approval.
 
 ## 2026-07-23 — TASK-001 implementation decisions
@@ -41,7 +41,7 @@ Record durable decisions here.
   - `PRAGMA journal_mode = WAL`
   - `PRAGMA busy_timeout = 5000` (milliseconds)
 - **Claim acquisition transaction:** `BEGIN IMMEDIATE` → read active claims → validate overlap → insert run + claims → `COMMIT`. Roll back on any failure.
-- **Contention handling:** on `SQLITE_BUSY` / lock timeout after `busy_timeout`, raise `ContentionError` from `holodeck.errors`. TASK-005 maps this to HTTP `503`.
+- **Contention handling:** on `SQLITE_BUSY` / lock timeout after `busy_timeout`, raise `ContentionError` from `holodeck_control_plane.errors`. TASK-005 maps this to HTTP `503`.
 - **Overlap in TASK-001 (interim):** split stored paths on `/`, drop empty segments, compare as component tuples for equality and prefix overlap. Do **not** resolve `.` / `..`, reject absolutes, or normalize trailing slashes yet — TASK-003 owns full canonicalization.
 - **Out of scope for TASK-001:** schema migrations, path grammar enforcement, lifecycle state machines, HTTP error mapping changes.
 
@@ -134,14 +134,14 @@ Record durable decisions here.
 ## 2026-07-23 — TASK-009 implementation decisions
 
 - **Versioning:** expose `api` object on `GET /api/config` with `version`, `stability`, `contract`, `documentation`, `max_json_body_bytes`, and `breaking_change_policy`. No path prefix change for v1.
-- **Contract name:** `http-api-v1` documented in `docs/http-api-v1.md`; constants live in `holodeck.api`.
+- **Contract name:** `http-api-v1` documented in `docs/http-api-v1.md`; constants live in `holodeck_control_plane.api`.
 - **Compatibility:** contract tests in `tests/test_api_contract.py` exercise every public endpoint against a live server.
 - **Breaking changes:** require incrementing `api.version`; additive JSON fields allowed during alpha without a bump.
 
 ## 2026-07-23 — TASK-010 implementation decisions
 
 - **Transport:** stdio MCP via FastMCP; entrypoint is `holodeck mcp --base-url <url>`.
-- **Authority:** adapter is a thin HTTP client (`holodeck.http_client`) over `http-api-v1`; no local store or policy enforcement in the adapter.
+- **Authority:** adapter is a thin HTTP client (`holodeck_control_plane.http_client`) over `http-api-v1`; no local store or policy enforcement in the adapter.
 - **Dependency:** MCP support is optional (`pip install 'holodeck-control-plane[mcp]'`); lazy import with a clear install hint when missing.
 - **Tools:** nine tools cover runtime metadata, workspace/task CRUD, run begin/complete, and claim listing; HTTP errors map to tool errors with status and message.
 - **Verification:** `tests/test_mcp_adapter.py` uses real MCP `ClientSession` over stdio, including concurrent claim races across independent sessions.

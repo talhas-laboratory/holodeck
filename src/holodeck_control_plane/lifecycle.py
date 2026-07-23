@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from holodeck.errors import ValidationError
+from holodeck_control_plane.errors import ValidationError
 
 TASK_STATUSES = frozenset(
     {"backlog", "ready", "in-progress", "review", "blocked", "done", "cancelled"}

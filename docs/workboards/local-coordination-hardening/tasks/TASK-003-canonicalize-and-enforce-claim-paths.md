@@ -37,7 +37,7 @@ Out:
 
 - `python -m pytest -q` → 25 passed (2026-07-23).
 - Added path table tests in `tests/test_hardening.py`.
-- Changed files: `src/holodeck/paths.py`, `src/holodeck/store.py`.
+- Changed files: `src/holodeck_control_plane/paths.py`, `src/holodeck_control_plane/store.py`.
 - Residual risks: none known for TASK-003 scope.
 
 ## Updates

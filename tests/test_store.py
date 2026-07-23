@@ -1,11 +1,11 @@
-from holodeck.store import Store
-from holodeck.project import initialize_project, policy_decision
+from holodeck_control_plane.store import Store
+from holodeck_control_plane.project import initialize_project, policy_decision
 import json
 import threading
 from urllib.request import Request, urlopen
 
-from holodeck.http_server import create_http_server
-from holodeck.service import Handler
+from holodeck_control_plane.http_server import create_http_server
+from holodeck_control_plane.service import Handler
 
 
 def test_store_creates_workspace_task_and_non_overlapping_run(tmp_path):
@@ -55,8 +55,8 @@ def test_frontend_is_packaged_and_owned_by_runtime():
     assert Handler
     from importlib.resources import files
 
-    page = files("holodeck").joinpath("frontend/index.html").read_text(encoding="utf-8")
-    script = files("holodeck").joinpath("frontend/app.js").read_text(encoding="utf-8")
+    page = files("holodeck_control_plane").joinpath("frontend/index.html").read_text(encoding="utf-8")
+    script = files("holodeck_control_plane").joinpath("frontend/app.js").read_text(encoding="utf-8")
     assert "Holodeck — Autonomous Development Control Plane" in page
     assert "conversation os" not in page.lower()
     assert ".dialog-close, .dialog-actions [value=\"cancel\"]" in script

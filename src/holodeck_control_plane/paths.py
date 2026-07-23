@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unicodedata
 
-from holodeck.errors import ValidationError
+from holodeck_control_plane.errors import ValidationError
 
 
 def components_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:

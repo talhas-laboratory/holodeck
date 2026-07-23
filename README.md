@@ -38,7 +38,7 @@ Open `http://127.0.0.1:8787/` for the standalone Holodeck dashboard. The fronten
 
 ## Minimal API
 
-Stable contract: [docs/http-api-v1.md](docs/http-api-v1.md). Discover the active version at `GET /api/config` (`api.version`, currently `1`).
+Stable contract: [docs/http-api-v1.md](docs/http-api-v1.md) (also served at `GET /docs/http-api-v1` from a running runtime). Discover the active version at `GET /api/config` (`api.version`, currently `1`).
 
 - `GET /health`
 - `GET /api/config`

@@ -16,6 +16,7 @@ WHEEL=""
 INSTALL_SERVER_PID=""
 CONTAINER=""
 VOLUME=""
+IMAGE=""
 
 cleanup() {
   if [[ -n "$INSTALL_SERVER_PID" ]]; then
@@ -27,6 +28,9 @@ cleanup() {
   fi
   if [[ -n "$VOLUME" ]]; then
     docker volume rm "$VOLUME" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$IMAGE" ]]; then
+    docker rmi "$IMAGE" >/dev/null 2>&1 || true
   fi
   rm -rf "$VERIFY_ROOT"
 }
@@ -61,9 +65,12 @@ echo "==> Smoke testing a clean wheel install"
 from importlib.metadata import distribution
 from importlib.resources import files
 
-frontend = files("holodeck").joinpath("frontend")
+frontend = files("holodeck_control_plane").joinpath("frontend")
 for asset in ("index.html", "app.js", "styles.css"):
     assert frontend.joinpath(asset).is_file(), asset
+docs = files("holodeck_control_plane").joinpath("docs")
+for doc in ("http-api-v1.md", "mcp-setup.md"):
+    assert docs.joinpath(doc).is_file(), doc
 package = distribution("holodeck-control-plane")
 for license_file in ("licenses/LICENSE-MIT", "licenses/LICENSE-APACHE"):
     assert package.read_text(license_file), license_file
@@ -82,16 +89,66 @@ if ! curl -fsS "http://127.0.0.1:${INSTALL_PORT}/health" >/dev/null; then
   echo "Clean wheel install health check failed" >&2
   exit 1
 fi
+if ! curl -fsS "http://127.0.0.1:${INSTALL_PORT}/docs/http-api-v1" | grep -q "Holodeck HTTP API v1"; then
+  echo "Packaged API documentation is not served from the wheel install" >&2
+  exit 1
+fi
 kill "$INSTALL_SERVER_PID"
 wait "$INSTALL_SERVER_PID" 2>/dev/null || true
 INSTALL_SERVER_PID=""
+
+echo "==> Smoke testing clean wheel install with MCP extra"
+MCP_ENV="$VERIFY_ROOT/mcp-env"
+export VERIFY_ROOT MCP_ENV
+"$BOOTSTRAP_PYTHON" -m venv "$MCP_ENV"
+"$MCP_ENV/bin/python" -m pip install "$WHEEL[mcp]"
+VERIFY_ROOT="$VERIFY_ROOT" MCP_ENV="$MCP_ENV" "$MCP_ENV/bin/python" -c '
+import asyncio
+import json
+import os
+import sys
+import threading
+from pathlib import Path
+
+from holodeck_control_plane.http_server import create_http_server
+from holodeck_control_plane.service import Handler
+from holodeck_control_plane.store import Store
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+db = Path(os.environ["VERIFY_ROOT"]) / "mcp-runtime.db"
+store = Store(db)
+handler = type("VerifyHandler", (Handler,), {"store": store, "runtime_host": "127.0.0.1", "runtime_port": 0})
+server = create_http_server(("127.0.0.1", 0), handler)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+base = f"http://127.0.0.1:{server.server_port}"
+
+async def handshake() -> None:
+    params = StdioServerParameters(
+        command=os.environ["MCP_ENV"] + "/bin/holodeck",
+        args=["mcp", "--base-url", base],
+    )
+    async with stdio_client(params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result = await session.call_tool("holodeck_get_runtime", {})
+            assert not result.isError, result.content
+            payload = json.loads(result.content[0].text)
+            assert payload["api"]["version"] == "1"
+
+asyncio.run(handshake())
+server.shutdown()
+server.server_close()
+thread.join(timeout=2)
+'
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "==> Docker not available; skipping container smoke test"
   exit 0
 fi
 
-IMAGE="holodeck:verify"
+IMAGE="holodeck:verify-$$"
 CONTAINER="holodeck-verify-$$"
 VOLUME="${CONTAINER}-data"
 PORT="${HOLODECK_VERIFY_PORT:-9876}"

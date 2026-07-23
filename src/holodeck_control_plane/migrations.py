@@ -5,8 +5,8 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from holodeck.errors import ValidationError
-from holodeck.paths import format_path, normalize_path, paths_intersect
+from holodeck_control_plane.errors import ValidationError
+from holodeck_control_plane.paths import format_path, normalize_path, paths_intersect
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 

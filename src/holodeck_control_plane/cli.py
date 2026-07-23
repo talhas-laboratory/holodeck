@@ -43,7 +43,7 @@ def main() -> None:
         print(policy_decision(args.path, args.action))
         return
     if args.command == "mcp":
-        from holodeck.mcp_server import run_mcp
+        from holodeck_control_plane.mcp_server import run_mcp
 
         run_mcp(base_url=args.base_url)
         return

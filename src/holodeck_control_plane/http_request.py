@@ -5,14 +5,14 @@ import re
 from http import HTTPStatus
 from typing import IO, Any
 
-from holodeck.errors import (
+from holodeck_control_plane.errors import (
     ConflictError,
     ContentionError,
     HolodeckError,
     NotFoundError,
     ValidationError,
 )
-from holodeck.ids import validate_identifier
+from holodeck_control_plane.ids import validate_identifier
 
 MAX_BODY_BYTES = 65_536
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})

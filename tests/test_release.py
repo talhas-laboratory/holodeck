@@ -33,6 +33,8 @@ def test_release_verifier_uses_an_isolated_virtual_environment():
     assert 'distribution("holodeck-control-plane")' in script
     assert '"$INSTALL_ENV/bin/holodeck" serve' in script
     assert 'docker volume rm "$VOLUME"' in script
+    assert 'docker rmi "$IMAGE"' in script
+    assert '"$WHEEL[mcp]"' in script
 
 
 def test_package_metadata_declares_a_published_readme_and_project_links():

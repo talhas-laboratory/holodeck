@@ -36,7 +36,7 @@ Out:
 
 - `python -m pytest -q` → 25 passed (2026-07-23).
 - Added `tests/test_hardening.py::test_concurrent_claims_allow_only_one_active_run`.
-- Changed files: `src/holodeck/errors.py`, `src/holodeck/migrations.py`, `src/holodeck/store.py`.
+- Changed files: `src/holodeck_control_plane/errors.py`, `src/holodeck_control_plane/migrations.py`, `src/holodeck_control_plane/store.py`.
 - Residual risks: none known for TASK-001 scope.
 
 ## Updates

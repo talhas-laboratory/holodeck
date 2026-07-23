@@ -38,7 +38,7 @@ Out:
 ## Verification Evidence
 
 - `python -m pytest -q` → 79 passed (2026-07-23).
-- Added `docs/http-api-v1.md`, `src/holodeck/api.py`, and `tests/test_api_contract.py`.
+- Added `docs/http-api-v1.md`, `src/holodeck_control_plane/api.py`, and `tests/test_api_contract.py`.
 - `GET /api/config` exposes `api.version`, `api.stability`, `api.contract`, and breaking-change policy text.
 - Contract tests cover health, config, workspaces, tasks, runs, claims, 404/409/422/503 paths, and documentation file presence.
 - Residual risks: alpha contract may gain additive fields; breaking changes require `api.version` bump per documented policy.

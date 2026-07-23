@@ -36,7 +36,7 @@ Out:
 
 - `python -m pytest -q` → 60 passed (2026-07-23).
 - Added `tests/test_http_hardening.py` for 404/409/422/400/413/415/503 mapping, identifier validation, bind policy, missing `Content-Length`, and bounded concurrency.
-- Changed files: `src/holodeck/http_request.py`, `src/holodeck/http_server.py`, `src/holodeck/service.py`, `src/holodeck/validation.py`, `src/holodeck/cli.py`.
+- Changed files: `src/holodeck_control_plane/http_request.py`, `src/holodeck_control_plane/http_server.py`, `src/holodeck_control_plane/service.py`, `src/holodeck_control_plane/validation.py`, `src/holodeck_control_plane/cli.py`.
 - List fields require string elements; scalar text fields use `validate_text_field()` with explicit length limits.
 - Residual risks: socket timeout behavior under pathological slow clients is covered by configuration only; no live soak test.
 

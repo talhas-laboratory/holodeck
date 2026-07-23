@@ -54,13 +54,28 @@ class Handler(BaseHTTPRequestHandler):
         return validate_identifier(parts[index], "run_id")
 
     def _asset(self, name: str) -> None:
-        root = files("holodeck").joinpath("frontend")
+        root = files("holodeck_control_plane").joinpath("frontend")
         asset = root.joinpath(name)
         if not asset.is_file():
             return self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
         body = asset.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _documentation(self, slug: str) -> None:
+        filenames = {"http-api-v1": "http-api-v1.md", "mcp-setup": "mcp-setup.md"}
+        filename = filenames.get(slug)
+        if filename is None:
+            return self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        resource = files("holodeck_control_plane").joinpath("docs", filename)
+        if not resource.is_file():
+            return self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        body = resource.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/markdown; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -73,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._asset("index.html")
             if len(parts) == 2 and parts[0] == "assets":
                 return self._asset(parts[1])
+            if len(parts) == 2 and parts[0] == "docs" and parts[1] in {"http-api-v1", "mcp-setup"}:
+                return self._documentation(parts[1])
             if parts == ["health"]:
                 return self._send(HTTPStatus.OK, {"status": "ok"})
             if parts == ["api", "config"]:

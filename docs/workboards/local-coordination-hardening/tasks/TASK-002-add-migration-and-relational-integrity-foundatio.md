@@ -40,7 +40,7 @@ Out:
 - `python -m compileall -q src tests` and `git diff --check` passed (2026-07-23).
 - Migration `002` adds workspace FK, claim/run consistency trigger, active-path unique index, and reconciles all canonical-path overlaps before indexing, keeping the earliest active claim per workspace.
 - Added migration coverage for exact duplicates, ancestor/descendant overlaps, and normalized run-path synchronization in `tests/test_hardening.py`.
-- Changed artifacts: `src/holodeck/migrations.py`, `tests/test_hardening.py`.
+- Changed artifacts: `src/holodeck_control_plane/migrations.py`, `tests/test_hardening.py`.
 - Residual risks: none known for legacy active-claim reconciliation.
 
 ## Updates

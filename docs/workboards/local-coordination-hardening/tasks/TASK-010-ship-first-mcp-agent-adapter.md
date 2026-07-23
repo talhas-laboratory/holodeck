@@ -39,7 +39,7 @@ Out:
 ## Verification Evidence
 
 - `python -m pytest -q` → 83 passed (2026-07-23).
-- Added `src/holodeck/http_client.py`, `src/holodeck/mcp_server.py`, `holodeck mcp` CLI subcommand, optional `[mcp]` extra in `pyproject.toml`, and `docs/mcp-setup.md`.
+- Added `src/holodeck_control_plane/http_client.py`, `src/holodeck_control_plane/mcp_server.py`, `holodeck mcp` CLI subcommand, optional `[mcp]` extra in `pyproject.toml`, and `docs/mcp-setup.md`.
 - `tests/test_mcp_adapter.py` exercises MCP stdio transport via `ClientSession`: runtime metadata, workspace/task lifecycle, begin/complete run, conflict errors, and concurrent claim races across independent sessions.
 - Adapter is a thin HTTP client over `http-api-v1`; no second source of truth and no policy enforcement in the adapter.
 - Residual risks: MCP host configuration is manual; remote/multi-tenant MCP hosting is out of scope.
