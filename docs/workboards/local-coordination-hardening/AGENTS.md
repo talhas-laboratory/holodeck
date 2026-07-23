@@ -1,5 +1,9 @@
 # Agent Rules
 
+Project-wide direction lives in the repo root [`AGENTS.md`](../../../AGENTS.md): elegant solutions at every stage, and modularity so infrastructure can change quickly.
+
+Board-specific:
+
 - Prefer sparse, high-signal updates over verbose status narratives.
 - Keep task packets self-contained enough for another agent to resume.
 - Update board state as part of the work, not after memory fades.

@@ -1,0 +1,37 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install and test
+        run: |
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and health-check container
+        run: |
+          docker build -t holodeck-runtime:ci .
+          cid="$(docker run -d -p 127.0.0.1:9876:8787 -v holodeck-ci-data:/data holodeck-runtime:ci)"
+          trap 'docker rm -f "$cid"' EXIT
+          for _ in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:9876/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "container health check failed" >&2
+          exit 1

@@ -1,8 +1,8 @@
 # TASK-004-enforce-task-and-run-lifecycle-contracts: Enforce task and run lifecycle contracts
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -35,7 +35,10 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: `python -m pytest -q` with transition matrices.
+- `python -m pytest -q` → 25 passed (2026-07-23).
+- Added lifecycle tests in `tests/test_hardening.py`; updated `tests/test_store.py` for legal transitions.
+- Changed files: `src/holodeck_runtime/lifecycle.py`, `src/holodeck_runtime/store.py`, `src/holodeck_runtime/service.py`.
+- Residual risks: none known for TASK-004 scope.
 
 ## Updates
 
@@ -44,3 +47,4 @@ Out:
 ## Handoff Notes
 
 - Dependency: TASK-002 establishes scoped task identity and relational ownership.
+- Implementation decisions: `DECISIONS.md` → **2026-07-23 — TASK-004 implementation decisions**.

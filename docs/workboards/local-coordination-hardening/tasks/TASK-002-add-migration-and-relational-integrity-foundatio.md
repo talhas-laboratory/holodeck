@@ -1,8 +1,8 @@
 # TASK-002-add-migration-and-relational-integrity-foundatio: Add migration and relational-integrity foundation
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -36,7 +36,10 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: fresh-schema and legacy-upgrade pytest cases.
+- `python -m pytest -q` → 25 passed (2026-07-23).
+- Added `tests/test_hardening.py::test_legacy_database_upgrades_and_releases_by_run_id`, `test_same_task_id_in_two_workspaces`, `test_migrate_is_idempotent`.
+- Changed files: `src/holodeck_runtime/migrations.py`, `src/holodeck_runtime/store.py`.
+- Residual risks: none known for TASK-002 scope.
 
 ## Updates
 
@@ -45,3 +48,4 @@ Out:
 ## Handoff Notes
 
 - Dependency: TASK-001 establishes the SQLite transaction configuration.
+- Implementation decisions: `DECISIONS.md` → **2026-07-23 — TASK-002 implementation decisions**.

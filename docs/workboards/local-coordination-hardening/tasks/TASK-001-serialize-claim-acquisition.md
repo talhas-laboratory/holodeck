@@ -1,8 +1,8 @@
 # TASK-001-serialize-claim-acquisition: Serialize claim acquisition
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -34,7 +34,10 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: `python -m pytest -q`.
+- `python -m pytest -q` → 25 passed (2026-07-23).
+- Added `tests/test_hardening.py::test_concurrent_claims_allow_only_one_active_run`.
+- Changed files: `src/holodeck_runtime/errors.py`, `src/holodeck_runtime/migrations.py`, `src/holodeck_runtime/store.py`.
+- Residual risks: none known for TASK-001 scope.
 
 ## Updates
 
@@ -43,3 +46,4 @@ Out:
 ## Handoff Notes
 
 - Dependency: none. This is the first implementation task.
+- Implementation decisions: `DECISIONS.md` → **2026-07-23 — TASK-001 implementation decisions**.

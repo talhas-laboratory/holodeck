@@ -32,7 +32,7 @@ def test_store_updates_complete_workspace_and_task_records(tmp_path):
         "demo",
         {"goal": "Operate safely", "artifact_roots": ["src", "tests"], "scope_out": ["production"]},
     )
-    task = store.create_task("demo", {"task_id": "HD-001", "title": "First task"})
+    task = store.create_task("demo", {"task_id": "HD-001", "title": "First task", "status": "in-progress"})
     task = store.update_task(
         "demo",
         task["task_id"],

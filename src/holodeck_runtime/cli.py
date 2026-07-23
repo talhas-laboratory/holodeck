@@ -13,6 +13,11 @@ def main() -> None:
     serve_parser.add_argument("--database", default="holodeck.db")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8787)
+    serve_parser.add_argument(
+        "--insecure-bind",
+        action="store_true",
+        help="Allow binding to non-loopback interfaces",
+    )
     init_parser = commands.add_parser("init", help="Initialize a project-local Holodeck policy")
     init_parser.add_argument("--path", default=".")
     init_parser.add_argument("--force", action="store_true")
@@ -27,4 +32,4 @@ def main() -> None:
     if args.command == "policy-check":
         print(policy_decision(args.path, args.action))
         return
-    serve(database=args.database, host=args.host, port=args.port)
+    serve(database=args.database, host=args.host, port=args.port, insecure_bind=args.insecure_bind)

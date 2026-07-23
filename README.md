@@ -43,3 +43,13 @@ The dashboard reflects the complete alpha surface: workspace boundaries, full ta
 Run `holodeck init` inside a Git repository. It creates only `.holodeck/manifest.json` and `.holodeck/policy.json`; it does not edit source, install dependencies, create a Git remote, or start a service.
 
 The default policy allows repository reads and workspace-state changes automatically. Source edits, dependencies, network access, Git pushes, and deployments require approval; destructive commands are denied. Inspect a decision with `holodeck policy-check deploy`.
+
+## Development and release verification
+
+```bash
+pip install -e ".[dev]"
+python -m pytest -q
+./scripts/verify_release.sh
+```
+
+`verify_release.sh` runs the test suite, smoke-tests a clean package install, and builds the container image for a `/health` check when Docker is available.

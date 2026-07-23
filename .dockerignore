@@ -1,0 +1,12 @@
+.git
+.github
+.venv
+.pytest_cache
+.holodeck
+*.db
+*.egg-info
+docs/
+tests/
+translator-diary/
+**/__pycache__/
+**/*.py[cod]

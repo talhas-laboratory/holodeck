@@ -3,13 +3,56 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+
+from holodeck_runtime.errors import ConflictError, ContentionError, NotFoundError, ValidationError
+from holodeck_runtime.ids import validate_identifier
+from holodeck_runtime.lifecycle import (
+    validate_run_completion_status,
+    validate_run_transition,
+    validate_task_can_start_run,
+    validate_task_status,
+    validate_task_transition,
+)
+from holodeck_runtime.migrations import configure_connection, migrate
+from holodeck_runtime.paths import format_path, normalize_path, paths_intersect, validate_claim_path
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _raise_contention(error: sqlite3.OperationalError) -> None:
+    message = str(error).lower()
+    if error.sqlite_errorcode == sqlite3.SQLITE_BUSY or "locked" in message or "busy" in message:
+        raise ContentionError("database is busy") from error
+    raise error
+
+
+def _raise_integrity(error: sqlite3.IntegrityError) -> None:
+    message = str(error)
+    if "workspaces.workspace_id" in message:
+        raise ConflictError("workspace already exists") from error
+    if "tasks." in message and "task_id" in message:
+        raise ConflictError("task already exists in workspace") from error
+    raise ConflictError(message) from error
+
+
+@contextmanager
+def _immediate_transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+    except sqlite3.OperationalError as error:
+        _raise_contention(error)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 class Store:
@@ -19,53 +62,32 @@ class Store:
         self.database = str(database)
         Path(self.database).parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS workspaces (
-                    workspace_id TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS tasks (
-                    task_id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS runs (
-                    run_id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    task_id TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS claims (
-                    claim_id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL,
-                    task_id TEXT NOT NULL,
-                    path TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS tasks_workspace ON tasks(workspace_id);
-                CREATE INDEX IF NOT EXISTS runs_workspace ON runs(workspace_id);
-                CREATE INDEX IF NOT EXISTS claims_workspace ON claims(workspace_id, status);
-                """
-            )
+            migrate(conn)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database)
         conn.row_factory = sqlite3.Row
+        configure_connection(conn)
         return conn
 
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict[str, Any]:
         return dict(json.loads(row["payload"]))
+
+    @staticmethod
+    def _path_overlap(left: str, right: str) -> bool:
+        return paths_intersect(normalize_path(left), normalize_path(right))
+
+    def _workspace_record(self, conn: sqlite3.Connection, workspace_id: str) -> dict[str, Any]:
+        row = conn.execute("SELECT payload FROM workspaces WHERE workspace_id = ?", (workspace_id,)).fetchone()
+        if row is None:
+            raise NotFoundError(f"workspace not found: {workspace_id}")
+        return self._decode(row)
+
+    def _normalize_workspace_boundaries(self, artifact_roots: list[str], scope_out: list[str]) -> tuple[list[str], list[str]]:
+        roots = [format_path(normalize_path(root)) for root in artifact_roots if str(root).strip()]
+        excluded = [format_path(normalize_path(path)) for path in scope_out if str(path).strip()]
+        return roots, excluded
 
     def catalog(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -73,77 +95,103 @@ class Store:
         return [self._decode(row) for row in rows]
 
     def create_workspace(self, manifest: dict[str, Any]) -> dict[str, Any]:
-        workspace_id = str(manifest.get("workspace_id", "")).strip()
-        if not workspace_id:
-            raise ValueError("workspace_id is required")
+        workspace_id = validate_identifier(str(manifest.get("workspace_id", "")), "workspace_id")
+        if "artifact_roots" in manifest:
+            raw_roots = [str(value) for value in list(manifest.get("artifact_roots") or []) if str(value).strip()]
+        else:
+            raw_roots = ["."]
+        raw_scope_out = [str(value) for value in list(manifest.get("scope_out", []) or []) if str(value).strip()]
+        artifact_roots, scope_out = self._normalize_workspace_boundaries(raw_roots, raw_scope_out)
         timestamp = now()
         payload = {
             "workspace_id": workspace_id,
             "label": str(manifest.get("label") or workspace_id),
             "goal": str(manifest.get("goal", "")),
             "purpose": str(manifest.get("purpose", "")),
-            "artifact_roots": list(manifest.get("artifact_roots", []) or []),
-            "scope_out": list(manifest.get("scope_out", []) or []),
+            "artifact_roots": artifact_roots,
+            "scope_out": scope_out,
             "status": "active",
             "created_at": timestamp,
             "updated_at": timestamp,
         }
         with self._connect() as conn:
-            if conn.execute("SELECT 1 FROM workspaces WHERE workspace_id = ?", (workspace_id,)).fetchone():
-                raise ValueError(f"workspace already exists: {workspace_id}")
-            conn.execute(
-                "INSERT INTO workspaces VALUES (?, ?, ?, ?)",
-                (workspace_id, json.dumps(payload), timestamp, timestamp),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO workspaces VALUES (?, ?, ?, ?)",
+                    (workspace_id, json.dumps(payload), timestamp, timestamp),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as error:
+                _raise_integrity(error)
         return payload
 
     def workspace(self, workspace_id: str) -> dict[str, Any]:
         with self._connect() as conn:
-            row = conn.execute("SELECT payload FROM workspaces WHERE workspace_id = ?", (workspace_id,)).fetchone()
-        if row is None:
-            raise KeyError(f"workspace not found: {workspace_id}")
-        return self._decode(row)
+            return self._workspace_record(conn, workspace_id)
 
     def update_workspace(self, workspace_id: str, changes: dict[str, Any]) -> dict[str, Any]:
-        current = self.workspace(workspace_id)
-        for field in ("label", "goal", "purpose"):
-            if field in changes:
-                current[field] = str(changes[field])
-        for field in ("artifact_roots", "scope_out"):
-            if field in changes:
-                current[field] = [str(value) for value in list(changes[field] or []) if str(value).strip()]
-        current["updated_at"] = now()
         with self._connect() as conn:
+            current = self._workspace_record(conn, workspace_id)
+            for field in ("label", "goal", "purpose"):
+                if field in changes:
+                    current[field] = str(changes[field])
+            if "artifact_roots" in changes:
+                artifact_roots = [str(value) for value in list(changes["artifact_roots"] or []) if str(value).strip()]
+            else:
+                current_roots = current.get("artifact_roots")
+                artifact_roots = ["."] if current_roots is None else [str(value) for value in list(current_roots)]
+            if "scope_out" in changes:
+                scope_out = [str(value) for value in list(changes["scope_out"] or []) if str(value).strip()]
+            else:
+                scope_out = [str(value) for value in list(current.get("scope_out", []) or [])]
+            current["artifact_roots"], current["scope_out"] = self._normalize_workspace_boundaries(artifact_roots, scope_out)
+            current["updated_at"] = now()
             conn.execute(
                 "UPDATE workspaces SET payload = ?, updated_at = ? WHERE workspace_id = ?",
                 (json.dumps(current), current["updated_at"], workspace_id),
             )
+            conn.commit()
         return current
 
     def tasks(self, workspace_id: str) -> list[dict[str, Any]]:
-        self.workspace(workspace_id)
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM tasks WHERE workspace_id = ? ORDER BY created_at", (workspace_id,)).fetchall()
+            self._workspace_record(conn, workspace_id)
+            rows = conn.execute(
+                "SELECT payload FROM tasks WHERE workspace_id = ? ORDER BY created_at",
+                (workspace_id,),
+            ).fetchall()
         return [self._decode(row) for row in rows]
 
     def create_task(self, workspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        self.workspace(workspace_id)
-        title = str(payload.get("title", "")).strip()
-        if not title:
-            raise ValueError("title is required")
-        timestamp = now()
-        task = {
-            "task_id": str(payload.get("task_id") or f"task-{uuid.uuid4().hex[:12]}"),
-            "workspace_id": workspace_id,
-            "title": title,
-            "status": str(payload.get("status") or "backlog"),
-            "acceptance_criteria": list(payload.get("acceptance_criteria", []) or []),
-            "constraints": list(payload.get("constraints", []) or []),
-            "created_at": timestamp,
-            "updated_at": timestamp,
-        }
         with self._connect() as conn:
-            conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?)", (task["task_id"], workspace_id, json.dumps(task), timestamp, timestamp))
+            self._workspace_record(conn, workspace_id)
+            title = str(payload.get("title", "")).strip()
+            if not title:
+                raise ValidationError("title is required")
+            timestamp = now()
+            status = validate_task_status(str(payload.get("status") or "backlog"))
+            if payload.get("task_id"):
+                task_id = validate_identifier(str(payload["task_id"]), "task_id")
+            else:
+                task_id = f"task-{uuid.uuid4().hex[:12]}"
+            task = {
+                "task_id": task_id,
+                "workspace_id": workspace_id,
+                "title": title,
+                "status": status,
+                "acceptance_criteria": list(payload.get("acceptance_criteria", []) or []),
+                "constraints": list(payload.get("constraints", []) or []),
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+            try:
+                conn.execute(
+                    "INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (workspace_id, task["task_id"], status, json.dumps(task), timestamp, timestamp),
+                )
+                conn.commit()
+            except sqlite3.IntegrityError as error:
+                _raise_integrity(error)
         return task
 
     def task(self, workspace_id: str, task_id: str) -> dict[str, Any]:
@@ -153,7 +201,7 @@ class Store:
                 (workspace_id, task_id),
             ).fetchone()
         if row is None:
-            raise KeyError(f"task not found: {task_id}")
+            raise NotFoundError(f"task not found: {task_id}")
         return self._decode(row)
 
     def update_task(self, workspace_id: str, task_id: str, changes: dict[str, Any]) -> dict[str, Any]:
@@ -161,63 +209,111 @@ class Store:
         if "title" in changes:
             title = str(changes["title"]).strip()
             if not title:
-                raise ValueError("title is required")
+                raise ValidationError("title is required")
             task["title"] = title
         if "status" in changes:
-            task["status"] = str(changes["status"]).strip()
+            validate_task_transition(task["status"], str(changes["status"]))
+            task["status"] = validate_task_status(str(changes["status"]))
         for field in ("acceptance_criteria", "constraints"):
             if field in changes:
                 task[field] = [str(value) for value in list(changes[field] or []) if str(value).strip()]
         task["updated_at"] = now()
         with self._connect() as conn:
             conn.execute(
-                "UPDATE tasks SET payload = ?, updated_at = ? WHERE workspace_id = ? AND task_id = ?",
-                (json.dumps(task), task["updated_at"], workspace_id, task_id),
+                "UPDATE tasks SET payload = ?, status = ?, updated_at = ? WHERE workspace_id = ? AND task_id = ?",
+                (json.dumps(task), task["status"], task["updated_at"], workspace_id, task_id),
             )
+            conn.commit()
         return task
-
-    @staticmethod
-    def _overlaps(left: str, right: str) -> bool:
-        return left == right or left.startswith(right.rstrip("/") + "/") or right.startswith(left.rstrip("/") + "/")
 
     def begin_run(self, workspace_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         task_id = str(payload.get("task_id", "")).strip()
-        if task_id not in {task["task_id"] for task in self.tasks(workspace_id)}:
-            raise ValueError("task_id must identify a task in this workspace")
-        paths = [str(path).strip() for path in list(payload.get("claimed_paths", []) or []) if str(path).strip()]
-        with self._connect() as conn:
-            active = conn.execute("SELECT path FROM claims WHERE workspace_id = ? AND status = 'active'", (workspace_id,)).fetchall()
-            for path in paths:
-                if any(self._overlaps(path, row["path"]) for row in active):
-                    raise ValueError(f"claimed path overlaps active work: {path}")
-            timestamp = now()
-            run = {
-                "run_id": f"run-{uuid.uuid4().hex[:12]}",
-                "workspace_id": workspace_id,
-                "task_id": task_id,
-                "agent_id": str(payload.get("agent_id") or "unknown"),
-                "intent": str(payload.get("intent", "")),
-                "status": "active",
-                "claimed_paths": paths,
-                "created_at": timestamp,
-                "updated_at": timestamp,
-            }
-            conn.execute("INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?)", (run["run_id"], workspace_id, task_id, json.dumps(run), timestamp, timestamp))
-            for path in paths:
-                claim = {
-                    "claim_id": f"claim-{uuid.uuid4().hex[:12]}",
+        if not task_id:
+            raise ValidationError("task_id is required")
+
+        conn = self._connect()
+        try:
+            with _immediate_transaction(conn):
+                workspace = self._workspace_record(conn, workspace_id)
+                task_row = conn.execute(
+                    "SELECT payload, status FROM tasks WHERE workspace_id = ? AND task_id = ?",
+                    (workspace_id, task_id),
+                ).fetchone()
+                if task_row is None:
+                    raise ValidationError("task_id must identify a task in this workspace")
+                validate_task_can_start_run(task_row["status"])
+
+                roots = workspace.get("artifact_roots")
+                artifact_roots = ["."] if roots is None else [str(value) for value in list(roots)]
+                scope_out = [str(value) for value in list(workspace.get("scope_out", []) or [])]
+                raw_paths = [str(path).strip() for path in list(payload.get("claimed_paths", []) or []) if str(path).strip()]
+                paths = [validate_claim_path(path, artifact_roots=artifact_roots, scope_out=scope_out) for path in raw_paths]
+
+                active = conn.execute(
+                    "SELECT path FROM claims WHERE workspace_id = ? AND status = 'active'",
+                    (workspace_id,),
+                ).fetchall()
+                for path in paths:
+                    if any(self._path_overlap(path, row["path"]) for row in active):
+                        raise ConflictError(f"claimed path overlaps active work: {path}")
+                    for other in paths:
+                        if other != path and self._path_overlap(path, other):
+                            raise ConflictError(f"claimed paths overlap each other: {path}")
+
+                timestamp = now()
+                run = {
+                    "run_id": f"run-{uuid.uuid4().hex[:12]}",
                     "workspace_id": workspace_id,
                     "task_id": task_id,
-                    "run_id": run["run_id"],
-                    "agent_id": run["agent_id"],
-                    "path": path,
+                    "agent_id": str(payload.get("agent_id") or "unknown"),
+                    "intent": str(payload.get("intent", "")),
+                    "status": "active",
+                    "claimed_paths": paths,
+                    "created_at": timestamp,
+                    "updated_at": timestamp,
                 }
-                conn.execute("INSERT INTO claims VALUES (?, ?, ?, ?, 'active', ?, ?, ?)", (claim["claim_id"], workspace_id, task_id, path, json.dumps(claim), timestamp, timestamp))
+                try:
+                    conn.execute(
+                        "INSERT INTO runs(run_id, workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (run["run_id"], workspace_id, task_id, "active", json.dumps(run), timestamp, timestamp),
+                    )
+                    for path in paths:
+                        claim = {
+                            "claim_id": f"claim-{uuid.uuid4().hex[:12]}",
+                            "workspace_id": workspace_id,
+                            "task_id": task_id,
+                            "run_id": run["run_id"],
+                            "agent_id": run["agent_id"],
+                            "path": path,
+                        }
+                        conn.execute(
+                            """
+                            INSERT INTO claims(
+                                claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                            """,
+                            (
+                                claim["claim_id"],
+                                workspace_id,
+                                task_id,
+                                run["run_id"],
+                                path,
+                                json.dumps(claim),
+                                timestamp,
+                                timestamp,
+                            ),
+                        )
+                except sqlite3.IntegrityError as error:
+                    _raise_integrity(error)
+        except sqlite3.OperationalError as error:
+            _raise_contention(error)
+        finally:
+            conn.close()
         return run
 
     def runs(self, workspace_id: str) -> list[dict[str, Any]]:
-        self.workspace(workspace_id)
         with self._connect() as conn:
+            self._workspace_record(conn, workspace_id)
             rows = conn.execute(
                 "SELECT payload FROM runs WHERE workspace_id = ? ORDER BY created_at DESC",
                 (workspace_id,),
@@ -225,8 +321,8 @@ class Store:
         return [self._decode(row) for row in rows]
 
     def claims(self, workspace_id: str) -> list[dict[str, Any]]:
-        self.workspace(workspace_id)
         with self._connect() as conn:
+            self._workspace_record(conn, workspace_id)
             rows = conn.execute(
                 "SELECT payload, workspace_id, task_id, status, created_at, updated_at FROM claims WHERE workspace_id = ? ORDER BY created_at DESC",
                 (workspace_id,),
@@ -247,39 +343,47 @@ class Store:
         return claims
 
     def complete_run(self, workspace_id: str, run_id: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT payload FROM runs WHERE workspace_id = ? AND run_id = ?",
-                (workspace_id, run_id),
-            ).fetchone()
-            if row is None:
-                raise KeyError(f"run not found: {run_id}")
-            run = self._decode(row)
-            if run["status"] != "active":
-                raise ValueError(f"run is already {run['status']}")
-            timestamp = now()
-            result = dict(payload or {})
-            run.update(
-                {
-                    "status": str(result.get("status") or "completed"),
-                    "summary": str(result.get("summary") or ""),
-                    "updated_at": timestamp,
-                    "completed_at": timestamp,
-                }
-            )
-            conn.execute(
-                "UPDATE runs SET payload = ?, updated_at = ? WHERE workspace_id = ? AND run_id = ?",
-                (json.dumps(run), timestamp, workspace_id, run_id),
-            )
-            claim_rows = conn.execute(
-                "SELECT claim_id, payload FROM claims WHERE workspace_id = ? AND payload LIKE ? AND status = 'active'",
-                (workspace_id, f'%"run_id": "{run_id}"%'),
-            ).fetchall()
-            for claim_row in claim_rows:
-                claim = self._decode(claim_row)
-                claim["released_at"] = timestamp
-                conn.execute(
-                    "UPDATE claims SET status = 'released', payload = ?, updated_at = ? WHERE claim_id = ?",
-                    (json.dumps(claim), timestamp, claim_row["claim_id"]),
+        conn = self._connect()
+        try:
+            with _immediate_transaction(conn):
+                row = conn.execute(
+                    "SELECT payload, status FROM runs WHERE workspace_id = ? AND run_id = ?",
+                    (workspace_id, run_id),
+                ).fetchone()
+                if row is None:
+                    raise NotFoundError(f"run not found: {run_id}")
+                run = self._decode(row)
+                if row["status"] != "active":
+                    raise ValidationError(f"run is already {row['status']}")
+                timestamp = now()
+                result = dict(payload or {})
+                next_status = validate_run_completion_status(str(result.get("status") or "completed"))
+                validate_run_transition(row["status"], next_status)
+                run.update(
+                    {
+                        "status": next_status,
+                        "summary": str(result.get("summary") or ""),
+                        "updated_at": timestamp,
+                        "completed_at": timestamp,
+                    }
                 )
+                conn.execute(
+                    "UPDATE runs SET payload = ?, status = ?, updated_at = ? WHERE workspace_id = ? AND run_id = ?",
+                    (json.dumps(run), next_status, timestamp, workspace_id, run_id),
+                )
+                claim_rows = conn.execute(
+                    "SELECT claim_id, payload FROM claims WHERE run_id = ? AND status = 'active'",
+                    (run_id,),
+                ).fetchall()
+                for claim_row in claim_rows:
+                    claim = self._decode(claim_row)
+                    claim["released_at"] = timestamp
+                    conn.execute(
+                        "UPDATE claims SET status = 'released', payload = ?, updated_at = ? WHERE claim_id = ?",
+                        (json.dumps(claim), timestamp, claim_row["claim_id"]),
+                    )
+        except sqlite3.OperationalError as error:
+            _raise_contention(error)
+        finally:
+            conn.close()
         return run

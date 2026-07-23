@@ -20,6 +20,14 @@ Make Holodeck a reliable local-only traffic controller for multiple agents in on
 4. Enforce lifecycle and identity contracts.
 5. Harden request parsing, errors, and binding.
 6. Harden the container and establish automated release checks.
+7. Unify public OSS repository identity.
+8. Ship a PyPI-installable package.
+9. Version and document the stable HTTP API.
+10. Ship the first MCP agent adapter.
+11. Clarify advisory policy boundary in user-facing docs.
+12. Evaluate local daemon HTTP polish only if concrete friction remains.
+
+Steps 7–12 are the OSS adoption track detailed in `docs/plans/2026-07-23-oss-adoption-gaps.md`.
 
 ## Release acceptance
 
@@ -31,4 +39,4 @@ Make Holodeck a reliable local-only traffic controller for multiple agents in on
 
 ## Explicitly deferred
 
-Authenticated principals, approvals with enforcement adapters, filesystem isolation, tool-call auditing, verification evidence, stale-run recovery, backup/import/export, API versioning, and a full threat model are subsequent product milestones.
+Authenticated principals, approvals with enforcement adapters, filesystem isolation, tool-call auditing, verification evidence, stale-run recovery, backup/import/export, a full threat model, language rewrites, and Postgres/MySQL remain subsequent milestones. OSS packaging and agent-adapter work is tracked as TASK-007 … TASK-012 in `docs/plans/2026-07-23-oss-adoption-gaps.md`, not deferred indefinitely.

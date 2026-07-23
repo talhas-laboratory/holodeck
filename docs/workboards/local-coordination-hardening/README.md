@@ -1,6 +1,6 @@
 # Local Coordination Hardening
 
-Purpose: coordinate multi-agent work with sparse, reliable task state, decision history, and mandatory completion gates.
+Purpose: coordinate multi-agent work with sparse, reliable task state, decision history, and mandatory completion gates. Board covers local coordination hardening (TASK-001–006) and follow-on OSS adoption gaps (TASK-007–012; see `docs/plans/2026-07-23-oss-adoption-gaps.md`).
 
 Board id: `local-coordination-hardening`
 Owner: `talha`

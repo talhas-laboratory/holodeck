@@ -1,8 +1,8 @@
 # TASK-003-canonicalize-and-enforce-claim-paths: Canonicalize and enforce claim paths
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -35,7 +35,10 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: table-driven pytest coverage for valid and invalid paths.
+- `python -m pytest -q` → 25 passed (2026-07-23).
+- Added path table tests in `tests/test_hardening.py`.
+- Changed files: `src/holodeck_runtime/paths.py`, `src/holodeck_runtime/store.py`.
+- Residual risks: none known for TASK-003 scope.
 
 ## Updates
 
@@ -44,3 +47,4 @@ Out:
 ## Handoff Notes
 
 - Dependency: TASK-002 supplies the durable schema contract.
+- Implementation decisions: `DECISIONS.md` → **2026-07-23 — TASK-003 implementation decisions**.

@@ -18,5 +18,10 @@
     "verification",
     "review",
     "done"
-  ]
+  ],
+  "tracks": [
+    "local-coordination-hardening",
+    "oss-adoption"
+  ],
+  "task_count": 12
 }

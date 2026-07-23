@@ -9,6 +9,9 @@ description = "Local-first control plane for bounded autonomous development."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 holodeck = "holodeck_runtime.cli:main"
 

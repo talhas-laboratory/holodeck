@@ -1,8 +1,8 @@
 # TASK-005-harden-http-validation-and-local-exposure: Harden HTTP validation and local exposure
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -34,7 +34,10 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: HTTP pytest integration cases.
+- `python -m pytest -q` → 34 passed (2026-07-23).
+- Added `tests/test_http_hardening.py` for 404/409/422/400/415 mapping, identifier validation, and bind policy.
+- Changed files: `src/holodeck_runtime/http_request.py`, `src/holodeck_runtime/service.py`, `src/holodeck_runtime/cli.py`, `Dockerfile`.
+- Residual risks: ContentionError → 503 is implemented but not stress-tested under real lock contention.
 
 ## Updates
 
