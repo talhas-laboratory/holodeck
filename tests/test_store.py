@@ -2,9 +2,9 @@ from holodeck_runtime.store import Store
 from holodeck_runtime.project import initialize_project, policy_decision
 import json
 import threading
-from http.server import ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
+from holodeck_runtime.http_server import create_http_server
 from holodeck_runtime.service import Handler
 
 
@@ -65,7 +65,7 @@ def test_frontend_is_packaged_and_owned_by_runtime():
 def test_http_control_plane_exposes_config_and_full_run_lifecycle(tmp_path):
     store = Store(tmp_path / "runtime.db")
     handler = type("TestHandler", (Handler,), {"store": store, "runtime_host": "127.0.0.1", "runtime_port": 0})
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = create_http_server(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"

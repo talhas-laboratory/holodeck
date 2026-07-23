@@ -5,6 +5,9 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from holodeck_runtime.errors import ValidationError
+from holodeck_runtime.paths import format_path, normalize_path
+
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
 BUSY_TIMEOUT_MS = 5000
@@ -103,7 +106,12 @@ def _create_workspaces_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _create_tasks_table(conn: sqlite3.Connection) -> None:
+def _create_tasks_table(conn: sqlite3.Connection, *, with_workspace_fk: bool = False) -> None:
+    workspace_fk = (
+        ", FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id)"
+        if with_workspace_fk
+        else ""
+    )
     conn.execute(
         f"""
         CREATE TABLE tasks (
@@ -113,7 +121,7 @@ def _create_tasks_table(conn: sqlite3.Connection) -> None:
             payload TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            PRIMARY KEY (workspace_id, task_id)
+            PRIMARY KEY (workspace_id, task_id){workspace_fk}
         )
         """
     )
@@ -162,6 +170,190 @@ def _create_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS runs_task ON runs(workspace_id, task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS claims_workspace ON claims(workspace_id, status)")
     conn.execute("CREATE INDEX IF NOT EXISTS claims_run ON claims(run_id, status)")
+
+
+def _canonical_claim_path(path: str) -> str | None:
+    try:
+        return format_path(normalize_path(path))
+    except ValidationError:
+        return None
+
+
+def _release_claim(
+    conn: sqlite3.Connection,
+    *,
+    claim_id: str,
+    run_id: str,
+    payload: dict,
+    released_at: str,
+    reason: str,
+) -> str:
+    payload["run_id"] = run_id
+    payload["released_at"] = released_at
+    payload["release_reason"] = reason
+    conn.execute(
+        """
+        UPDATE claims
+        SET status = 'released', payload = ?, updated_at = ?
+        WHERE claim_id = ?
+        """,
+        (json.dumps(payload), released_at, claim_id),
+    )
+    return run_id
+
+
+def _sync_run_after_claim_release(conn: sqlite3.Connection, run_id: str, timestamp: str) -> None:
+    run_row = conn.execute(
+        "SELECT payload, status FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    if run_row is None:
+        return
+
+    run = _payload_dict(run_row["payload"])
+    active_paths = [
+        row["path"]
+        for row in conn.execute(
+            "SELECT path FROM claims WHERE run_id = ? AND status = 'active' ORDER BY created_at, claim_id",
+            (run_id,),
+        ).fetchall()
+    ]
+    run["claimed_paths"] = active_paths
+    run["updated_at"] = timestamp
+
+    if run_row["status"] == "active" and not active_paths:
+        run["status"] = "failed"
+        run["summary"] = str(run.get("summary") or "migration released all active claims")
+        run["completed_at"] = timestamp
+        conn.execute(
+            "UPDATE runs SET payload = ?, status = ?, updated_at = ? WHERE run_id = ?",
+            (json.dumps(run), "failed", timestamp, run_id),
+        )
+        return
+
+    conn.execute(
+        "UPDATE runs SET payload = ?, updated_at = ? WHERE run_id = ?",
+        (json.dumps(run), timestamp, run_id),
+    )
+
+
+def _reconcile_claim_paths_before_index(conn: sqlite3.Connection) -> None:
+    released_at = migration_now()
+    affected_runs: set[str] = set()
+
+    rows = conn.execute(
+        """
+        SELECT claim_id, run_id, path, payload
+        FROM claims
+        WHERE status = 'active'
+        ORDER BY created_at ASC, claim_id ASC
+        """
+    ).fetchall()
+
+    for row in rows:
+        normalized = _canonical_claim_path(row["path"])
+        if normalized is None:
+            payload = _payload_dict(row["payload"])
+            released_run_id = _release_claim(
+                conn,
+                claim_id=row["claim_id"],
+                run_id=row["run_id"],
+                payload=payload,
+                released_at=released_at,
+                reason="invalid_path",
+            )
+            if released_run_id:
+                affected_runs.add(released_run_id)
+            continue
+        if normalized == row["path"]:
+            continue
+        payload = _payload_dict(row["payload"])
+        payload["path"] = normalized
+        conn.execute(
+            "UPDATE claims SET path = ?, payload = ? WHERE claim_id = ?",
+            (normalized, json.dumps(payload), row["claim_id"]),
+        )
+
+    duplicate_groups = conn.execute(
+        """
+        SELECT workspace_id, path, COUNT(*) AS claim_count
+        FROM claims
+        WHERE status = 'active'
+        GROUP BY workspace_id, path
+        HAVING claim_count > 1
+        """
+    ).fetchall()
+
+    for group in duplicate_groups:
+        extras = conn.execute(
+            """
+            SELECT claim_id, run_id, payload
+            FROM claims
+            WHERE workspace_id = ? AND path = ? AND status = 'active'
+            ORDER BY created_at ASC, claim_id ASC
+            """,
+            (group["workspace_id"], group["path"]),
+        ).fetchall()
+        for extra in extras[1:]:
+            payload = _payload_dict(extra["payload"])
+            released_run_id = _release_claim(
+                conn,
+                claim_id=extra["claim_id"],
+                run_id=extra["run_id"],
+                payload=payload,
+                released_at=released_at,
+                reason="duplicate_active_path",
+            )
+            affected_runs.add(released_run_id)
+
+    for run_id in affected_runs:
+        _sync_run_after_claim_release(conn, run_id, released_at)
+
+
+def _create_claim_safeguards(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS claims_active_path
+        ON claims(workspace_id, path)
+        WHERE status = 'active'
+        """
+    )
+    conn.execute("DROP TRIGGER IF EXISTS claims_match_run_insert")
+    conn.execute("DROP TRIGGER IF EXISTS claims_match_run_update")
+    conn.execute(
+        """
+        CREATE TRIGGER claims_match_run_insert
+        BEFORE INSERT ON claims
+        BEGIN
+            SELECT CASE
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM runs
+                    WHERE run_id = NEW.run_id
+                      AND workspace_id = NEW.workspace_id
+                      AND task_id = NEW.task_id
+                )
+                THEN RAISE(ABORT, 'claim workspace/task must match run')
+            END;
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER claims_match_run_update
+        BEFORE UPDATE ON claims
+        BEGIN
+            SELECT CASE
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM runs
+                    WHERE run_id = NEW.run_id
+                      AND workspace_id = NEW.workspace_id
+                      AND task_id = NEW.task_id
+                )
+                THEN RAISE(ABORT, 'claim workspace/task must match run')
+            END;
+        END
+        """
+    )
 
 
 def _create_relational_schema(conn: sqlite3.Connection) -> None:
@@ -300,6 +492,49 @@ def _upgrade_relational_integrity(conn: sqlite3.Connection) -> None:
     _create_relational_schema(conn)
 
 
+def _upgrade_workspace_fk_and_claim_safeguards(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE claims RENAME TO claims_v1")
+    conn.execute("ALTER TABLE runs RENAME TO runs_v1")
+    conn.execute("ALTER TABLE tasks RENAME TO tasks_v1")
+
+    _create_tasks_table(conn, with_workspace_fk=True)
+    conn.execute(
+        """
+        INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at)
+        SELECT workspace_id, task_id, status, payload, created_at, updated_at
+        FROM tasks_v1
+        """
+    )
+    _create_runs_table(conn)
+    conn.execute(
+        """
+        INSERT INTO runs(run_id, workspace_id, task_id, status, payload, created_at, updated_at)
+        SELECT run_id, workspace_id, task_id, status, payload, created_at, updated_at
+        FROM runs_v1
+        """
+    )
+    _create_claims_table(conn)
+    conn.execute(
+        """
+        INSERT INTO claims(
+            claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+        )
+        SELECT claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+        FROM claims_v1
+        """
+    )
+
+    conn.execute("DROP TABLE claims_v1")
+    conn.execute("DROP TABLE runs_v1")
+    conn.execute("DROP TABLE tasks_v1")
+    _create_indexes(conn)
+    _reconcile_claim_paths_before_index(conn)
+    _create_claim_safeguards(conn)
+    conn.execute("PRAGMA foreign_keys = ON")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "relational_integrity", _upgrade_relational_integrity),
+    (2, "workspace_fk_and_claim_safeguards", _upgrade_workspace_fk_and_claim_safeguards),
 ]

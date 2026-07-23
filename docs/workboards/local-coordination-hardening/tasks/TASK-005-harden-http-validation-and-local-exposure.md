@@ -34,10 +34,11 @@ Out:
 
 ## Verification Evidence
 
-- `python -m pytest -q` → 34 passed (2026-07-23).
-- Added `tests/test_http_hardening.py` for 404/409/422/400/415 mapping, identifier validation, and bind policy.
-- Changed files: `src/holodeck_runtime/http_request.py`, `src/holodeck_runtime/service.py`, `src/holodeck_runtime/cli.py`, `Dockerfile`.
-- Residual risks: ContentionError → 503 is implemented but not stress-tested under real lock contention.
+- `python -m pytest -q` → 60 passed (2026-07-23).
+- Added `tests/test_http_hardening.py` for 404/409/422/400/413/415/503 mapping, identifier validation, bind policy, missing `Content-Length`, and bounded concurrency.
+- Changed files: `src/holodeck_runtime/http_request.py`, `src/holodeck_runtime/http_server.py`, `src/holodeck_runtime/service.py`, `src/holodeck_runtime/validation.py`, `src/holodeck_runtime/cli.py`.
+- List fields require string elements; scalar text fields use `validate_text_field()` with explicit length limits.
+- Residual risks: socket timeout behavior under pathological slow clients is covered by configuration only; no live soak test.
 
 ## Updates
 

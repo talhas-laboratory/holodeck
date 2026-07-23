@@ -7,7 +7,7 @@
 | `TASK-003-canonicalize-and-enforce-claim-paths` | done | cursor | Canonicalize and enforce claim paths | done |
 | `TASK-004-enforce-task-and-run-lifecycle-contracts` | done | cursor | Enforce task and run lifecycle contracts | done |
 | `TASK-005-harden-http-validation-and-local-exposure` | done | cursor | Harden HTTP validation and local exposure | done |
-| `TASK-006-harden-container-delivery-and-release-verificati` | done | cursor | Harden container delivery and release verification | done |
+| `TASK-006-harden-container-delivery-and-release-verificati` | review | cursor | Harden container delivery and release verification | review |
 | `TASK-007-unify-public-oss-repository-identity` | backlog | unassigned | Unify public OSS repository identity | intake |
 | `TASK-008-ship-pypi-installable-package` | backlog | unassigned | Ship a PyPI-installable package | intake |
 | `TASK-009-version-and-document-stable-http-api` | backlog | unassigned | Version and document the stable HTTP API | intake |

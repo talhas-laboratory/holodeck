@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import unicodedata
+
 from holodeck_runtime.errors import ValidationError
 
 
@@ -25,7 +27,7 @@ def normalize_path(raw: str) -> tuple[str, ...]:
             continue
         if segment == "..":
             raise ValidationError("path must not traverse outside the repository")
-        parts.append(segment)
+        parts.append(unicodedata.normalize("NFC", segment))
     return tuple(parts)
 
 

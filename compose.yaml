@@ -6,6 +6,8 @@ services:
     volumes:
       - holodeck-data:/data
     restart: unless-stopped
+    cap_drop:
+      - ALL
     security_opt:
       - no-new-privileges:true
     read_only: true

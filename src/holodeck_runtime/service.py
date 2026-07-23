@@ -4,11 +4,12 @@ import json
 import mimetypes
 from importlib.resources import files
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
 
 from .errors import HolodeckError
 from .http_request import http_status_for_error, read_json_object, validate_bind_host, validate_identifier
+from .http_server import create_http_server
 from .project import DEFAULT_POLICY
 from .store import Store
 
@@ -159,11 +160,25 @@ class Handler(BaseHTTPRequestHandler):
         self._handle(action)
 
 
-def serve(*, database: str, host: str = "127.0.0.1", port: int = 8787, insecure_bind: bool = False) -> None:
+def serve(
+    *,
+    database: str,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    insecure_bind: bool = False,
+    request_timeout_seconds: int | None = None,
+    max_concurrent_requests: int | None = None,
+) -> None:
     bind_host = validate_bind_host(host, insecure_bind=insecure_bind)
     handler = type(
         "HolodeckHandler",
         (Handler,),
         {"store": Store(database), "runtime_host": bind_host, "runtime_port": port},
     )
-    ThreadingHTTPServer((bind_host, port), handler).serve_forever()
+    kwargs: dict[str, int] = {}
+    if request_timeout_seconds is not None:
+        kwargs["request_timeout_seconds"] = request_timeout_seconds
+    if max_concurrent_requests is not None:
+        kwargs["max_concurrent_requests"] = max_concurrent_requests
+    server = create_http_server((bind_host, port), handler, **kwargs)
+    server.serve_forever()

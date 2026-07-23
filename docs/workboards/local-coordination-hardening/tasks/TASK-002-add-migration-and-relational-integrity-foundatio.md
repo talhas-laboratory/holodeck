@@ -36,10 +36,10 @@ Out:
 
 ## Verification Evidence
 
-- `python -m pytest -q` → 25 passed (2026-07-23).
-- Added `tests/test_hardening.py::test_legacy_database_upgrades_and_releases_by_run_id`, `test_same_task_id_in_two_workspaces`, `test_migrate_is_idempotent`.
-- Changed files: `src/holodeck_runtime/migrations.py`, `src/holodeck_runtime/store.py`.
-- Residual risks: none known for TASK-002 scope.
+- `python -m pytest -q` → 60 passed (2026-07-23).
+- Migration `002` adds workspace FK, claim/run consistency trigger, active-path unique index, and reconciles legacy duplicate active claims before indexing.
+- Added `test_migration_two_reconciles_duplicate_active_claims` and related integrity coverage in `tests/test_hardening.py`.
+- Residual risks: overlapping (non-identical) active paths from pre-hardening data are not auto-reconciled; only exact duplicate paths are released during migration.
 
 ## Updates
 

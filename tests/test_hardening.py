@@ -226,7 +226,102 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     conn.close()
-    assert versions == [1]
+    assert versions == [1, 2]
+
+
+def test_string_list_fields_reject_string_values(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    with pytest.raises(ValidationError, match="artifact_roots must be a list"):
+        store.create_workspace({"workspace_id": "demo", "artifact_roots": "src"})
+
+    store.create_workspace({"workspace_id": "demo2"})
+    with pytest.raises(ValidationError, match="acceptance_criteria must be a list"):
+        store.create_task("demo2", {"title": "Bad", "acceptance_criteria": "Tests"})
+
+
+def test_duplicate_claimed_paths_in_one_request_are_rejected(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    store.create_workspace({"workspace_id": "demo"})
+    task = store.create_task("demo", {"title": "Dup paths", "status": "ready"})
+    with pytest.raises(ConflictError, match="overlap each other"):
+        store.begin_run("demo", {"task_id": task["task_id"], "claimed_paths": ["src", "src"]})
+
+
+def test_concurrent_task_updates_allow_only_one_transition(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    store.create_workspace({"workspace_id": "demo"})
+    task = store.create_task("demo", {"title": "Race", "status": "review"})
+    barrier = threading.Barrier(2)
+    results: list[dict] = []
+    errors: list[BaseException] = []
+
+    def attempt(status: str):
+        local = Store(tmp_path / "runtime.db")
+        try:
+            barrier.wait(timeout=5)
+            results.append(local.update_task("demo", task["task_id"], {"status": status}))
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    threads = [
+        threading.Thread(target=attempt, args=("done",)),
+        threading.Thread(target=attempt, args=("in-progress",)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    final_status = store.task("demo", task["task_id"])["status"]
+    assert final_status in {"done", "in-progress"}
+    assert final_status == results[0]["status"]
+
+
+def test_orphan_task_insert_is_rejected(tmp_path):
+    database = tmp_path / "runtime.db"
+    Store(database)
+    conn = sqlite3.connect(database)
+    configure_connection(conn)
+    timestamp = "2026-01-01T00:00:00+00:00"
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at)
+            VALUES ('missing', 'task-1', 'backlog', '{}', ?, ?)
+            """,
+            (timestamp, timestamp),
+        )
+        conn.commit()
+    conn.close()
+
+
+def test_claim_must_match_run_workspace_and_task(tmp_path):
+    database = tmp_path / "runtime.db"
+    store = Store(database)
+    store.create_workspace({"workspace_id": "alpha"})
+    store.create_workspace({"workspace_id": "beta"})
+    alpha_task = store.create_task("alpha", {"title": "Alpha", "status": "ready"})
+    beta_task = store.create_task("beta", {"title": "Beta", "status": "ready"})
+    run = store.begin_run(
+        "alpha",
+        {"task_id": alpha_task["task_id"], "claimed_paths": ["src"]},
+    )
+    conn = sqlite3.connect(database)
+    configure_connection(conn)
+    timestamp = "2026-01-01T00:00:00+00:00"
+    with pytest.raises(sqlite3.IntegrityError, match="claim workspace/task must match run"):
+        conn.execute(
+            """
+            INSERT INTO claims(
+                claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+            ) VALUES (?, 'beta', ?, ?, 'docs', 'active', '{}', ?, ?)
+            """,
+            ("claim-bad", beta_task["task_id"], run["run_id"], timestamp, timestamp),
+        )
+        conn.commit()
+    conn.close()
 
 
 def test_legacy_invalid_status_is_coerced_without_data_loss(tmp_path):
@@ -375,7 +470,266 @@ def test_empty_artifact_roots_reject_claims(tmp_path):
         store.begin_run("demo", {"task_id": task["task_id"], "claimed_paths": ["src"]})
 
 
+def test_unicode_paths_normalize_to_nfc():
+    nfd = "src/cafe\u0301.py"
+    nfc = "src/café.py"
+    assert format_path(normalize_path(nfd)) == format_path(normalize_path(nfc))
+
+
+def test_unicode_equivalent_paths_conflict(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    store.create_workspace({"workspace_id": "demo"})
+    task = store.create_task("demo", {"title": "Unicode", "status": "ready"})
+    nfd = "src/cafe\u0301.py"
+    nfc = "src/café.py"
+    store.begin_run("demo", {"task_id": task["task_id"], "claimed_paths": [nfc]})
+    with pytest.raises(ConflictError, match="overlaps active work"):
+        store.begin_run("demo", {"task_id": task["task_id"], "claimed_paths": [nfd]})
+
+
 def test_invalid_workspace_id_is_rejected(tmp_path):
     store = Store(tmp_path / "runtime.db")
     with pytest.raises(ValidationError, match="invalid workspace_id"):
         store.create_workspace({"workspace_id": "not valid"})
+
+
+def test_string_list_items_must_be_strings(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    store.create_workspace({"workspace_id": "demo"})
+    with pytest.raises(ValidationError, match="acceptance_criteria items must be strings"):
+        store.create_task("demo", {"title": "Bad", "acceptance_criteria": [{"unexpected": True}]})
+    task = store.create_task("demo", {"title": "Paths", "status": "ready"})
+    with pytest.raises(ValidationError, match="claimed_paths items must be strings"):
+        store.begin_run("demo", {"task_id": task["task_id"], "claimed_paths": [123]})
+
+
+def test_scalar_fields_must_be_strings(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    with pytest.raises(ValidationError, match="goal must be a string"):
+        store.create_workspace({"workspace_id": "demo", "goal": 42})
+
+
+def test_migration_two_reconciles_duplicate_active_claims(tmp_path):
+    database = tmp_path / "v1.db"
+    conn = sqlite3.connect(database)
+    configure_connection(conn)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+
+    _upgrade_relational_integrity(conn)
+    conn.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+        (1, migration_now()),
+    )
+    timestamp = "2026-01-01T00:00:00+00:00"
+    workspace_payload = json.dumps({"workspace_id": "demo", "artifact_roots": ["."], "scope_out": []})
+    task_payload = json.dumps({"task_id": "task-1", "workspace_id": "demo", "title": "Legacy", "status": "ready"})
+    run_payload = json.dumps(
+        {
+            "run_id": "run-1",
+            "workspace_id": "demo",
+            "task_id": "task-1",
+            "status": "active",
+            "claimed_paths": ["src"],
+        }
+    )
+    conn.execute("INSERT INTO workspaces VALUES ('demo', ?, ?, ?)", (workspace_payload, timestamp, timestamp))
+    conn.execute(
+        "INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("demo", "task-1", "ready", task_payload, timestamp, timestamp),
+    )
+    conn.execute(
+        "INSERT INTO runs(run_id, workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("run-1", "demo", "task-1", "active", run_payload, timestamp, timestamp),
+    )
+    for claim_id in ("claim-1", "claim-2"):
+        claim_payload = json.dumps(
+            {
+                "claim_id": claim_id,
+                "workspace_id": "demo",
+                "task_id": "task-1",
+                "run_id": "run-1",
+                "path": "src",
+            }
+        )
+        conn.execute(
+            """
+            INSERT INTO claims(
+                claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+            ) VALUES (?, 'demo', 'task-1', 'run-1', 'src', 'active', ?, ?, ?)
+            """,
+            (claim_id, claim_payload, timestamp, timestamp),
+        )
+    conn.commit()
+    conn.close()
+
+    Store(database)
+    claims = Store(database).claims("demo")
+    active = [claim for claim in claims if claim["status"] == "active"]
+    released = [claim for claim in claims if claim["status"] == "released"]
+    assert len(active) == 1
+    assert len(released) == 1
+    assert active[0]["path"] == "src"
+    assert Store(database).runs("demo")[0]["status"] == "active"
+
+
+def test_migration_two_releases_cross_run_duplicate_and_fails_losing_run(tmp_path):
+    database = tmp_path / "v1.db"
+    conn = sqlite3.connect(database)
+    configure_connection(conn)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+
+    _upgrade_relational_integrity(conn)
+    conn.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+        (1, migration_now()),
+    )
+    timestamp = "2026-01-01T00:00:00+00:00"
+    workspace_payload = json.dumps({"workspace_id": "demo", "artifact_roots": ["."], "scope_out": []})
+    task_payload = json.dumps({"task_id": "task-1", "workspace_id": "demo", "title": "Legacy", "status": "ready"})
+    conn.execute("INSERT INTO workspaces VALUES ('demo', ?, ?, ?)", (workspace_payload, timestamp, timestamp))
+    conn.execute(
+        "INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("demo", "task-1", "ready", task_payload, timestamp, timestamp),
+    )
+    for run_id, claim_id, created_at in (
+        ("run-1", "claim-1", "2026-01-01T00:00:00+00:00"),
+        ("run-2", "claim-2", "2026-01-02T00:00:00+00:00"),
+    ):
+        run_payload = json.dumps(
+            {
+                "run_id": run_id,
+                "workspace_id": "demo",
+                "task_id": "task-1",
+                "status": "active",
+                "claimed_paths": ["src"],
+            }
+        )
+        conn.execute(
+            "INSERT INTO runs(run_id, workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, "demo", "task-1", "active", run_payload, created_at, created_at),
+        )
+        claim_payload = json.dumps(
+            {
+                "claim_id": claim_id,
+                "workspace_id": "demo",
+                "task_id": "task-1",
+                "run_id": run_id,
+                "path": "src",
+            }
+        )
+        conn.execute(
+            """
+            INSERT INTO claims(
+                claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+            ) VALUES (?, 'demo', 'task-1', ?, 'src', 'active', ?, ?, ?)
+            """,
+            (claim_id, run_id, claim_payload, created_at, created_at),
+        )
+    conn.commit()
+    conn.close()
+
+    store = Store(database)
+    runs = {run["run_id"]: run for run in store.runs("demo")}
+    claims = store.claims("demo")
+    assert runs["run-1"]["status"] == "active"
+    assert runs["run-1"]["claimed_paths"] == ["src"]
+    assert runs["run-2"]["status"] == "failed"
+    assert runs["run-2"]["claimed_paths"] == []
+    assert len([claim for claim in claims if claim["status"] == "active"]) == 1
+    assert len([claim for claim in claims if claim["status"] == "released"]) == 1
+
+
+def test_migration_two_releases_invalid_legacy_path(tmp_path):
+    database = tmp_path / "v1.db"
+    conn = sqlite3.connect(database)
+    configure_connection(conn)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    from holodeck_runtime.migrations import _upgrade_relational_integrity, migration_now
+
+    _upgrade_relational_integrity(conn)
+    conn.execute(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+        (1, migration_now()),
+    )
+    timestamp = "2026-01-01T00:00:00+00:00"
+    workspace_payload = json.dumps({"workspace_id": "demo", "artifact_roots": ["."], "scope_out": []})
+    task_payload = json.dumps({"task_id": "task-1", "workspace_id": "demo", "title": "Legacy", "status": "ready"})
+    run_payload = json.dumps(
+        {
+            "run_id": "run-1",
+            "workspace_id": "demo",
+            "task_id": "task-1",
+            "status": "active",
+            "claimed_paths": ["src/../outside"],
+        }
+    )
+    claim_payload = json.dumps(
+        {
+            "claim_id": "claim-1",
+            "workspace_id": "demo",
+            "task_id": "task-1",
+            "run_id": "run-1",
+            "path": "src/../outside",
+        }
+    )
+    conn.execute("INSERT INTO workspaces VALUES ('demo', ?, ?, ?)", (workspace_payload, timestamp, timestamp))
+    conn.execute(
+        "INSERT INTO tasks(workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ("demo", "task-1", "ready", task_payload, timestamp, timestamp),
+    )
+    conn.execute(
+        "INSERT INTO runs(run_id, workspace_id, task_id, status, payload, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("run-1", "demo", "task-1", "active", run_payload, timestamp, timestamp),
+    )
+    conn.execute(
+        """
+        INSERT INTO claims(
+            claim_id, workspace_id, task_id, run_id, path, status, payload, created_at, updated_at
+        ) VALUES ('claim-1', 'demo', 'task-1', 'run-1', 'src/../outside', 'active', ?, ?, ?)
+        """,
+        (claim_payload, timestamp, timestamp),
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(database)
+    assert store.runs("demo")[0]["status"] == "failed"
+    assert store.runs("demo")[0]["claimed_paths"] == []
+    assert store.claims("demo")[0]["status"] == "released"
+    run = store.begin_run("demo", {"task_id": "task-1", "claimed_paths": ["src"]})
+    assert run["status"] == "active"
+
+
+def test_numeric_identifiers_are_rejected(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    with pytest.raises(ValidationError, match="workspace_id must be a string"):
+        store.create_workspace({"workspace_id": 123})
+    store.create_workspace({"workspace_id": "demo"})
+    with pytest.raises(ValidationError, match="task_id must be a string"):
+        store.create_task("demo", {"task_id": 456, "title": "Bad"})

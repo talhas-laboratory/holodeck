@@ -12,3 +12,10 @@ def test_dockerfile_runs_as_non_root():
     assert "USER holodeck" in dockerfile
     assert "COPY src ./src" in dockerfile
     assert "COPY . ." not in dockerfile
+    assert "python:3.13.7-slim-bookworm@sha256:" in dockerfile
+
+
+def test_compose_drops_linux_capabilities():
+    compose = Path("compose.yaml").read_text(encoding="utf-8")
+    assert "cap_drop:" in compose
+    assert "- ALL" in compose

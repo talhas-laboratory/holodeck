@@ -53,3 +53,7 @@ python -m pytest -q
 ```
 
 `verify_release.sh` runs the test suite, smoke-tests a clean package install, and builds the container image for a `/health` check when Docker is available.
+
+### Git remotes
+
+`origin` is configured with two `pushurl` entries (`holodeck` and `holodeck-runtime`). A plain `git push origin` updates both repositories. Push to one repo only with `git push origin main` using a single push URL, or add named remotes such as `runtime` and run `git push runtime main`.

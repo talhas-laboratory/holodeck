@@ -1,8 +1,8 @@
 # TASK-006-harden-container-delivery-and-release-verificati: Harden container delivery and release verification
 
-Status: done
+Status: review
 Owner: cursor
-Current gate: done
+Current gate: review
 
 ## Problem
 
@@ -34,10 +34,11 @@ Out:
 
 ## Verification Evidence
 
-- `python -m pytest -q` → 36 passed (2026-07-23).
+- `python -m pytest -q` → 57 passed (2026-07-23).
 - Added `.dockerignore`, hardened `Dockerfile`/`compose.yaml`, `scripts/verify_release.sh`, `.github/workflows/verify.yml`, `tests/test_release.py`.
-- Docker image build not run locally (daemon unavailable); CI workflow covers container smoke test.
-- Residual risks: none known for TASK-006 scope.
+- Dockerfile pins `python:3.13.7-slim-bookworm`; Compose adds `cap_drop: [ALL]`.
+- Docker image build and `/health` smoke **not run locally** (daemon unavailable on 2026-07-23). CI workflow `container-smoke` is the current gate.
+- Residual risks: container behavior unverified on this machine until `./scripts/verify_release.sh` or CI passes.
 
 ## Updates
 

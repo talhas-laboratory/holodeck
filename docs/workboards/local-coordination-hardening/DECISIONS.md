@@ -68,6 +68,7 @@ Record durable decisions here.
   - Reject a claim if it is equal to, an ancestor of, or a descendant of any `scope_out` path (component-prefix intersection).
   - Example: `scope_out = ["src/vendor"]` rejects claims `src`, `src/vendor`, and `src/vendor/foo`.
 - **Storage:** persist the canonical string form derived from the tuple (POSIX `/` join; root stored as `.`).
+- **Unicode:** normalize each path segment with Unicode NFC so equivalent composed/decomposed spellings share one identity. Case-folding and symlink resolution remain out of scope.
 - **Module home:** `holodeck_runtime/paths.py` (pure functions + domain errors). Store calls validator on `begin_run` and workspace boundary updates.
 - **Out of scope for TASK-003:** symlink/case behavior, repository observation adapter, lifecycle rules.
 
@@ -116,6 +117,16 @@ Record durable decisions here.
 - **HTTP mapping:** `NotFoundError` → 404, `ConflictError` → 409, `ValidationError` → 422, `ContentionError` → 503, malformed JSON/media/body → 400/413/415 via `http_request.py`.
 - **Identifiers:** URL path IDs must match `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
 - **Binding:** loopback hosts (`127.0.0.1`, `localhost`, `::1`) are allowed by default; other binds require `--insecure-bind` (Docker uses this flag explicitly).
+- **Server limits:** `HolodeckHTTPServer` applies a 30s socket timeout, caps concurrent request threads at 64, and returns HTTP 503 when at capacity before handler work starts.
+
+## 2026-07-23 — TASK-002 follow-up (migration 002)
+
+- **`tasks.workspace_id` FK** to `workspaces(workspace_id)`.
+- **Claim safeguards:** partial unique index on active `(workspace_id, path)`; trigger rejects claims whose `workspace_id`/`task_id` do not match the referenced run.
+- **List validation:** `validate_string_list()` rejects string-shaped list fields, requires list elements to already be strings, and bounds list size/length (see `holodeck_runtime/validation.py`).
+- **Text fields:** `validate_text_field()` bounds scalar strings such as title, goal, intent, and summary.
+- **Migration 002:** before the active-path unique index, normalize claim paths, release invalid legacy paths, release duplicate active claims (keep earliest), and fail active runs that lose all claims during reconciliation.
+- **Task updates:** `update_task` uses `BEGIN IMMEDIATE` plus compare-and-swap on `status`.
 
 ## 2026-07-23 — Review fixes for TASK-001..006
 
@@ -129,5 +140,6 @@ Record durable decisions here.
 
 - **Image inputs:** copy only `pyproject.toml`, `README.md`, and `src/`; exclude dev artifacts via `.dockerignore`.
 - **Runtime user:** container runs as `holodeck` (uid 10001) with `/data` owned for SQLite writes.
-- **Compose:** loopback port bind, `read_only` root filesystem, `tmpfs` for `/tmp`, `no-new-privileges`.
+- **Compose:** loopback port bind, `read_only` root filesystem, `tmpfs` for `/tmp`, `no-new-privileges`, `cap_drop: [ALL]`.
+- **Base image:** pin to `python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d`.
 - **Verification:** `pip install -e ".[dev]"`, `pytest`, and `./scripts/verify_release.sh`; GitHub Actions workflow `.github/workflows/verify.yml`.
