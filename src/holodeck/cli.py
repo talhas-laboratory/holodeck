@@ -28,6 +28,12 @@ def main() -> None:
     )
     policy_parser.add_argument("action")
     policy_parser.add_argument("--path", default=".")
+    mcp_parser = commands.add_parser("mcp", help="Run the Holodeck MCP adapter over a local HTTP runtime")
+    mcp_parser.add_argument(
+        "--base-url",
+        default="http://127.0.0.1:8787",
+        help="Base URL of a running Holodeck HTTP runtime",
+    )
     args = parser.parse_args()
     if args.command == "init":
         result = initialize_project(args.path, force=args.force)
@@ -35,5 +41,10 @@ def main() -> None:
         return
     if args.command == "policy-check":
         print(policy_decision(args.path, args.action))
+        return
+    if args.command == "mcp":
+        from holodeck.mcp_server import run_mcp
+
+        run_mcp(base_url=args.base_url)
         return
     serve(database=args.database, host=args.host, port=args.port, insecure_bind=args.insecure_bind)

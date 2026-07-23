@@ -53,6 +53,18 @@ Stable contract: [docs/http-api-v1.md](docs/http-api-v1.md). Discover the active
 
 The dashboard reflects the complete alpha surface: workspace boundaries, full task records, agent runs, active and released path claims, runtime settings, project manifest defaults, onboarding policy, and the implemented/planned capability boundary. The alpha refuses overlapping active file claims inside a workspace and releases them when a run completes. Future releases add verification evidence, handoffs, repository discovery, and agent/CI adapters.
 
+## MCP agent adapter
+
+Install with the optional MCP extra and point an MCP-capable client at the local runtime:
+
+```bash
+python -m pip install 'holodeck-control-plane[mcp]'
+holodeck serve --database .holodeck/runtime.db
+holodeck mcp --base-url http://127.0.0.1:8787
+```
+
+Setup for Cursor, Claude Desktop, and the full tool list: [docs/mcp-setup.md](docs/mcp-setup.md). The adapter is a thin HTTP client over the documented API; it does not enforce project policy.
+
 ## Safe onboarding
 
 Run `holodeck init` inside a Git repository. It creates only `.holodeck/manifest.json` and `.holodeck/policy.json`; it does not edit source, install dependencies, create a Git remote, or start a service.

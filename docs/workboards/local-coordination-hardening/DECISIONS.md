@@ -138,6 +138,14 @@ Record durable decisions here.
 - **Compatibility:** contract tests in `tests/test_api_contract.py` exercise every public endpoint against a live server.
 - **Breaking changes:** require incrementing `api.version`; additive JSON fields allowed during alpha without a bump.
 
+## 2026-07-23 — TASK-010 implementation decisions
+
+- **Transport:** stdio MCP via FastMCP; entrypoint is `holodeck mcp --base-url <url>`.
+- **Authority:** adapter is a thin HTTP client (`holodeck.http_client`) over `http-api-v1`; no local store or policy enforcement in the adapter.
+- **Dependency:** MCP support is optional (`pip install 'holodeck-control-plane[mcp]'`); lazy import with a clear install hint when missing.
+- **Tools:** nine tools cover runtime metadata, workspace/task CRUD, run begin/complete, and claim listing; HTTP errors map to tool errors with status and message.
+- **Verification:** `tests/test_mcp_adapter.py` uses real MCP `ClientSession` over stdio, including concurrent claim races across independent sessions.
+
 ## 2026-07-23 — TASK-002 follow-up (migration 002)
 
 - **`tasks.workspace_id` FK** to `workspaces(workspace_id)`.

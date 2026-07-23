@@ -11,7 +11,7 @@
 | `TASK-007-unify-public-oss-repository-identity` | done | codex | Unify public OSS repository identity | done |
 | `TASK-008-ship-pypi-installable-package` | done | codex | Ship a PyPI-installable package | done |
 | `TASK-009-version-and-document-stable-http-api` | done | cursor | Version and document the stable HTTP API | done |
-| `TASK-010-ship-first-mcp-agent-adapter` | backlog | unassigned | Ship the first MCP agent adapter | intake |
+| `TASK-010-ship-first-mcp-agent-adapter` | done | cursor | Ship the first MCP agent adapter | done |
 | `TASK-011-clarify-advisory-policy-boundary` | done | codex | Clarify advisory policy boundary | done |
 | `TASK-012-evaluate-local-daemon-http-polish` | backlog | unassigned | Evaluate local daemon HTTP polish | intake |
 

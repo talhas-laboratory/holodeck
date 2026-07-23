@@ -32,7 +32,8 @@ Source = "https://github.com/talhas-laboratory/holodeck"
 Issues = "https://github.com/talhas-laboratory/holodeck/issues"
 
 [project.optional-dependencies]
-dev = ["build>=1", "pytest>=8"]
+mcp = ["mcp>=1.6"]
+dev = ["build>=1", "mcp>=1.6", "pytest>=8"]
 
 [project.scripts]
 holodeck = "holodeck.cli:main"

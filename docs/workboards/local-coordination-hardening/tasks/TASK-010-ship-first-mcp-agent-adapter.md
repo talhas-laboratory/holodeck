@@ -1,8 +1,8 @@
 # TASK-010-ship-first-mcp-agent-adapter: Ship the first MCP agent adapter
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -38,12 +38,16 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: use a real MCP client against a running local runtime to list state, begin and complete a run, validate understandable failures, and race two independent sessions for overlapping paths. Verify released claims and run state through the API afterward.
-- Failure mode: direct adapter tests pass while a real MCP client, concurrent claim, or tool-error path fails.
+- `python -m pytest -q` → 83 passed (2026-07-23).
+- Added `src/holodeck/http_client.py`, `src/holodeck/mcp_server.py`, `holodeck mcp` CLI subcommand, optional `[mcp]` extra in `pyproject.toml`, and `docs/mcp-setup.md`.
+- `tests/test_mcp_adapter.py` exercises MCP stdio transport via `ClientSession`: runtime metadata, workspace/task lifecycle, begin/complete run, conflict errors, and concurrent claim races across independent sessions.
+- Adapter is a thin HTTP client over `http-api-v1`; no second source of truth and no policy enforcement in the adapter.
+- Residual risks: MCP host configuration is manual; remote/multi-tenant MCP hosting is out of scope.
 
 ## Updates
 
 - Created: `2026-07-23T08:18:00+00:00`
+- Completed: `2026-07-23T15:45:00+00:00`
 
 ## Handoff Notes
 
