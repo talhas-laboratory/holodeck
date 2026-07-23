@@ -10,7 +10,7 @@ The architecture (local-first SQLite authority, thin HTTP/CLI adapters, project-
 
 ## Prerequisites
 
-Local coordination hardening (TASK-001 through TASK-006) is complete. Remaining OSS work focuses on optional daemon polish (TASK-012).
+Local coordination hardening and the OSS adoption tasks (TASK-001 through TASK-012) are complete.
 
 ## Gap register
 
@@ -21,16 +21,12 @@ Local coordination hardening (TASK-001 through TASK-006) is complete. Remaining 
 | G3 | Agent connection is “call raw HTTP yourself” | Resolved: `http-api-v1` contract documented and versioned in `/api/config`; MCP adapter exposes IDE/agent tooling over the same authority | TASK-009 (done), TASK-010 (done) |
 | G4 | No MCP / SDK / agent protocol surface | Resolved: `holodeck mcp` stdio adapter with nine tools over the documented HTTP API | TASK-010 (done) |
 | G5 | Policy is advisory, not enforced | Resolved for disclosure: API, CLI, dashboard, and docs explicitly say it does not enforce or block actions | TASK-011 (done) |
-| G6 | stdlib HTTP server is the local daemon | Fine for alpha; polish/expectations gap for a shipped tool | TASK-012 |
+| G6 | stdlib HTTP server is the local daemon | Resolved for local alpha: measured API/MCP traffic, stalled-client timeout, and shutdown behavior support retaining the hardened stdlib server; its limits are documented | TASK-012 (done) |
 | G7 | Multi-agent claim coordination correctness | Resolved: serialized claim acquisition, lifecycle contracts, migration safeguards, and release verification landed in TASK-001 … TASK-006 | TASK-001 … TASK-006 (done) |
 
 ## Delivery order
 
-Completed: TASK-001 … TASK-011 (hardening, canonical identity, installable package, HTTP API contract, MCP adapter, advisory-policy disclosure).
-
-Next:
-
-1. Evaluate local daemon HTTP polish only if install/API friction remains (TASK-012).
+Completed: TASK-001 … TASK-012 (hardening, canonical identity, installable package, HTTP API contract, MCP adapter, advisory-policy disclosure, and local-daemon evaluation).
 
 ## Explicitly deferred
 

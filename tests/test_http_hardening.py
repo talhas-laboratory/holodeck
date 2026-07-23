@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
+import time
 from http import HTTPStatus
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -335,3 +337,33 @@ def test_http_returns_503_when_at_capacity(tmp_path):
         server.server_close()
         thread.join(timeout=2)
         blocker.join(timeout=2)
+
+
+def test_stalled_client_is_closed_after_the_configured_timeout(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    server, thread, _base = _start_server(store, request_timeout_seconds=0.1)
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_port), timeout=2) as stalled:
+            stalled.sendall(b"GET /health HTTP/1.1")
+            assert stalled.recv(1) == b""
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_server_shuts_down_within_a_bounded_time(tmp_path):
+    store = Store(tmp_path / "runtime.db")
+    server, thread, _base = _start_server(store)
+    try:
+        started = time.monotonic()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        assert time.monotonic() - started < 2
+    finally:
+        if thread.is_alive():
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)

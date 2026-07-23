@@ -1,8 +1,8 @@
 # TASK-012-evaluate-local-daemon-http-polish: Evaluate local daemon HTTP polish
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: codex
+Current gate: done
 
 ## Problem
 
@@ -37,14 +37,23 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: run the defined local traffic, stalled-client, and shutdown checks; record measurements and the keep/replace decision. If replacing, rerun the complete API contract and MCP end-to-end suites.
-- Failure mode: a framework change or a decision to retain the current server is made without evidence from the expected client workload.
+- Decision: keep the hardened stdlib server; no dependency or API change is warranted for the bounded local workload.
+- Measured `100` mixed `GET /health` and `GET /api/config` requests with 16 client workers: `0` errors, p95 `99.4 ms`, maximum `101.4 ms`.
+- A partial request closed after `201.2 ms` with a `0.2 s` configured socket timeout; controlled server shutdown completed in `299.9 ms` and its serving thread exited.
+- `python -m pytest -q tests/test_mcp_adapter.py::test_mcp_lists_runtime_and_coordinates_run --durations=1` → `1 passed`; MCP lifecycle duration `0.86 s`.
+- `.venv/bin/python -m pytest -q` → `108 passed`.
+- `git diff --check && .venv/bin/python -m compileall -q src tests` → passed.
+- Added regression coverage for the stalled-client timeout and bounded controlled shutdown in `tests/test_http_hardening.py`; documented known limits in `README.md`.
+- Residual risks: the daemon intentionally has no TLS, HTTP/2, authentication, rate limiting, or remote-production profile. Those are outside the local-only scope and require a separate product decision.
 
 ## Updates
 
 - Created: `2026-07-23T08:18:00+00:00`
+- Started evaluation: `2026-07-23T16:10:00+00:00`
+- Completed: `2026-07-23T16:20:00+00:00`
 
 ## Handoff Notes
 
 - Dependencies: TASK-005, TASK-009; optionally after TASK-010 exposes real client behavior.
 - Report: `docs/plans/2026-07-23-oss-adoption-gaps.md` (G6).
+- Changed artifacts: `README.md`, `tests/test_http_hardening.py`, `docs/workboards/local-coordination-hardening/DECISIONS.md`.

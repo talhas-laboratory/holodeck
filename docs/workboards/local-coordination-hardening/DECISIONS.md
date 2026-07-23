@@ -186,3 +186,9 @@ Record durable decisions here.
 - **Compose:** loopback port bind, `read_only` root filesystem, `tmpfs` for `/tmp`, `no-new-privileges`, `cap_drop: [ALL]`.
 - **Base image:** pin to `python:3.13.7-slim-bookworm@sha256:adafcc17694d715c905b4c7bebd96907a1fd5cf183395f0ebc4d3428bd22d92d`.
 - **Verification:** `pip install -e ".[dev]"`, `pytest`, and `./scripts/verify_release.sh`; GitHub Actions workflow `.github/workflows/verify.yml`.
+
+## 2026-07-23 — TASK-012 local daemon decision
+
+- Keep the hardened standard-library `ThreadingHTTPServer`; the measured local API and MCP workload shows no concrete framework friction.
+- Evaluation on this workstation: 100 concurrent mixed `GET /health` and `GET /api/config` requests completed without errors (p95 99.4 ms); a partial stalled request closed at the configured 200 ms test timeout; controlled shutdown completed in 300 ms; the full MCP lifecycle test completed in 0.86 s.
+- The local daemon remains bounded to 64 active handlers, an eight-connection backlog, and a 30-second socket timeout. It intentionally has no TLS, HTTP/2, authentication, rate limit, or remote-production profile. Revisit this decision only if a local workload exceeds those limits or requires a protocol feature the stdlib server cannot provide.

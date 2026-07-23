@@ -36,6 +36,10 @@ curl http://127.0.0.1:8787/health
 
 Open `http://127.0.0.1:8787/` for the standalone Holodeck dashboard. The frontend is packaged and served by this runtime; it has no Conversation OS or Inner World dependency.
 
+### Local daemon limits
+
+Holodeck deliberately uses Python's standard-library threaded HTTP server for the local, loopback-only alpha. It permits up to 64 active request handlers, keeps an eight-connection listen backlog, and applies a 30-second socket timeout; requests above the active-handler limit receive `503`. It shuts down cleanly through the server control path. It does not provide TLS, HTTP/2, authentication, rate limiting, or a remote-production deployment profile. Non-loopback binding requires `--insecure-bind` and remains unsuitable for untrusted networks.
+
 ## Minimal API
 
 Stable contract: [docs/http-api-v1.md](docs/http-api-v1.md) (also served at `GET /docs/http-api-v1` from a running runtime). Discover the active version at `GET /api/config` (`api.version`, currently `1`).
