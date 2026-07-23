@@ -78,6 +78,7 @@ def test_http_control_plane_exposes_config_and_full_run_lifecycle(tmp_path):
 
     try:
         config = request("/api/config")
+        assert config["api"]["version"] == "1"
         assert config["onboarding_policy"]["actions"]["destructive_command"] == "denied"
         assert config["policy_enforcement"] == "advisory"
         request("/api/workspaces", method="POST", payload={"workspace_id": "demo", "goal": "Ship"})

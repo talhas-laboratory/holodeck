@@ -7,6 +7,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
 
+from .api import api_config_section
 from .errors import HolodeckError
 from .http_request import http_status_for_error, read_json_object, validate_bind_host, validate_identifier
 from .http_server import create_http_server
@@ -78,6 +79,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(
                     HTTPStatus.OK,
                     {
+                        "api": api_config_section(),
                         "runtime": {
                             "host": self.runtime_host,
                             "port": self.runtime_port,

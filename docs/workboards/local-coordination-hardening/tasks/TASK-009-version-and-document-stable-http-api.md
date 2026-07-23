@@ -1,8 +1,8 @@
 # TASK-009-version-and-document-stable-http-api: Version and document the stable HTTP API
 
-Status: backlog
-Owner: unassigned
-Current gate: intake
+Status: done
+Owner: cursor
+Current gate: done
 
 ## Problem
 
@@ -37,14 +37,19 @@ Out:
 
 ## Verification Evidence
 
-- Not run yet. Planned: run contract tests against a live server and compare every documented endpoint, request shape, response shape, status code, and version marker; include concurrent claim conflict and state-transition failures.
-- Failure mode: docs, config metadata, and live HTTP behavior drift apart.
+- `python -m pytest -q` → 79 passed (2026-07-23).
+- Added `docs/http-api-v1.md`, `src/holodeck/api.py`, and `tests/test_api_contract.py`.
+- `GET /api/config` exposes `api.version`, `api.stability`, `api.contract`, and breaking-change policy text.
+- Contract tests cover health, config, workspaces, tasks, runs, claims, 404/409/422/503 paths, and documentation file presence.
+- Residual risks: alpha contract may gain additive fields; breaking changes require `api.version` bump per documented policy.
 
 ## Updates
 
 - Created: `2026-07-23T08:18:00+00:00`
+- Completed: `2026-07-23T15:30:00+00:00`
 
 ## Handoff Notes
 
 - Dependencies: TASK-005 for stable error mapping; prefer after TASK-001–004 semantics are correct.
-- Report: `docs/plans/2026-07-23-oss-adoption-gaps.md` (G3).
+- Report: `docs/plans/2026-07-23-oss-adoption-gaps.md` (G3 partially addressed; TASK-010 still needed for agent adapter).
+- TASK-010 should import `api.version` from `/api/config` and target `http-api-v1`.

@@ -131,6 +131,13 @@ Record durable decisions here.
 - **Binding:** loopback hosts (`127.0.0.1`, `localhost`, `::1`) are allowed by default; other binds require `--insecure-bind` (Docker uses this flag explicitly).
 - **Server limits:** `HolodeckHTTPServer` applies a 30s socket timeout, caps concurrent request threads at 64, and returns HTTP 503 when at capacity before handler work starts.
 
+## 2026-07-23 — TASK-009 implementation decisions
+
+- **Versioning:** expose `api` object on `GET /api/config` with `version`, `stability`, `contract`, `documentation`, `max_json_body_bytes`, and `breaking_change_policy`. No path prefix change for v1.
+- **Contract name:** `http-api-v1` documented in `docs/http-api-v1.md`; constants live in `holodeck.api`.
+- **Compatibility:** contract tests in `tests/test_api_contract.py` exercise every public endpoint against a live server.
+- **Breaking changes:** require incrementing `api.version`; additive JSON fields allowed during alpha without a bump.
+
 ## 2026-07-23 — TASK-002 follow-up (migration 002)
 
 - **`tasks.workspace_id` FK** to `workspaces(workspace_id)`.
