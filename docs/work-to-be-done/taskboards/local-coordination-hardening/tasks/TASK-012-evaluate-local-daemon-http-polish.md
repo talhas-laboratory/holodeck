@@ -56,4 +56,4 @@ Out:
 
 - Dependencies: TASK-005, TASK-009; optionally after TASK-010 exposes real client behavior.
 - Report: `docs/plans/2026-07-23-oss-adoption-gaps.md` (G6).
-- Changed artifacts: `README.md`, `tests/test_http_hardening.py`, `docs/workboards/local-coordination-hardening/DECISIONS.md`.
+- Changed artifacts: `README.md`, `tests/test_http_hardening.py`, `docs/work-to-be-done/taskboards/local-coordination-hardening/DECISIONS.md`.

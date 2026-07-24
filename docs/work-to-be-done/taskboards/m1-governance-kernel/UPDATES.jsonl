@@ -1,0 +1,5 @@
+{"timestamp":"2026-07-24T00:00:00+00:00","actor":"codex","event":"board_created","board_id":"m1-governance-kernel","task_count":11,"status":"planning_complete"}
+{"timestamp":"2026-07-24T00:00:00+00:00","actor":"codex","event":"task_status_changed","task_id":"M1-001","from":"backlog","to":"ready","reason":"Fresh-agent runtime inventory and readiness handoff added."}
+{"timestamp":"2026-07-24T00:00:00+00:00","actor":"codex","event":"task_added","task_id":"M1-002","reason":"Approved governance test specification added before implementation work; downstream tasks renumbered."}
+{"timestamp":"2026-07-24T00:00:00+00:00","actor":"codex","event":"board_restructured","board_id":"m1-governance-kernel","from_task_count":12,"to_task_count":25,"reason":"Broad workstreams decomposed into atomic observable implementation and verification packets."}
+{"timestamp":"2026-07-24T00:00:00+00:00","actor":"codex","event":"fresh_builder_audit_repair","board_id":"m1-governance-kernel","from_task_count":25,"to_task_count":31,"reason":"Added explicit baseline, typed record-family, repository/unit-of-work, and catalog packets; made compatibility decisions and dependencies explicit."}

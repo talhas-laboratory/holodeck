@@ -226,7 +226,7 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(conn)
     versions = [row[0] for row in conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()]
     conn.close()
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 def test_string_list_fields_reject_string_values(tmp_path):

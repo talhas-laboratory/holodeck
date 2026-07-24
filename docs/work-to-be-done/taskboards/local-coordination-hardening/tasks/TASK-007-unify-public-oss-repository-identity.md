@@ -39,7 +39,7 @@ Out:
 - The former repository URL resolves to repository id `1301599849`, `talhas-laboratory/holodeck`; the old name is already a GitHub redirect, not a separate repository that can be archived safely.
 - `git remote -v` and `git config --get-all remote.origin.pushurl` confirm that `origin` has one fetch URL and one push URL, both pointing to `https://github.com/talhas-laboratory/holodeck.git`; the stale `runtime` remote was removed.
 - `python -m pytest -q tests/test_project_identity.py` verifies that README and `pyproject.toml` name only the canonical public repository.
-- Changed artifacts: `README.md`, `pyproject.toml`, `tests/test_project_identity.py`, `docs/plans/2026-07-23-oss-adoption-gaps.md`, `docs/workboards/local-coordination-hardening/DECISIONS.md`.
+- Changed artifacts: `README.md`, `pyproject.toml`, `tests/test_project_identity.py`, `docs/plans/2026-07-23-oss-adoption-gaps.md`, `docs/work-to-be-done/taskboards/local-coordination-hardening/DECISIONS.md`.
 - Residual risks: none known. The requested archive action is already represented by GitHub's legacy-name redirect; attempting an archive would target the canonical repository.
 
 ## Updates
