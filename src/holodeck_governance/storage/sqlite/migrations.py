@@ -12,6 +12,9 @@ from holodeck_governance.storage.sqlite.migrate_v7 import upgrade_enforcement_an
 from holodeck_governance.storage.sqlite.migrate_v8 import upgrade_tenant_coupled_ownership
 from holodeck_governance.storage.sqlite.migrate_v9 import upgrade_tenant_coupled_authority
 from holodeck_governance.storage.sqlite.migrate_v10 import upgrade_authority_issuance_basis
+from holodeck_governance.storage.sqlite.migrate_v11 import (
+    upgrade_collaboration_bindings_and_receipts,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -322,6 +325,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (8, "tenant_coupled_ownership", upgrade_tenant_coupled_ownership),
     (9, "tenant_coupled_authority", upgrade_tenant_coupled_authority),
     (10, "authority_issuance_basis", upgrade_authority_issuance_basis),
+    (11, "collaboration_bindings_and_receipts", upgrade_collaboration_bindings_and_receipts),
 ]
 
 
@@ -344,6 +348,16 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 11:
+        for table in (
+            "gov_inbound_event_receipts",
+            "gov_external_actor_mappings",
+            "gov_collaboration_endpoints",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 10:
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
         conn.commit()

@@ -45,3 +45,14 @@
   `collaboration.outbound.enqueue`. Persistence begins in M2-002.
 - Explicit intake grammar is `@holodeck work: <subject>` (with documented
   aliases). Ordinary conversation remains non-executable.
+
+## 2026-07-27 — M2-002 bindings and receipts persisted
+
+- Governance migration v11 adds `gov_collaboration_endpoints`,
+  `gov_external_actor_mappings`, and `gov_inbound_event_receipts`.
+- `open_collaboration_app` exposes endpoint, actor-mapping, and idempotent
+  receipt recording without provider SDK types or task/run mutations.
+- Duplicate external events return the prior receipt as `duplicate_replay` and
+  do not insert a second row.
+- Typed `collaboration.*.record` command handlers remain deferred; this packet
+  uses the bootstrap/admin persistence exception.

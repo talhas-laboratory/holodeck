@@ -6,6 +6,13 @@ Must not import application, storage, sqlite3, HTTP, MCP, or provider SDKs.
 from __future__ import annotations
 
 from holodeck_governance.domain.collaboration.adapter import CollaborationAdapter
+from holodeck_governance.domain.collaboration.bindings import (
+    BindingStatus,
+    CollaborationEndpoint,
+    ExternalActorMapping,
+    actor_mapping_dedupe_key,
+    endpoint_dedupe_key,
+)
 from holodeck_governance.domain.collaboration.inbound import (
     AttachmentRef,
     ConversationLocation,
@@ -54,10 +61,13 @@ __all__ = [
     "STABLE_INBOUND_FIELDS",
     "AdapterMetadata",
     "AttachmentRef",
+    "BindingStatus",
     "CIS_EXPECTATIONS",
     "CollaborationAdapter",
+    "CollaborationEndpoint",
     "CollaborationScenarioExpectation",
     "ConversationLocation",
+    "ExternalActorMapping",
     "InboundEventReceipt",
     "IntakeCommand",
     "IntakePolicyInputs",
@@ -67,6 +77,8 @@ __all__ = [
     "ProcessingOutcome",
     "VerificationResult",
     "VerifiedActorIdentity",
+    "actor_mapping_dedupe_key",
+    "endpoint_dedupe_key",
     "inbound_receipt_dedupe_key",
     "outbound_idempotency_key",
     "parse_intake_command",
