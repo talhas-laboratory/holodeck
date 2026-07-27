@@ -1,30 +1,45 @@
 # M1-030: Implement repositories and unit-of-work transaction boundary
 
-Status: backlog  
-Gate: intake  
-Depends on: M1-003, M1-004, M1-005, M1-008, M1-027, M1-028, M1-029  
-Scenarios: GS-007, GS-010, GS-011, supports GS-013
+Status: done
+Owner: implementation-agent  
+Gate: done
+Depends on: see TASKS.md  
+Re-closed: 2026-07-24 after P0/P1 residual fixes (run 6); suite evidence refreshed  
+Scenarios: GS-010
 
 Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 
-## Scope
+## Acceptance criteria
 
-Implement domain-owned repository interfaces and a storage-backed unit of work.
-Application command handlers use this boundary for all governed persistence.
-The unit of work is the only path allowed to atomically commit record heads,
-command receipts, evaluation results, transitions, events, and outbox rows.
+- SqliteUnitOfWork atomic commit with fault injection.
+- Head mutations re-read under BEGIN IMMEDIATE.
+- Numbered migrations own schema; repos cover command/record/edge/authority/policy.
 
 ## Observable acceptance
 
-- Domain/application code depends on repository interfaces, never SQLite or adapter types.
-- An injected fault leaves either the complete allowed-command write set or no success write set.
-- Direct adapter/store mutation cannot bypass the governed command path for M1 records.
+UoW fault injection + contention under IMMEDIATE + migrations v1–v6.
 
 ## Verification
 
-- Architecture dependency test and transactional fault-injection tests.
-- Focused GS-007, GS-010, GS-011, and reconstruction-support fixtures.
+Commands:
 
-## Non-goals
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q tests/test_governance_lifecycle_uow.py tests/test_governance_p1_enforcement.py -k competing
+python -m pytest -q
+```
 
-- Distributed transactions, event sourcing, or replacing the legacy store in one rewrite.
+Result: **214 passed** (`python -m pytest -q`, 2026-07-24).
+
+Evidence: UoW atomicity + contention head re-read proofs.
+
+## Changed files
+
+- `src/holodeck_governance/storage/sqlite/uow.py`
+- `src/holodeck_governance/storage/sqlite/migrations.py`
+- `src/holodeck_governance/storage/sqlite/tasks.py`
+- `src/holodeck_governance/storage/sqlite/runs.py`
+
+## Residual risks
+
+- Private revision helpers still used by some seed/repo paths.

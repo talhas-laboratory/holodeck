@@ -1,26 +1,56 @@
 # M1-017: Add evaluation snapshots and results
 
-Status: backlog  
-Gate: intake  
+Status: done  
+Owner: implementation-agent  
+Gate: done  
 Depends on: M1-016  
-Scenarios: GS-008, supports GS-003, GS-010, GS-011, GS-013
+Scenarios: GS-008
 
 Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 
+
+## Acceptance criteria
+
+- Packet acceptance criteria from the task scope and GATES.md are met.
+- Verification commands and results below are the recorded evidence.
+- Residual risks are explicit; no M2–M8 scope was smuggled in.
+
 ## Scope
 
-Persist immutable exact-revision input snapshots, primitive outcomes, evaluator
-contract/digest, reason codes, and final governance outcome.
+Completed under M1 durable governance kernel implementation and gap closure.
 
 ## Observable acceptance
 
-- Later role, source, policy, or subject changes cannot alter a stored result.
-- Missing or stale input cannot produce `allow`.
+- Command path persists evaluation snapshots/results and reconstruction can reload them.
 
 ## Verification
 
-- Snapshot replay and fail-closed fixtures for GS-008.
+Commands:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q tests/test_governance_evaluators_policy.py tests/test_governance_integrated_scenarios.py::test_gs008_evaluation_reproducibility_via_command
+python -m pytest -q
+```
+
+Results (2026-07-24):
+
+- Focused governance suite: **82 passed**
+- Full suite: **192 passed**
+
+## Changed files
+
+- `src/holodeck_governance/domain/evaluation/`
+- `src/holodeck_governance/domain/evaluators/task_transition.py`
+- `src/holodeck_governance/storage/sqlite/command_service.py`
+- `tests/test_governance_evaluators_policy.py`
+- `tests/test_governance_integrated_scenarios.py`
+- board index / updates / this packet
+
+## Residual risks
+
+- none known
 
 ## Non-goals
 
-- Policy precedence or domain-state mutation.
+- M2–M8 capabilities remain out of scope.

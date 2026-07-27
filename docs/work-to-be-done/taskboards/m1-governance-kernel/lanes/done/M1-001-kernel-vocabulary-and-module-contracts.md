@@ -1,0 +1,1 @@
+../../tasks/M1-001-kernel-vocabulary-and-module-contracts.md

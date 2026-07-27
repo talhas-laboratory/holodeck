@@ -1,8 +1,10 @@
 # M1 governance test specification
 
-**Status:** Approved test-design deliverable  
+**Status:** Implementation-ready (catalog identifiers bound via M1-031)  
 **Milestone:** M1 — Durable governance kernel  
 **Companion task:** [`M1-002`](../work-to-be-done/taskboards/m1-governance-kernel/tasks/M1-002-governance-test-specification.md)
+**Catalog modules:** `holodeck_governance.domain.catalogs` (`m1.errors.v1`, `m1.reasons.v1`, `m1.events.v1`)
+**Scenario→catalog map:** `holodeck_governance.domain.catalogs.scenario_map.SCENARIO_CATALOG_EXPECTATIONS`
 
 ## Purpose
 
@@ -73,22 +75,42 @@ use isolated SQLite connections against the same temporary database.
 
 ## Required scenario catalogue
 
-| ID | Guarantee | Scenario | Required assertions |
-| --- | --- | --- | --- |
-| GS-001 | Tenant isolation | An Alpha actor references a Beta workspace/object. | Command denied; no cross-tenant row, event, or outbox item; receipt explains isolation failure. |
-| GS-002 | Revision immutability | A finalized mission/approval/evidence record is edited. | Direct mutation fails; correction creates a later revision linked to the prior revision. |
-| GS-003 | Approval invalidation | Reviewer approves mission revision 3; revision 4 is created; an actor requests a revision-4 transition. | Revision-3 approval is inapplicable; command denied; no run/transition/success event/outbox; receipt identifies stale approval. |
-| GS-004 | Delegated authority | Object grant is active, expired, revoked, or aimed at the wrong revision. | Only the active in-scope grant authorizes; all others fail closed with reason codes. |
-| GS-005 | Relationship integrity | Edge has a missing, incompatible, or cross-tenant endpoint. | Database/domain validation rejects it; no dangling graph appears in reconstruction. |
-| GS-006 | Lifecycle correctness | Allowed and disallowed task/run transitions are requested under a state-machine version. | Allowed transition records version; invalid transition has no state/event/outbox success effects. |
-| GS-007 | Command idempotency | Same command is retried; same key has changed semantic payload. | Exact retry returns original receipt/result; changed payload is rejected; no duplicate state/event/outbox. |
-| GS-008 | Evaluation reproducibility | Policy, role, or source changes after an evaluation. | Stored snapshot reproduces original result and cites exact input revisions. |
-| GS-009 | Policy precedence | Tenant and workspace configuration conflict; object exception is missing or authorized. | Only declared safe merges apply; unauthorized relaxation fails; authorized exception is scoped and expiring. |
-| GS-010 | Atomic success | A permitted command faults at each transactional write boundary. | Either all receipt/evaluation/transition/event/outbox writes commit or none of the success set commits. |
-| GS-011 | Auditable rejection | Unauthorized, stale, malformed, and duplicate-conflict commands are submitted. | Appropriate receipt/evaluation persists; target state remains unchanged; no success event/outbox exists. |
-| GS-012 | Outbox recovery | Lease holder crashes, recipient receives duplicate delivery, retries exhaust. | Lease recovers; recipient dedup key is stable; attempts append; dead letter and escalation persist; governing decision remains intact. |
-| GS-013 | Reconstruction | A representative permitted decision is queried after later revisions exist. | Query reconstructs origin, actor, role/grant, policy, snapshot, edges, events, evidence references, and terminal decision. |
-| GS-014 | Legacy migration | Representative current SQLite records are upgraded. | IDs/timestamps survive; provenance is `legacy_import`; no fabricated authority/evidence/decision; legacy behavior remains compatible. |
+| ID | Guarantee | Primary error codes | Primary reason codes | Rejection omits |
+| --- | --- | --- | --- | --- |
+| GS-001 | Tenant isolation | `err.cross_tenant_access` | `reason.deny.tenant_isolation` | accepted / transition / outbox |
+| GS-002 | Revision immutability | `err.revision_immutable` | `reason.deny.revision_immutable` | n/a (correction emits `governance.revision.created`) |
+| GS-003 | Approval invalidation | `err.stale_revision` | `reason.deny.stale_approval` | accepted / transition / outbox |
+| GS-004 | Delegated authority | grant expired/revoked/wrong-revision / missing authority | matching deny reasons or `reason.allowed` | success set on deny paths |
+| GS-005 | Relationship integrity | edge missing / incompatible / cross-tenant | `reason.deny.edge_invalid` | dangling graph |
+| GS-006 | Lifecycle correctness | `err.invalid_transition` | deny or allow | success set on deny |
+| GS-007 | Command idempotency | `err.idempotency_conflict` | conflict or allow | duplicate success effects |
+| GS-008 | Evaluation reproducibility | — | `reason.allowed` | — |
+| GS-009 | Policy precedence | `err.policy_unauthorized_relaxation` | deny precedence or allow | success set on deny |
+| GS-010 | Atomic success | `err.internal` / `err.contention` on injected fault | `reason.allowed` on permitted path | partial success set |
+| GS-011 | Auditable rejection | missing authority / stale / malformed / idempotency | matching deny reasons | accepted / transition / outbox |
+| GS-012 | Outbox recovery | — | `reason.escalate` on dead-letter | decision reversal |
+| GS-013 | Reconstruction | — | `reason.allowed` | — |
+| GS-014 | Legacy migration | `err.unsupported_legacy_mapping` when disposition says so | `reason.legacy_import_only` | fabricated authority/evidence/decision events |
+
+Exact identifier tuples live in `SCENARIO_CATALOG_EXPECTATIONS`. The narrative
+assertions below remain authoritative for fixture construction.
+
+| ID | Scenario | Required assertions |
+| --- | --- | --- |
+| GS-001 | An Alpha actor references a Beta workspace/object. | Command denied; no cross-tenant row, event, or outbox item; receipt explains isolation failure. |
+| GS-002 | A finalized mission/approval/evidence record is edited. | Direct mutation fails; correction creates a later revision linked to the prior revision. |
+| GS-003 | Reviewer approves mission revision 3; revision 4 is created; an actor requests a revision-4 transition. | Revision-3 approval is inapplicable; command denied; no run/transition/success event/outbox; receipt identifies stale approval. |
+| GS-004 | Object grant is active, expired, revoked, or aimed at the wrong revision. | Only the active in-scope grant authorizes; all others fail closed with reason codes. |
+| GS-005 | Edge has a missing, incompatible, or cross-tenant endpoint. | Database/domain validation rejects it; no dangling graph appears in reconstruction. |
+| GS-006 | Allowed and disallowed task/run transitions are requested under a state-machine version. | Allowed transition records version; invalid transition has no state/event/outbox success effects. |
+| GS-007 | Same command is retried; same key has changed semantic payload. | Exact retry returns original receipt/result; changed payload is rejected; no duplicate state/event/outbox. |
+| GS-008 | Policy, role, or source changes after an evaluation. | Stored snapshot reproduces original result and cites exact input revisions. |
+| GS-009 | Tenant and workspace configuration conflict; object exception is missing or authorized. | Only declared safe merges apply; unauthorized relaxation fails; authorized exception is scoped and expiring. |
+| GS-010 | A permitted command faults at each transactional write boundary. | Either all receipt/evaluation/transition/event/outbox writes commit or none of the success set commits. |
+| GS-011 | Unauthorized, stale, malformed, and duplicate-conflict commands are submitted. | Appropriate receipt/evaluation persists; target state remains unchanged; no success event/outbox exists. |
+| GS-012 | Lease holder crashes, recipient receives duplicate delivery, retries exhaust. | Lease recovers; recipient dedup key is stable; attempts append; dead letter and escalation persist; governing decision remains intact. |
+| GS-013 | A representative permitted decision is queried after later revisions exist. | Query reconstructs origin, actor, role/grant, policy, snapshot, edges, events, evidence references, and terminal decision. |
+| GS-014 | Representative current SQLite records are upgraded. | IDs/timestamps survive; provenance is `legacy_import`; no fabricated authority/evidence/decision; legacy behavior remains compatible. |
 
 ## Scenario ownership map
 

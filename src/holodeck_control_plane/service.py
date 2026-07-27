@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
 
 from .api import api_config_section
-from .errors import HolodeckError
+from .errors import HolodeckError, ValidationError
 from .http_request import http_status_for_error, read_json_object, validate_bind_host, validate_identifier
 from .http_server import create_http_server
 from .project import DEFAULT_POLICY
@@ -124,11 +124,35 @@ class Handler(BaseHTTPRequestHandler):
                             {"id": "runs", "label": "Agent runs and path claims", "status": "available"},
                             {"id": "overlap", "label": "Overlapping path protection", "status": "available"},
                             {"id": "policy", "label": "Advisory project onboarding policy", "status": "available"},
+                            {"id": "governance_commands", "label": "M1 governed command boundary", "status": "available"},
                             {"id": "evidence", "label": "Verification evidence", "status": "planned"},
                             {"id": "handoffs", "label": "Agent handoffs", "status": "planned"},
                             {"id": "adapters", "label": "Repository, agent, and CI adapters", "status": "planned"},
                         ],
                     },
+                )
+            if len(parts) == 5 and parts[:3] == ["api", "governance", "commands"] and parts[4] == "reconstruction":
+                from holodeck_control_plane.governance_commands import (
+                    reconstruct_governance_decision,
+                )
+
+                command_id = validate_identifier(parts[3], "command_id")
+                query = self.path.split("?", 1)
+                params = {}
+                if len(query) == 2:
+                    from urllib.parse import parse_qs
+
+                    params = {k: v[0] for k, v in parse_qs(query[1]).items() if v}
+                tenant_id = params.get("tenant_id")
+                if not tenant_id:
+                    raise ValidationError("tenant_id query parameter is required")
+                return self._send(
+                    HTTPStatus.OK,
+                    reconstruct_governance_decision(
+                        self.store.database,
+                        tenant_id=tenant_id,
+                        command_id=command_id,
+                    ),
                 )
             if parts == ["api", "workspaces"]:
                 return self._send(HTTPStatus.OK, {"workspaces": self.store.catalog()})
@@ -180,6 +204,18 @@ class Handler(BaseHTTPRequestHandler):
 
         def action() -> None:
             payload = self._json()
+            if parts == ["api", "governance", "commands"]:
+                from holodeck_control_plane.governance_commands import (
+                    submit_governance_command_request,
+                )
+
+                result = submit_governance_command_request(self.store.database, payload)
+                status = (
+                    HTTPStatus.CREATED
+                    if result["receipt"]["outcome"] == "accepted"
+                    else HTTPStatus.OK
+                )
+                return self._send(status, result)
             if parts == ["api", "workspaces"]:
                 return self._send(HTTPStatus.CREATED, self.store.create_workspace(payload))
             if len(parts) == 4 and parts[:2] == ["api", "workspaces"] and parts[3] == "sources":

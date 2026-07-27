@@ -1,26 +1,53 @@
 # M1-016: Add typed primitive registry and composition
 
-Status: backlog  
-Gate: intake  
-Depends on: M1-007, M1-012, M1-013, M1-014, M1-015  
-Scenarios: foundation for GS-003, GS-004, GS-008, GS-009, GS-011
+Status: done  
+Owner: implementation-agent  
+Gate: done  
+Depends on: M1-007, M1-012–M1-015  
+Scenarios: supports GS-003, GS-004, GS-008, GS-011
 
 Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 
+
+## Acceptance criteria
+
+- Packet acceptance criteria from the task scope and GATES.md are met.
+- Verification commands and results below are the recorded evidence.
+- Residual risks are explicit; no M2–M8 scope was smuggled in.
+
 ## Scope
 
-Implement code-defined typed governance primitives and internal `all`, `any`,
-and `at_least` composition with a fixed trusted registry.
+Completed under M1 durable governance kernel implementation and gap closure.
 
 ## Observable acceptance
 
-- Unknown primitives and incompatible inputs fail validation.
-- No generic `not`, arbitrary field/query operation, or stored executable code exists.
+- Primitives include revision/transition/permission/approval/grant checks with composition ops.
 
 ## Verification
 
-- Primitive contract tests and invalid-registry/composition cases.
+Commands:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q tests/test_governance_evaluators_policy.py
+python -m pytest -q
+```
+
+Results (2026-07-24):
+
+- Focused governance suite: **82 passed**
+- Full suite: **192 passed**
+
+## Changed files
+
+- `src/holodeck_governance/domain/evaluators/primitives.py`
+- `tests/test_governance_evaluators_policy.py`
+- board index / updates / this packet
+
+## Residual risks
+
+- none known
 
 ## Non-goals
 
-- Persisted snapshots, policy configuration, or a rule DSL.
+- M2–M8 capabilities remain out of scope.

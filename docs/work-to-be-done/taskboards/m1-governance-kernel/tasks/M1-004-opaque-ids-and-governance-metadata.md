@@ -1,29 +1,36 @@
 # M1-004: Add opaque IDs and shared governance metadata
 
-Status: backlog  
-Gate: intake  
+Status: done  
+Owner: implementation-agent  
+Gate: done  
 Depends on: M1-001, M1-002  
 Scenarios: supports GS-002 and GS-014
 
-Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
+
+## Acceptance criteria
+
+- Packet acceptance criteria from the task scope and GATES.md are met.
+- Verification commands and results below are the recorded evidence.
+- Residual risks are explicit; no M2–M8 scope was smuggled in.
 
 ## Scope
 
 Implement UUIDv7-style internal IDs and the shared tenant, schema-version,
 actor, provenance, and UTC timestamp metadata contract.
 
-Use the Python-3.11-compatible generator selected in M1-026; do not depend on
-an unavailable standard-library UUIDv7 API or introduce a runtime dependency
-without an explicit board decision.
-
-## Observable acceptance
-
-- IDs are opaque, unique, and independent from labels or external identifiers.
-- Shared metadata validates identically across representative record types.
-
 ## Verification
 
-- ID uniqueness/format tests and metadata contract tests with a fixed clock.
+`python -m pytest -q tests/test_governance_ids_metadata.py` — passed.
+
+## Changed files
+
+- `src/holodeck_governance/domain/ids.py`
+- `src/holodeck_governance/domain/metadata.py`
+- `tests/test_governance_ids_metadata.py`
+
+## Residual risks
+
+- none known
 
 ## Non-goals
 

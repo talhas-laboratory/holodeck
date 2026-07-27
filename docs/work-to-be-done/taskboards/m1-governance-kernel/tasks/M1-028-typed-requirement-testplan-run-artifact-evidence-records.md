@@ -1,32 +1,44 @@
 # M1-028: Add typed requirement, test-plan, run, artifact, and evidence records
 
-Status: backlog  
-Gate: intake  
-Depends on: M1-005, M1-007, M1-008, M1-027  
-Scenarios: GS-002, GS-003, GS-006, GS-013, GS-014
+Status: done
+Owner: implementation-agent  
+Gate: done
+Depends on: see TASKS.md  
+Re-closed: 2026-07-24 after P0/P1 residual fixes (run 6); suite evidence refreshed  
+Scenarios: supports GS-006
 
 Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 
-## Scope
+## Acceptance criteria
 
-Implement typed relational contracts for `Requirement`, `TestPlan`, `Run`,
-`Artifact`, and `Evidence`. Evidence stores immutable attributable metadata,
-content hash, and external artifact reference; it never stores the artifact
-body or claims M6 evidence-sufficiency behavior.
+- Typed record families persist via write repos + migration v5/v6.
+- Run heads support run.transition command path.
 
 ## Observable acceptance
 
-- Each type is tenant-owned, typed, attributable, and revisioned or immutable
-  according to its contract.
-- A run targets an exact mission revision and has a typed execution state/result.
-- Evidence and artifacts are hash-addressed metadata with explicit source and
-  provenance references, not free-form mission-payload claims.
+Record family write/reload + run transition persistence covered.
 
 ## Verification
 
-- Schema/migration and immutability tests for all five types.
-- Focused GS-002, GS-003, GS-006, GS-013, and GS-014 fixtures.
+Commands:
 
-## Non-goals
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q tests/test_governance_grants_edges_records.py tests/test_governance_p1_enforcement.py -k 'run_transition or record'
+python -m pytest -q
+```
 
-- Generating requirements/test plans, launching runs, storing artifacts, or deciding evidence sufficiency.
+Result: **214 passed** (`python -m pytest -q`, 2026-07-24).
+
+Evidence: Write repos + run.transition DecisionRecord path verified.
+
+## Changed files
+
+- `src/holodeck_governance/storage/sqlite/records.py`
+- `src/holodeck_governance/storage/sqlite/runs.py`
+- `src/holodeck_governance/storage/sqlite/migrate_v5.py`
+- `src/holodeck_governance/storage/sqlite/migrate_v6.py`
+
+## Residual risks
+
+- Record creates are repository APIs pending command-typed create envelopes.

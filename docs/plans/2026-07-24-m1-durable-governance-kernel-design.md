@@ -1,6 +1,6 @@
 # M1 durable governance kernel design
 
-**Status:** Approved design; implementation not started  
+**Status:** Approved design; implementation in progress (M1 board; milestone not accepted)  
 **Milestone:** M1 — Establish the durable governance kernel
 
 ## Purpose and boundary

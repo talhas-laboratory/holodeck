@@ -5,11 +5,12 @@ collaboration, intelligence, execution, evidence-sufficiency, or review work.
 
 Board id: `m1-governance-kernel`  
 Owner: `talha`  
-Status: planning complete; fresh-builder handoff pending M1-026  
+Status: **review** — M1-034 (v10 authority issuance) done; M1-024 + M1-025 held for human acceptance; milestone not accepted
+
 Design: [`2026-07-24-m1-durable-governance-kernel-design.md`](../../../plans/2026-07-24-m1-durable-governance-kernel-design.md)
 Test specification: [`2026-07-24-m1-governance-test-specification.md`](../../../plans/2026-07-24-m1-governance-test-specification.md)
 
-The board contains 31 atomic, dependency-ordered packets. Each implementation
+The board contains 33 atomic, dependency-ordered packets. Each implementation
 packet declares its governance scenarios and one observable verification target.
 
 ## Agent start protocol

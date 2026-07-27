@@ -1,7 +1,11 @@
 # M1-001: Define kernel vocabulary and module contracts
 
-Status: backlog  
-Gate: readiness
+Status: done  
+Owner: implementation-agent  
+Gate: done  
+Scenarios: see TASKS.md / PACKET_SCENARIO_OWNERS
+
+Test specification: [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 Depends on: M1-026
 
 ## Scope
@@ -39,19 +43,47 @@ behavior; the M1 design describes the target state.
 - The legacy runtime and governed-mission thin slice each have an explicit,
   additive migration seam rather than an implied rewrite.
 
+## Contract
+
+- Package: `holodeck_governance` with layers `domain`, `application`, `storage`.
+- Adapters remain in `holodeck_control_plane`.
+- Machine-readable ownership: `holodeck_governance.domain.vocabulary`.
+- Human mirror: `artifacts/m1-module-contracts.md`.
+- Legacy seam: `holodeck_governance.storage.legacy_seam`.
+
 ## Verification
 
-- Architecture/import-boundary test and contract review.
+Commands:
 
-## Starting plan
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q tests/test_governance_module_contracts.py
+python -m pytest -q
+```
 
-1. Inventory current modules and identify the smallest domain/application/storage/adapter split that preserves legacy behavior.
-2. Write the canonical vocabulary and public interfaces before moving any records.
-3. Record any conflict with the governed-mission thin slice in `DECISIONS.md`.
+Results:
 
-## Handoff
+- Module contract tests: **12 passed**
+- Full suite: recorded in UPDATES.jsonl after run completes
 
-- Ready for claim. No implementation has begun.
+## Changed files
+
+- `src/holodeck_governance/__init__.py`
+- `src/holodeck_governance/domain/__init__.py`
+- `src/holodeck_governance/domain/vocabulary.py`
+- `src/holodeck_governance/application/__init__.py`
+- `src/holodeck_governance/storage/__init__.py`
+- `src/holodeck_governance/storage/legacy_seam.py`
+- `tests/test_governance_module_contracts.py`
+- `docs/work-to-be-done/taskboards/m1-governance-kernel/artifacts/m1-module-contracts.md`
+- `docs/work-to-be-done/taskboards/m1-governance-kernel/DECISIONS.md`
+- board index / updates / this packet
+
+## Residual risks
+
+- Repository protocol modules are named but not yet implemented (M1-030).
+- Catalog modules are named but not yet published (M1-031).
+- none known beyond deferred packet owners
 
 ## Non-goals
 

@@ -1,7 +1,9 @@
 # M1-002: Governance test specification
 
-Status: backlog  
-Gate: intake
+Status: done  
+Owner: implementation-agent  
+Gate: done  
+Depends on: M1-001, M1-031
 
 ## Scope
 
@@ -13,6 +15,7 @@ governance scenarios before schema and command implementation begins.
 - [M1 governance test specification](../../../../plans/2026-07-24-m1-governance-test-specification.md)
 - [M1 design](../../../../plans/2026-07-24-m1-durable-governance-kernel-design.md)
 - Current runtime inventory in [M1-001](M1-001-kernel-vocabulary-and-module-contracts.md)
+- Catalogs from [M1-031](M1-031-domain-error-reason-event-catalogs.md)
 
 ## Acceptance criteria
 
@@ -34,8 +37,25 @@ governance scenarios before schema and command implementation begins.
 
 ## Verification
 
-- Scenario catalogue review against every M1 design decision and current M0
-  regression suite.
+```bash
+python -m pytest -q tests/test_governance_scenario_spec.py tests/test_governance_catalogs.py
+python -m pytest -q
+```
+
+Results: scenario-spec **4 passed**; catalogs covered; full suite after closeout.
+
+## Changed files
+
+- `docs/plans/2026-07-24-m1-governance-test-specification.md`
+- `src/holodeck_governance/testing/__init__.py`
+- `tests/test_governance_scenario_spec.py`
+- this packet / TASKS / UPDATES
+
+## Residual risks
+
+- Fixture builders are contract-level until repositories exist; GS tests remain
+  pending their owning packets.
+- none known for specification scope
 
 ## Non-goals
 
