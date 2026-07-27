@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-27T00:00:00+00:00","actor":"codex","event":"board_created","tasks":["M2-001"],"reason":"M2 started after M1 governance kernel was committed and pushed; scope is governed collaboration intake and workspace genesis only."}

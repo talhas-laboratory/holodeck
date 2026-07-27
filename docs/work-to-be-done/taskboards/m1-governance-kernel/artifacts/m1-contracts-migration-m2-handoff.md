@@ -1,8 +1,8 @@
 # M1 contracts, migration guide, and M2 handoff
 
 **Status:** review — artifact ready; milestone not human-accepted (M1-024/025 held).
-M1-033 (v9 tenant-coupled authority) and M1-032 (v8 ownership) are done and
-block 024 acceptance.
+M1-034 (v10 authority-record issuance), M1-033 (v9 tenant-coupled authority),
+and M1-032 (v8 ownership) are done and block 024 acceptance.
 
 ## Verified M1 contracts
 
@@ -24,9 +24,12 @@ block 024 acceptance.
 - Finalized revisions + append-only ledger tables are DB-immutable (v7).
 - Evaluation rows persist primitive results, policy binding, implementation id,
   and selected authority; events carry the catalog envelope fields.
-- Schema: governance migrations **v1–v9**
+- Authority records carry a persisted issuance basis; rows lacking that basis
+  fail closed at runtime.
+- Schema: governance migrations **v1–v10**
 - Baseline: commit `0adbc1c344ce7f743a6f5ece37501fb096e432d8`
-- Verification (2026-07-24): `python -m pytest -q` → **252 passed**
+- Verification (2026-07-27): `python -m pytest -q` → **253 collected; no
+  failures reported**
 
 ## Migration guide (additive)
 
@@ -46,7 +49,8 @@ block 024 acceptance.
 7. Graph / authority / policy tables live in migrations v4–v5; record-family
    alignment in v6; enforcement envelopes/triggers in v7; tenant-coupled
    object ownership (own identity + omitted refs + head consistency) in v8;
-   tenant-coupled authority references in v9.
+   tenant-coupled authority references in v9; governed authority-record
+   issuance basis in v10.
 
 ## M2 handoff
 

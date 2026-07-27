@@ -1,0 +1,17 @@
+# Tasks
+
+| id | status | owner | title | depends on |
+| --- | --- | --- | --- | --- |
+| `M2-001` | ready | unassigned | Define collaboration boundary and intake scenario specification | M1-025 artifact |
+| `M2-002` | backlog | unassigned | Add collaboration bindings, external actor mappings, and durable event receipts | M2-001 |
+| `M2-003` | backlog | unassigned | Record task origins and source-thread context through the M1 application seam | M2-001, M2-002 |
+| `M2-004` | backlog | unassigned | Add transactional outbound collaboration-message delivery | M2-001, M2-002 |
+| `M2-005` | backlog | unassigned | Define repository/project and collaboration-location workspace bindings | M2-002 |
+| `M2-006` | backlog | unassigned | Implement explainable workspace discovery and eligibility evaluation | M2-003, M2-005 |
+| `M2-007` | backlog | unassigned | Implement reversible workspace-genesis proposals and human decision flow | M2-003, M2-005, M2-006 |
+| `M2-008` | backlog | unassigned | Implement a provider-neutral in-memory adapter test harness | M2-001–M2-007 |
+| `M2-009` | backlog | unassigned | Implement the first Buzz adapter behind the neutral collaboration boundary | M2-001–M2-008 |
+| `M2-010` | backlog | unassigned | Prove end-to-end authenticated intake, replay recovery, and correlated status | M2-002–M2-009 |
+| `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010 |
+
+Status values: `backlog`, `ready`, `in-progress`, `review`, `blocked`, `done`.
