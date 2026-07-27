@@ -1,7 +1,7 @@
 # M2-003 — Record task origins and source-thread context
 
-**Status:** done  
-**Owner:** cursor  
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-001, M2-002
 
 ## Outcome
@@ -43,8 +43,8 @@ or outbound status delivery.
 ## Verification
 
 ```text
-uv run pytest -q tests/test_m2_task_origins.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_task_origins.py
+uv run --extra dev pytest -q
 ```
 
 ## Evidence and handoff

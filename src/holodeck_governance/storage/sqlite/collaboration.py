@@ -22,6 +22,7 @@ from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     IdempotencyConflictError,
     MalformedCommandError,
+    MissingAuthorityError,
     NotFoundGovernanceError,
     RevisionImmutableError,
 )
@@ -44,7 +45,32 @@ def _insert_immutable(conn: sqlite3.Connection, sql: str, params: tuple) -> None
 class SqliteCollaborationRepository:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+        self._tx_depth = 0
         migrate_governance(conn)
+        self._conn.execute("PRAGMA foreign_keys = ON")
+
+    def _commit_write(self) -> None:
+        """Persist writes for file-backed connections unless a caller owns a txn."""
+
+        if self._tx_depth == 0:
+            self._conn.commit()
+
+    def _begin_write(self) -> str | None:
+        previous = self._conn.isolation_level
+        self._conn.isolation_level = None
+        self._conn.execute("BEGIN IMMEDIATE")
+        self._tx_depth += 1
+        return previous
+
+    def _commit_txn(self, previous: str | None) -> None:
+        self._conn.execute("COMMIT")
+        self._tx_depth = max(0, self._tx_depth - 1)
+        self._conn.isolation_level = previous
+
+    def _rollback_txn(self, previous: str | None) -> None:
+        self._conn.execute("ROLLBACK")
+        self._tx_depth = max(0, self._tx_depth - 1)
+        self._conn.isolation_level = previous
 
     def save_endpoint(self, endpoint: CollaborationEndpoint) -> None:
         _insert_immutable(
@@ -70,6 +96,7 @@ class SqliteCollaborationRepository:
                 endpoint.schema_version,
             ),
         )
+        self._commit_write()
 
     def get_endpoint(self, endpoint_id: str) -> CollaborationEndpoint | None:
         row = self._conn.execute(
@@ -98,6 +125,14 @@ class SqliteCollaborationRepository:
             raise CrossTenantAccessError("collaboration endpoint tenant mismatch")
         return endpoint
 
+    def require_active_endpoint(
+        self, endpoint_id: str, *, tenant_id: str
+    ) -> CollaborationEndpoint:
+        endpoint = self.require_endpoint(endpoint_id, tenant_id=tenant_id)
+        if endpoint.status is not BindingStatus.ACTIVE:
+            raise MissingAuthorityError("collaboration endpoint is not active")
+        return endpoint
+
     def save_external_reference(self, ref: ExternalReference) -> None:
         existing = self._conn.execute(
             "SELECT reference_id FROM gov_external_references WHERE reference_id = ?",
@@ -119,6 +154,7 @@ class SqliteCollaborationRepository:
                 )
             return
         persist_external_reference(self._conn, ref)
+        self._commit_write()
 
     def save_actor_mapping(self, mapping: ExternalActorMapping) -> None:
         self.require_endpoint(mapping.endpoint_id, tenant_id=mapping.tenant_id)
@@ -164,6 +200,77 @@ class SqliteCollaborationRepository:
                 mapping.schema_version,
             ),
         )
+        self._commit_write()
+
+    def get_active_actor_mapping(
+        self,
+        *,
+        tenant_id: str,
+        provider: str,
+        actor_id: str,
+        endpoint_id: str,
+    ) -> ExternalActorMapping | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_external_actor_mappings
+            WHERE tenant_id = ?
+              AND provider = ?
+              AND actor_id = ?
+              AND endpoint_id = ?
+              AND status = ?
+            """,
+            (tenant_id, provider, actor_id, endpoint_id, BindingStatus.ACTIVE.value),
+        ).fetchone()
+        return None if row is None else self._mapping_from_row(row)
+
+    def actor_may_intake(
+        self, *, tenant_id: str, actor_id: str, at: datetime
+    ) -> bool:
+        """Tenant-scoped role permission check for collaboration.intake."""
+
+        from holodeck_governance.domain.authority.assignments import (
+            RoleAssignment,
+            assignment_is_active,
+        )
+
+        rows = self._conn.execute(
+            """
+            SELECT a.*, p.permissions_json
+            FROM gov_role_assignments a
+            JOIN gov_role_profiles p
+              ON p.role_object_id = a.role_object_id AND p.revision = a.role_revision
+            WHERE a.tenant_id = ? AND a.actor_id = ?
+            """,
+            (tenant_id, actor_id),
+        ).fetchall()
+        for row in rows:
+            assignment = RoleAssignment(
+                assignment_id=str(row["assignment_id"]),
+                tenant_id=str(row["tenant_id"]),
+                actor_id=str(row["actor_id"]),
+                role_object_id=str(row["role_object_id"]),
+                role_revision=int(row["role_revision"]),
+                workspace_object_id=row["workspace_object_id"],
+                jurisdiction_key=str(row["jurisdiction_key"]),
+                jurisdiction_value=str(row["jurisdiction_value"]),
+                effective_from=datetime.fromisoformat(str(row["effective_from"])),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+                created_by_actor_id=str(row["created_by_actor_id"]),
+                effective_until=(
+                    datetime.fromisoformat(str(row["effective_until"]))
+                    if row["effective_until"] is not None
+                    else None
+                ),
+                schema_version=str(row["schema_version"]),
+            )
+            if not assignment_is_active(assignment, at=at):
+                continue
+            if assignment.jurisdiction_key not in {"tenant", "*"}:
+                continue
+            permissions = set(json.loads(str(row["permissions_json"])))
+            if "collaboration.intake" in permissions or "*" in permissions:
+                return True
+        return False
 
     def get_actor_mapping_by_external(
         self, *, tenant_id: str, provider: str, external_actor_id: str
@@ -242,6 +349,7 @@ class SqliteCollaborationRepository:
                 receipt.schema_version,
             ),
         )
+        self._commit_write()
         return receipt
 
     def get_task_origin(self, object_id: str) -> TaskOrigin | None:
@@ -306,57 +414,24 @@ class SqliteCollaborationRepository:
             external_event_id=origin.external_event_id,
         )
         if prior_receipt is not None:
-            # Crash/retry: receipt landed without origin. Complete the origin only
-            # when the prior receipt already points at this origin object.
             if (
                 prior_receipt.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
                 and prior_receipt.task_origin_object_id == origin.object_id
                 and prior_receipt.receipt_id == origin.inbound_receipt_id
             ):
-                previous = self._conn.isolation_level
-                self._conn.isolation_level = None
-                try:
-                    self._conn.execute("BEGIN IMMEDIATE")
-                    again = self.get_task_origin_by_external(
-                        tenant_id=origin.tenant_id,
-                        provider=origin.provider,
-                        external_event_id=origin.external_event_id,
-                    )
-                    if again is not None:
-                        self._conn.execute("COMMIT")
-                        return again, prior_receipt, False
-                    self.save_external_reference(source_reference)
-                    self.save_external_reference(location_reference)
-                    if parent_location_reference is not None:
-                        self.save_external_reference(parent_location_reference)
-                    revisions = SqliteRevisionRepository(self._conn)
-                    if revisions.get_object(origin.object_id) is None:
-                        revisions.register_object(
-                            GovernanceObject(
-                                object_id=origin.object_id,
-                                tenant_id=origin.tenant_id,
-                                object_type="TaskOrigin",
-                                created_at=origin.created_at,
-                                created_by_actor_id=origin.created_by_actor_id,
-                            )
-                        )
-                    self._insert_task_origin(origin)
-                    self._conn.execute("COMMIT")
-                    return origin, prior_receipt, True
-                except Exception:
-                    self._conn.execute("ROLLBACK")
-                    raise
-                finally:
-                    self._conn.isolation_level = previous
+                return self._complete_origin_after_receipt(
+                    origin=origin,
+                    prior_receipt=prior_receipt,
+                    source_reference=source_reference,
+                    location_reference=location_reference,
+                    parent_location_reference=parent_location_reference,
+                )
             raise IdempotencyConflictError(
                 "inbound receipt exists without a compatible task origin"
             )
 
-        previous = self._conn.isolation_level
-        self._conn.isolation_level = None
+        previous = self._begin_write()
         try:
-            self._conn.execute("BEGIN IMMEDIATE")
-            # Re-check inside the transaction for crash/retry races.
             existing = self.get_task_origin_by_external(
                 tenant_id=origin.tenant_id,
                 provider=origin.provider,
@@ -369,7 +444,7 @@ class SqliteCollaborationRepository:
                     external_event_id=origin.external_event_id,
                 )
                 assert found_receipt is not None
-                self._conn.execute("COMMIT")
+                self._commit_txn(previous)
                 return existing, found_receipt, False
 
             self.save_external_reference(source_reference)
@@ -389,16 +464,55 @@ class SqliteCollaborationRepository:
                     )
                 )
 
-            # Receipt first so origin can reference it.
-            self.save_inbound_receipt(receipt, endpoint_id=endpoint_id)
+            effective_endpoint = endpoint_id or origin.endpoint_id
+            self.save_inbound_receipt(receipt, endpoint_id=effective_endpoint)
             self._insert_task_origin(origin)
-            self._conn.execute("COMMIT")
+            self._commit_txn(previous)
             return origin, receipt, True
         except Exception:
-            self._conn.execute("ROLLBACK")
+            self._rollback_txn(previous)
             raise
-        finally:
-            self._conn.isolation_level = previous
+
+    def _complete_origin_after_receipt(
+        self,
+        *,
+        origin: TaskOrigin,
+        prior_receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        parent_location_reference: ExternalReference | None,
+    ) -> tuple[TaskOrigin, InboundEventReceipt, bool]:
+        previous = self._begin_write()
+        try:
+            again = self.get_task_origin_by_external(
+                tenant_id=origin.tenant_id,
+                provider=origin.provider,
+                external_event_id=origin.external_event_id,
+            )
+            if again is not None:
+                self._commit_txn(previous)
+                return again, prior_receipt, False
+            self.save_external_reference(source_reference)
+            self.save_external_reference(location_reference)
+            if parent_location_reference is not None:
+                self.save_external_reference(parent_location_reference)
+            revisions = SqliteRevisionRepository(self._conn)
+            if revisions.get_object(origin.object_id) is None:
+                revisions.register_object(
+                    GovernanceObject(
+                        object_id=origin.object_id,
+                        tenant_id=origin.tenant_id,
+                        object_type="TaskOrigin",
+                        created_at=origin.created_at,
+                        created_by_actor_id=origin.created_by_actor_id,
+                    )
+                )
+            self._insert_task_origin(origin)
+            self._commit_txn(previous)
+            return origin, prior_receipt, True
+        except Exception:
+            self._rollback_txn(previous)
+            raise
 
     def _validate_accepted_origin_inputs(
         self,
@@ -413,6 +527,10 @@ class SqliteCollaborationRepository:
         if receipt.processing_outcome is not ProcessingOutcome.ACCEPTED_ORIGIN:
             raise MalformedCommandError(
                 "task origins require accepted_origin receipts"
+            )
+        if receipt.verification_result is not VerificationResult.VERIFIED:
+            raise MissingAuthorityError(
+                "accepted intake requires verified actor identity"
             )
         if receipt.task_origin_object_id != origin.object_id:
             raise MalformedCommandError(
@@ -453,8 +571,31 @@ class SqliteCollaborationRepository:
                 "parent_location_reference required when origin has parent id"
             )
         effective_endpoint = endpoint_id or origin.endpoint_id
-        if effective_endpoint is not None:
-            self.require_endpoint(effective_endpoint, tenant_id=origin.tenant_id)
+        if effective_endpoint is None:
+            raise MissingAuthorityError(
+                "accepted intake requires an active collaboration endpoint"
+            )
+        if origin.endpoint_id is not None and origin.endpoint_id != effective_endpoint:
+            raise MalformedCommandError("origin.endpoint_id must match endpoint_id")
+        self.require_active_endpoint(effective_endpoint, tenant_id=origin.tenant_id)
+        mapping = self.get_active_actor_mapping(
+            tenant_id=origin.tenant_id,
+            provider=origin.provider,
+            actor_id=origin.actor_id,
+            endpoint_id=effective_endpoint,
+        )
+        if mapping is None:
+            raise MissingAuthorityError(
+                "accepted intake requires an active external actor mapping"
+            )
+        if not self.actor_may_intake(
+            tenant_id=origin.tenant_id,
+            actor_id=origin.actor_id,
+            at=origin.created_at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks collaboration.intake authority"
+            )
         actor = self._conn.execute(
             "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
             (origin.actor_id,),

@@ -66,3 +66,14 @@
   accepted receipt and linked task origin; replay returns the prior origin.
 - Accepted intake still creates no mission, run, approval, or outbox success
   rows; outbound delivery remains M2-004.
+
+## 2026-07-27 — M2 release-blocker fixes
+
+- Collaboration repository writes commit unless a caller owns an explicit
+  transaction, so `open_collaboration_app` records are durable across connections.
+- `accept_task_origin` requires `verification_result=verified`, an active endpoint,
+  an active external-actor mapping, and `collaboration.intake` role authority.
+- Migration v13 installs tenant-coupled reference triggers for v11/v12 collaboration
+  tables; raw cross-tenant mapping inserts abort.
+- Documented verification uses `uv run --extra dev pytest -q` (also available via
+  uv default dependency group `dev`).

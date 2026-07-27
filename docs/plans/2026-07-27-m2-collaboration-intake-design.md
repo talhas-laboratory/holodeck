@@ -1,9 +1,9 @@
 # M2 collaboration intake design
 
-**Status:** Implementation-ready contract (persistence deferred to M2-002+)  
-**Milestone:** M2 — Human collaboration intake and workspace genesis  
-**Companion task:** [`M2-001`](../work-to-be-done/taskboards/m2-human-collaboration-intake/tasks/M2-001-collaboration-boundary-and-intake-scenarios.md)  
-**Companion test specification:** [`2026-07-27-m2-collaboration-intake-test-specification.md`](2026-07-27-m2-collaboration-intake-test-specification.md)  
+**Status:** Implementation-ready contract (persistence deferred to M2-002+)
+**Milestone:** M2 — Human collaboration intake and workspace genesis
+**Companion task:** [`M2-001`](../work-to-be-done/taskboards/m2-human-collaboration-intake/tasks/M2-001-collaboration-boundary-and-intake-scenarios.md)
+**Companion test specification:** [`2026-07-27-m2-collaboration-intake-test-specification.md`](2026-07-27-m2-collaboration-intake-test-specification.md)
 **Contract package:** `holodeck_governance.domain.collaboration`
 
 ## Purpose

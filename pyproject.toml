@@ -35,6 +35,12 @@ Issues = "https://github.com/talhas-laboratory/holodeck/issues"
 mcp = ["mcp>=1.6"]
 dev = ["build>=1", "mcp>=1.6", "pytest>=8"]
 
+[dependency-groups]
+dev = ["build>=1", "mcp>=1.6", "pytest>=8"]
+
+[tool.uv]
+default-groups = ["dev"]
+
 [project.scripts]
 holodeck = "holodeck_control_plane.cli:main"
 

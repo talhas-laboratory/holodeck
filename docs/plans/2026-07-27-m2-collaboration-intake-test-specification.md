@@ -1,10 +1,10 @@
 # M2 collaboration intake test specification
 
-**Status:** Implementation-ready contract suite (behavioral persistence deferred)  
-**Milestone:** M2 — Human collaboration intake and workspace genesis  
-**Companion task:** [`M2-001`](../work-to-be-done/taskboards/m2-human-collaboration-intake/tasks/M2-001-collaboration-boundary-and-intake-scenarios.md)  
-**Companion design:** [`2026-07-27-m2-collaboration-intake-design.md`](2026-07-27-m2-collaboration-intake-design.md)  
-**Scenario catalog:** `holodeck_governance.domain.collaboration.scenario_catalog.CIS_EXPECTATIONS`  
+**Status:** Implementation-ready contract suite (behavioral persistence deferred)
+**Milestone:** M2 — Human collaboration intake and workspace genesis
+**Companion task:** [`M2-001`](../work-to-be-done/taskboards/m2-human-collaboration-intake/tasks/M2-001-collaboration-boundary-and-intake-scenarios.md)
+**Companion design:** [`2026-07-27-m2-collaboration-intake-design.md`](2026-07-27-m2-collaboration-intake-design.md)
+**Scenario catalog:** `holodeck_governance.domain.collaboration.scenario_catalog.CIS_EXPECTATIONS`
 **Contract tests:** `tests/test_m2_collaboration_contract.py`
 
 ## Purpose
@@ -153,6 +153,6 @@ later milestones.
 ## Verification commands
 
 ```text
-uv run pytest -q tests/test_m2_collaboration_contract.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_collaboration_contract.py
+uv run --extra dev pytest -q
 ```

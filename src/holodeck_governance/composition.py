@@ -30,6 +30,7 @@ def open_collaboration_app(database: str) -> CollaborationApplicationService:
 
     conn = sqlite3.connect(database)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     migrate_governance(conn)
     return CollaborationApplicationService(
         repository=SqliteCollaborationRepository(conn)

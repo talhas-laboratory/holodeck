@@ -1,7 +1,7 @@
 # M2-001 — Collaboration boundary and intake scenario specification
 
-**Status:** done  
-**Owner:** cursor  
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-000
 
 ## Outcome
@@ -50,8 +50,8 @@ scenarios that every M2 adapter must satisfy before Buzz-specific code exists.
 ## Verification
 
 ```text
-uv run pytest -q tests/test_m2_collaboration_contract.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_collaboration_contract.py
+uv run --extra dev pytest -q
 ```
 
 ## Evidence and handoff

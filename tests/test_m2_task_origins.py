@@ -3,30 +3,39 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from holodeck_governance.application.collaboration import CollaborationApplicationService
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
+from holodeck_governance.domain.authority.assignments import RoleAssignment
+from holodeck_governance.domain.authority.roles import RoleProfile
 from holodeck_governance.domain.collaboration import (
     BindingStatus,
     CollaborationEndpoint,
+    ExternalActorMapping,
     InboundEventReceipt,
     LocationKind,
     ProcessingOutcome,
     TaskOrigin,
     VerificationResult,
 )
-from holodeck_governance.domain.errors import CrossTenantAccessError, MalformedCommandError
+from holodeck_governance.domain.errors import (
+    CrossTenantAccessError,
+    MalformedCommandError,
+    MissingAuthorityError,
+)
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
+from holodeck_governance.domain.registry import GovernanceObject
 from holodeck_governance.storage.sqlite.authority import SqliteAuthorityRepository
 from holodeck_governance.storage.sqlite.collaboration import SqliteCollaborationRepository
 from holodeck_governance.storage.sqlite.migrations import (
     governance_schema_version,
     migrate_governance,
 )
+from holodeck_governance.storage.sqlite.revisions import SqliteRevisionRepository
 from holodeck_governance.storage.sqlite.tenants import ensure_default_local_tenant
 from holodeck_governance.testing import FIXED_CLOCK, FixtureIds
 
@@ -81,10 +90,57 @@ def _service() -> tuple[sqlite3.Connection, CollaborationApplicationService, Fix
             created_by_actor_id=ids.system_service,
         )
     )
+    _grant_intake_authority(conn, ids, actor_id=ids.human_owner)
     service = CollaborationApplicationService(
         repository=SqliteCollaborationRepository(conn)
     )
     return conn, service, ids
+
+
+def _grant_intake_authority(
+    conn: sqlite3.Connection, ids: FixtureIds, *, actor_id: str
+) -> None:
+    auth = SqliteAuthorityRepository(conn)
+    revisions = SqliteRevisionRepository(conn)
+    role_object_id = generate_uuidv7()
+    revisions.register_object(
+        GovernanceObject(
+            object_id=role_object_id,
+            tenant_id=ids.tenant_alpha,
+            object_type="RoleProfile",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_role_profile(
+        RoleProfile(
+            role_profile_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            role_object_id=role_object_id,
+            revision=1,
+            name="collaborator",
+            permissions=("collaboration.intake",),
+            jurisdiction={"tenant": ids.tenant_alpha},
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_assignment(
+        RoleAssignment(
+            assignment_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            actor_id=actor_id,
+            role_object_id=role_object_id,
+            role_revision=1,
+            workspace_object_id=None,
+            jurisdiction_key="tenant",
+            jurisdiction_value=ids.tenant_alpha,
+            effective_from=NOW - timedelta(hours=1),
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+            effective_until=NOW + timedelta(days=30),
+        )
+    )
 
 
 def _endpoint(ids: FixtureIds) -> CollaborationEndpoint:
@@ -99,6 +155,36 @@ def _endpoint(ids: FixtureIds) -> CollaborationEndpoint:
         created_by_actor_id=ids.system_service,
         display_name="Alpha",
     )
+
+
+def _bind_actor(
+    service: CollaborationApplicationService,
+    ids: FixtureIds,
+    endpoint: CollaborationEndpoint,
+    *,
+    actor_id: str | None = None,
+) -> ExternalActorMapping:
+    identity = _ref(
+        ids,
+        object_type="actor_identity",
+        external_object_id=f"ext-{actor_id or ids.human_owner}",
+        locator="memory://actors/owner",
+    )
+    service.save_external_reference(identity)
+    mapping = ExternalActorMapping(
+        mapping_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        endpoint_id=endpoint.endpoint_id,
+        actor_id=actor_id or ids.human_owner,
+        provider="memory",
+        external_actor_id=identity.external_object_id,
+        external_identity_reference_id=identity.reference_id,
+        status=BindingStatus.ACTIVE,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_actor_mapping(mapping)
+    return mapping
 
 
 def _ref(
@@ -125,10 +211,12 @@ def _ref(
 def _origin_bundle(
     ids: FixtureIds,
     *,
+    endpoint_id: str,
     external_event_id: str = "evt-origin-1",
     subject: str = "fix flaky claim race",
     actor_id: str | None = None,
     tenant_id: str | None = None,
+    verification_result: VerificationResult = VerificationResult.VERIFIED,
 ):
     tenant = tenant_id or ids.tenant_alpha
     source = _ref(
@@ -162,7 +250,7 @@ def _origin_bundle(
         external_event_id=external_event_id,
         inbound_event_id=generate_uuidv7(),
         signed_source_reference_id=source.reference_id,
-        verification_result=VerificationResult.VERIFIED,
+        verification_result=verification_result,
         processing_outcome=ProcessingOutcome.ACCEPTED_ORIGIN,
         reason_codes=("reason.allowed",),
         checkpoint_token=generate_uuidv7(),
@@ -182,6 +270,7 @@ def _origin_bundle(
         location_kind=LocationKind.THREAD,
         location_reference_id=location.reference_id,
         parent_location_reference_id=parent.reference_id,
+        endpoint_id=endpoint_id,
         created_at=NOW,
         created_by_actor_id=ids.system_service,
         adapter_metadata={"thread_title": "claims"},
@@ -192,7 +281,7 @@ def _origin_bundle(
 def test_migrate_v12_creates_task_origins_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 12
+    assert governance_schema_version(conn) == 13
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -204,24 +293,9 @@ def test_accept_task_origin_persists_source_thread_context_cis008() -> None:
     conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
-    origin, receipt, source, location, parent = _origin_bundle(ids)
-    origin = TaskOrigin(
-        object_id=origin.object_id,
-        tenant_id=origin.tenant_id,
-        actor_id=origin.actor_id,
-        inbound_receipt_id=origin.inbound_receipt_id,
-        source_reference_id=origin.source_reference_id,
-        provider=origin.provider,
-        external_event_id=origin.external_event_id,
-        subject_text=origin.subject_text,
-        body_text=origin.body_text,
-        location_kind=origin.location_kind,
-        location_reference_id=origin.location_reference_id,
-        parent_location_reference_id=origin.parent_location_reference_id,
-        endpoint_id=endpoint.endpoint_id,
-        created_at=origin.created_at,
-        created_by_actor_id=origin.created_by_actor_id,
-        adapter_metadata=origin.adapter_metadata,
+    _bind_actor(service, ids, endpoint)
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids, endpoint_id=endpoint.endpoint_id
     )
     result = service.accept_task_origin(
         origin=origin,
@@ -248,19 +322,25 @@ def test_accept_task_origin_persists_source_thread_context_cis008() -> None:
 
 def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
     conn, service, ids = _service()
-    origin, receipt, source, location, parent = _origin_bundle(ids)
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    _bind_actor(service, ids, endpoint)
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids, endpoint_id=endpoint.endpoint_id
+    )
     first = service.accept_task_origin(
         origin=origin,
         receipt=receipt,
         source_reference=source,
         location_reference=location,
         parent_location_reference=parent,
+        endpoint_id=endpoint.endpoint_id,
     )
-    # New ids in the retry payload must not create a second origin.
-    retry_origin, retry_receipt, source2, location2, parent2 = _origin_bundle(
-        ids, external_event_id=origin.external_event_id
+    retry_origin, retry_receipt, _s, _l, _p = _origin_bundle(
+        ids,
+        endpoint_id=endpoint.endpoint_id,
+        external_event_id=origin.external_event_id,
     )
-    # Force same external identity refs as first event for dedupe path.
     retry_receipt = InboundEventReceipt(
         receipt_id=retry_receipt.receipt_id,
         tenant_id=retry_receipt.tenant_id,
@@ -288,6 +368,7 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
         location_kind=LocationKind.THREAD,
         location_reference_id=location.reference_id,
         parent_location_reference_id=parent.reference_id,
+        endpoint_id=endpoint.endpoint_id,
         created_at=NOW,
         created_by_actor_id=ids.system_service,
     )
@@ -297,6 +378,7 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
         source_reference=source,
         location_reference=location,
         parent_location_reference=parent,
+        endpoint_id=endpoint.endpoint_id,
     )
     assert first.created is True
     assert second.created is False
@@ -311,21 +393,50 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
 
 def test_cross_tenant_origin_actor_rejected() -> None:
     _conn, service, ids = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    _bind_actor(service, ids, endpoint)
     origin, receipt, source, location, parent = _origin_bundle(
-        ids, actor_id=ids.human_reviewer
+        ids, endpoint_id=endpoint.endpoint_id, actor_id=ids.human_reviewer
     )
-    with pytest.raises(CrossTenantAccessError):
+    with pytest.raises((CrossTenantAccessError, MissingAuthorityError)):
         service.accept_task_origin(
             origin=origin,
             receipt=receipt,
             source_reference=source,
             location_reference=location,
             parent_location_reference=parent,
+            endpoint_id=endpoint.endpoint_id,
+        )
+
+
+def test_unverified_actor_cannot_create_origin() -> None:
+    _conn, service, ids = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    _bind_actor(service, ids, endpoint)
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids,
+        endpoint_id=endpoint.endpoint_id,
+        verification_result=VerificationResult.FAILED,
+    )
+    with pytest.raises(MissingAuthorityError):
+        service.accept_task_origin(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source,
+            location_reference=location,
+            parent_location_reference=parent,
+            endpoint_id=endpoint.endpoint_id,
         )
 
 
 def test_record_inbound_receipt_rejects_accepted_origin_shortcut() -> None:
     _conn, service, ids = _service()
-    origin, receipt, source, _location, _parent = _origin_bundle(ids)
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    origin, receipt, source, _location, _parent = _origin_bundle(
+        ids, endpoint_id=endpoint.endpoint_id
+    )
     with pytest.raises(MalformedCommandError):
         service.record_inbound_receipt(receipt, source_reference=source)

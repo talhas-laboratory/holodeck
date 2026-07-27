@@ -1,7 +1,7 @@
 # M2-002 — Collaboration bindings, actor mappings, and durable receipts
 
-**Status:** done  
-**Owner:** cursor  
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-001
 
 ## Outcome
@@ -50,8 +50,8 @@ without creating missions, runs, approvals, or task origins.
 ## Verification
 
 ```text
-uv run pytest -q tests/test_m2_collaboration_bindings_receipts.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_collaboration_bindings_receipts.py
+uv run --extra dev pytest -q
 ```
 
 ## Evidence and handoff
