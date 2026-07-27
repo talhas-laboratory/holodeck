@@ -1,4 +1,4 @@
-"""SQLite persistence for collaboration endpoints, mappings, and receipts."""
+"""SQLite persistence for collaboration endpoints, mappings, receipts, and outbound."""
 
 from __future__ import annotations
 
@@ -6,12 +6,15 @@ import json
 import sqlite3
 from datetime import datetime
 
+from holodeck_governance.domain.catalogs.events import EVENT_SCHEMAS, EventType
 from holodeck_governance.domain.collaboration.bindings import (
     BindingStatus,
     CollaborationEndpoint,
     ExternalActorMapping,
 )
+from holodeck_governance.domain.collaboration.inbound import ConversationLocation
 from holodeck_governance.domain.collaboration.origins import TaskOrigin
+from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
 from holodeck_governance.domain.collaboration.types import (
     LocationKind,
@@ -26,11 +29,18 @@ from holodeck_governance.domain.errors import (
     NotFoundGovernanceError,
     RevisionImmutableError,
 )
+from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
 from holodeck_governance.domain.registry import GovernanceObject
 from holodeck_governance.storage.sqlite.graph_seed import persist_external_reference
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
+from holodeck_governance.storage.sqlite.repos import (
+    SqliteDomainEventRepository,
+    SqliteOutboxRepository,
+)
 from holodeck_governance.storage.sqlite.revisions import SqliteRevisionRepository
+
+COLLABORATION_STATUS_DELIVERY_PURPOSE = "collaboration_status"
 
 
 def _insert_immutable(conn: sqlite3.Connection, sql: str, params: tuple) -> None:
@@ -321,6 +331,13 @@ class SqliteCollaborationRepository:
             (tenant_id, provider, external_actor_id),
         ).fetchone()
         return None if row is None else self._mapping_from_row(row)
+
+    def get_inbound_receipt(self, receipt_id: str) -> InboundEventReceipt | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_inbound_event_receipts WHERE receipt_id = ?",
+            (receipt_id,),
+        ).fetchone()
+        return None if row is None else self._receipt_from_row(row)
 
     def get_inbound_receipt_by_external(
         self, *, tenant_id: str, provider: str, external_event_id: str
@@ -652,6 +669,194 @@ class SqliteCollaborationRepository:
         if str(actor["tenant_id"]) != origin.tenant_id:
             raise CrossTenantAccessError("origin actor tenant mismatch")
 
+    def get_external_reference(self, reference_id: str) -> ExternalReference | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_external_references WHERE reference_id = ?",
+            (reference_id,),
+        ).fetchone()
+        return None if row is None else self._external_reference_from_row(row)
+
+    def get_outbound_message(self, message_id: str) -> OutboundCollaborationMessage | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_outbound_collaboration_messages WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+        return None if row is None else self._outbound_from_row(row)
+
+    def get_outbound_message_by_idempotency(
+        self, *, tenant_id: str, idempotency_key: str
+    ) -> tuple[OutboundCollaborationMessage, str] | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_outbound_collaboration_messages
+            WHERE tenant_id = ? AND idempotency_key = ?
+            """,
+            (tenant_id, idempotency_key),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._outbound_from_row(row), str(row["outbox_item_id"])
+
+    def enqueue_outbound_message(
+        self, message: OutboundCollaborationMessage
+    ) -> tuple[OutboundCollaborationMessage, str, bool]:
+        """Persist a correlated outbound message and durable outbox obligation."""
+
+        self._validate_outbound_message(message)
+        existing = self.get_outbound_message_by_idempotency(
+            tenant_id=message.tenant_id,
+            idempotency_key=message.idempotency_key,
+        )
+        if existing is not None:
+            prior, outbox_item_id = existing
+            return prior, outbox_item_id, False
+
+        outbox = SqliteOutboxRepository(self._conn)
+        prior_outbox = outbox.get_by_dedup(
+            tenant_id=message.tenant_id, dedup_key=message.idempotency_key
+        )
+        if prior_outbox is not None:
+            raise IdempotencyConflictError(
+                "outbox dedup key exists without outbound collaboration message"
+            )
+
+        previous = self._begin_write()
+        try:
+            existing = self.get_outbound_message_by_idempotency(
+                tenant_id=message.tenant_id,
+                idempotency_key=message.idempotency_key,
+            )
+            if existing is not None:
+                prior, outbox_item_id = existing
+                self._commit_txn(previous)
+                return prior, outbox_item_id, False
+
+            destination = message.destination
+            self.save_external_reference(destination.external_location)
+            if destination.parent_external_location is not None:
+                self.save_external_reference(destination.parent_external_location)
+            if destination.endpoint_id is not None:
+                self.require_endpoint(
+                    destination.endpoint_id, tenant_id=message.tenant_id
+                )
+
+            origin = self.get_task_origin(message.task_origin_object_id)
+            assert origin is not None
+            origin_actor_id = origin.actor_id
+
+            event_id = generate_uuidv7()
+            outbox_item_id = generate_uuidv7()
+            stamp = message.created_at.isoformat()
+            events = SqliteDomainEventRepository(self._conn)
+            events.append(
+                event_id=event_id,
+                tenant_id=message.tenant_id,
+                event_type=EventType.OUTBOX_ENQUEUED.value,
+                correlation_id=message.task_origin_object_id,
+                causation_id=message.command_id,
+                actor_id=origin_actor_id,
+                payload_schema_version=EVENT_SCHEMAS[
+                    EventType.OUTBOX_ENQUEUED
+                ].payload_schema_version,
+                occurred_at=stamp,
+                subject_object_id=message.task_origin_object_id,
+                payload={
+                    "outbox_item_id": outbox_item_id,
+                    "domain_event_id": event_id,
+                    "delivery_purpose": COLLABORATION_STATUS_DELIVERY_PURPOSE,
+                    "dedup_key": message.idempotency_key,
+                    "message_id": message.message_id,
+                    "inbound_receipt_id": message.inbound_receipt_id,
+                },
+                created_at=stamp,
+            )
+            outbox.enqueue(
+                tenant_id=message.tenant_id,
+                domain_event_id=event_id,
+                delivery_purpose=COLLABORATION_STATUS_DELIVERY_PURPOSE,
+                dedup_key=message.idempotency_key,
+                created_at=stamp,
+                outbox_item_id=outbox_item_id,
+            )
+            parent_id = (
+                None
+                if destination.parent_external_location is None
+                else destination.parent_external_location.reference_id
+            )
+            _insert_immutable(
+                self._conn,
+                """
+                INSERT INTO gov_outbound_collaboration_messages(
+                    message_id, tenant_id, provider, location_kind, location_reference_id,
+                    parent_location_reference_id, endpoint_id, body_text,
+                    task_origin_object_id, inbound_receipt_id, command_id, idempotency_key,
+                    outbox_item_id, domain_event_id, created_at, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message.message_id,
+                    message.tenant_id,
+                    message.provider,
+                    destination.location_kind.value,
+                    destination.external_location.reference_id,
+                    parent_id,
+                    destination.endpoint_id,
+                    message.body_text,
+                    message.task_origin_object_id,
+                    message.inbound_receipt_id,
+                    message.command_id,
+                    message.idempotency_key,
+                    outbox_item_id,
+                    event_id,
+                    stamp,
+                    message.schema_version,
+                ),
+            )
+            self._commit_txn(previous)
+            return message, outbox_item_id, True
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+
+    def _validate_outbound_message(self, message: OutboundCollaborationMessage) -> None:
+        origin = self.get_task_origin(message.task_origin_object_id)
+        if origin is None:
+            raise NotFoundGovernanceError(
+                f"unknown task origin {message.task_origin_object_id}"
+            )
+        if origin.tenant_id != message.tenant_id:
+            raise CrossTenantAccessError("outbound message origin tenant mismatch")
+        if origin.provider != message.provider:
+            raise MalformedCommandError("outbound provider must match task origin")
+        if origin.inbound_receipt_id != message.inbound_receipt_id:
+            raise MalformedCommandError(
+                "outbound inbound_receipt_id must match task origin"
+            )
+        receipt = self.get_inbound_receipt(message.inbound_receipt_id)
+        if receipt is None:
+            raise NotFoundGovernanceError(
+                f"unknown inbound receipt {message.inbound_receipt_id}"
+            )
+        if receipt.tenant_id != message.tenant_id:
+            raise CrossTenantAccessError("outbound message receipt tenant mismatch")
+        if receipt.processing_outcome is not ProcessingOutcome.ACCEPTED_ORIGIN:
+            raise MalformedCommandError(
+                "outbound status requires an accepted_origin receipt"
+            )
+        if receipt.task_origin_object_id != origin.object_id:
+            raise MalformedCommandError(
+                "receipt task_origin_object_id must match origin"
+            )
+        if receipt.receipt_id != origin.inbound_receipt_id:
+            raise MalformedCommandError(
+                "outbound inbound_receipt_id must match task origin"
+            )
+        destination = message.destination
+        if destination.external_location.tenant_id != message.tenant_id:
+            raise CrossTenantAccessError("destination tenant mismatch")
+        if destination.endpoint_id is not None:
+            self.require_endpoint(destination.endpoint_id, tenant_id=message.tenant_id)
+
     def _insert_task_origin(self, origin: TaskOrigin) -> None:
         _insert_immutable(
             self._conn,
@@ -769,5 +974,52 @@ class SqliteCollaborationRepository:
             task_origin_object_id=None if origin is None else str(origin),
             mapping_id=None if mapping is None else str(mapping),
             external_actor_id=None if external_actor is None else str(external_actor),
+            schema_version=str(row["schema_version"]),
+        )
+
+    def _outbound_from_row(self, row: sqlite3.Row) -> OutboundCollaborationMessage:
+        location = self.get_external_reference(str(row["location_reference_id"]))
+        if location is None:
+            raise NotFoundGovernanceError(
+                f"missing destination reference {row['location_reference_id']}"
+            )
+        parent_id = row["parent_location_reference_id"]
+        parent = None if parent_id is None else self.get_external_reference(str(parent_id))
+        endpoint = row["endpoint_id"]
+        return OutboundCollaborationMessage(
+            message_id=str(row["message_id"]),
+            tenant_id=str(row["tenant_id"]),
+            provider=str(row["provider"]),
+            destination=ConversationLocation(
+                location_kind=LocationKind(str(row["location_kind"])),
+                external_location=location,
+                parent_external_location=parent,
+                endpoint_id=None if endpoint is None else str(endpoint),
+            ),
+            body_text=str(row["body_text"]),
+            task_origin_object_id=str(row["task_origin_object_id"]),
+            inbound_receipt_id=str(row["inbound_receipt_id"]),
+            command_id=str(row["command_id"]),
+            idempotency_key=str(row["idempotency_key"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            schema_version=str(row["schema_version"]),
+        )
+
+    @staticmethod
+    def _external_reference_from_row(row: sqlite3.Row) -> ExternalReference:
+        subject = row["subject_object_id"]
+        content_hash = row["content_hash"]
+        return ExternalReference(
+            reference_id=str(row["reference_id"]),
+            tenant_id=str(row["tenant_id"]),
+            provider=str(row["provider"]),
+            object_type=str(row["object_type"]),
+            external_object_id=str(row["external_object_id"]),
+            locator=str(row["locator"]),
+            observed_at=datetime.fromisoformat(str(row["observed_at"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            subject_object_id=None if subject is None else str(subject),
+            content_hash=None if content_hash is None else str(content_hash),
             schema_version=str(row["schema_version"]),
         )

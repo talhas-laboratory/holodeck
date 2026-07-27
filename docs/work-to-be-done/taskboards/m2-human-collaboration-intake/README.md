@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`  
 Owner: `talha`  
-Status: **ready — M2-004 outbound collaboration delivery**
+Status: **ready — M2-005 workspace bindings**
 
 ## Boundary
 
@@ -31,8 +31,8 @@ define requirement gates (M4), launch agents (M5), or make completion decisions
 ## Agent start protocol
 
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
-2. `M2-001`–`M2-003` are done; implement `M2-004` next for durable outbound
-   status delivery. Do not build Buzz ingress.
+2. `M2-001`–`M2-004` are done; implement `M2-005` next for repository/project
+   and collaboration-location workspace bindings. Do not build Buzz ingress.
 3. Keep provider SDK types inside adapters; domain records use stable external
    references only.
 4. Preserve M1 command, tenant, provenance, and outbox guarantees.

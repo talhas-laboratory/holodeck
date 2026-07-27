@@ -1,4 +1,4 @@
-"""Application seam for collaboration bindings, receipts, and task origins."""
+"""Application seam for collaboration bindings, receipts, origins, and outbound."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from holodeck_governance.domain.collaboration.bindings import (
     ExternalActorMapping,
 )
 from holodeck_governance.domain.collaboration.origins import TaskOrigin
+from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
 from holodeck_governance.domain.collaboration.types import ProcessingOutcome
 from holodeck_governance.domain.errors import CrossTenantAccessError, MalformedCommandError
@@ -57,6 +58,14 @@ class CollaborationRepositoryPort(Protocol):
         endpoint_id: str | None = None,
     ) -> tuple[TaskOrigin, InboundEventReceipt, bool]: ...
 
+    def enqueue_outbound_message(
+        self, message: OutboundCollaborationMessage
+    ) -> tuple[OutboundCollaborationMessage, str, bool]: ...
+
+    def get_outbound_message(
+        self, message_id: str
+    ) -> OutboundCollaborationMessage | None: ...
+
 
 @dataclass(frozen=True, slots=True)
 class RecordReceiptResult:
@@ -74,13 +83,20 @@ class RecordOriginResult:
 
 
 @dataclass(frozen=True, slots=True)
+class EnqueueOutboundResult:
+    message: OutboundCollaborationMessage
+    outbox_item_id: str
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationApplicationService:
-    """Adapter-facing collaboration binding/receipt/origin seam.
+    """Adapter-facing collaboration binding/receipt/origin/outbound seam.
 
     Uses the M1 bootstrap/admin persistence exception for create envelopes until
     typed ``collaboration.*.record`` command handlers exist. Never mutates
-    task/run lifecycle state and never creates missions, approvals, or outbound
-    success deliveries.
+    task/run lifecycle state and never creates missions or approvals. Outbound
+    enqueue creates durable outbox obligations only; adapter publish is separate.
     """
 
     repository: CollaborationRepositoryPort
@@ -178,3 +194,22 @@ class CollaborationApplicationService:
 
     def get_task_origin(self, object_id: str) -> TaskOrigin | None:
         return self.repository.get_task_origin(object_id)
+
+    def enqueue_outbound_status(
+        self, message: OutboundCollaborationMessage
+    ) -> EnqueueOutboundResult:
+        """Enqueue correlated collaboration status through the durable outbox."""
+
+        stored, outbox_item_id, created = self.repository.enqueue_outbound_message(
+            message
+        )
+        return EnqueueOutboundResult(
+            message=stored,
+            outbox_item_id=outbox_item_id,
+            created=created,
+        )
+
+    def get_outbound_message(
+        self, message_id: str
+    ) -> OutboundCollaborationMessage | None:
+        return self.repository.get_outbound_message(message_id)

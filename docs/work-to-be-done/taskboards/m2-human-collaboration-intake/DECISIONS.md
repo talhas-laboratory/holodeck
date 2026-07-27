@@ -86,3 +86,12 @@
   endpoint/provider/actor/`external_actor_id`, not merely *some* mapping for the
   claimed Holodeck actor.
 - Migration v14 adds the attribution columns and tenant-coupled mapping triggers.
+
+## 2026-07-27 — M2-004 outbound status enqueue
+
+- Governance migration v15 adds `gov_outbound_collaboration_messages`.
+- `CollaborationApplicationService.enqueue_outbound_status` validates
+  origin/receipt correlation, persists the outbound message, appends
+  `governance.outbox.enqueued`, and creates a durable outbox item keyed by the
+  semantic idempotency key.
+- Adapter `publish_outbound` remains deferred to the harness/Buzz packets.

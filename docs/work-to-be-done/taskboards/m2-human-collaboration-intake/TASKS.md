@@ -6,8 +6,8 @@
 | `M2-001` | done | cursor | Define collaboration boundary and intake scenario specification | M2-000 |
 | `M2-002` | done | cursor | Add collaboration bindings, external actor mappings, and durable event receipts | M2-001 |
 | `M2-003` | done | cursor | Record task origins and source-thread context through the M1 application seam | M2-001, M2-002 |
-| `M2-004` | ready | unassigned | Add transactional outbound collaboration-message delivery | M2-001, M2-002 |
-| `M2-005` | backlog | unassigned | Define repository/project and collaboration-location workspace bindings | M2-002 |
+| `M2-004` | done | cursor | Add transactional outbound collaboration-message delivery | M2-001, M2-002 |
+| `M2-005` | ready | unassigned | Define repository/project and collaboration-location workspace bindings | M2-002 |
 | `M2-006` | backlog | unassigned | Implement explainable workspace discovery and eligibility evaluation | M2-003, M2-005 |
 | `M2-007` | backlog | unassigned | Implement reversible workspace-genesis proposals and human decision flow | M2-003, M2-005, M2-006 |
 | `M2-008` | backlog | unassigned | Implement a provider-neutral in-memory adapter test harness | M2-001–M2-007 |

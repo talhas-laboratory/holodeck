@@ -22,6 +22,9 @@ from holodeck_governance.storage.sqlite.migrate_v13 import (
 from holodeck_governance.storage.sqlite.migrate_v14 import (
     upgrade_accepted_intake_mapping_attribution,
 )
+from holodeck_governance.storage.sqlite.migrate_v15 import (
+    upgrade_outbound_collaboration_messages,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -336,6 +339,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (12, "task_origins", upgrade_task_origins),
     (13, "collaboration_tenant_coupling", upgrade_collaboration_tenant_coupling),
     (14, "accepted_intake_mapping_attribution", upgrade_accepted_intake_mapping_attribution),
+    (15, "outbound_collaboration_messages", upgrade_outbound_collaboration_messages),
 ]
 
 
@@ -358,6 +362,11 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 15:
+        conn.execute("DROP TABLE IF EXISTS gov_outbound_collaboration_messages")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 14:
         # Column + trigger migration; rolling back removes the version marker only.
         # SQLite cannot DROP COLUMN portably here without table rebuild.
