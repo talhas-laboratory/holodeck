@@ -56,3 +56,13 @@
   do not insert a second row.
 - Typed `collaboration.*.record` command handlers remain deferred; this packet
   uses the bootstrap/admin persistence exception.
+
+## 2026-07-27 — M2-003 task origins recorded
+
+- Governance migration v12 adds `gov_task_origins` with source-thread context
+  and uniqueness on `(tenant_id, provider, external_event_id)` plus
+  `inbound_receipt_id`.
+- `CollaborationApplicationService.accept_task_origin` atomically records an
+  accepted receipt and linked task origin; replay returns the prior origin.
+- Accepted intake still creates no mission, run, approval, or outbox success
+  rows; outbound delivery remains M2-004.
