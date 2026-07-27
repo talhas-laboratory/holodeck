@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`  
 Owner: `talha`  
-Status: **ready for implementation planning**
+Status: **ready — M2-001 collaboration boundary**
 
 ## Boundary
 
@@ -29,8 +29,8 @@ define requirement gates (M4), launch agents (M5), or make completion decisions
 ## Agent start protocol
 
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
-2. Start `M2-001`; no provider adapter may be built before its neutral contract
-   and executable scenario specification are accepted.
+2. Complete `M2-000`; no provider adapter may be built before its neutral
+   contract and executable scenario specification are accepted.
 3. Keep provider SDK types inside adapters; domain records use stable external
    references only.
 4. Preserve M1 command, tenant, provenance, and outbox guarantees.
