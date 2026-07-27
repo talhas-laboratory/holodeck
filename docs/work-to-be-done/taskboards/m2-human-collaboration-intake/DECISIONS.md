@@ -24,3 +24,10 @@
   `docs/plans/2026-07-27-workspace-model-and-intelligence-design.md`; M2 must
   implement it progressively rather than reducing a workspace to a repository
   locator and name.
+
+## 2026-07-27 — First real collaboration target confirmed
+
+- The user confirmed Buzz as M2's first real collaboration adapter.
+- M2-009 remains downstream of the provider-neutral contract and in-memory
+  harness; this confirmation does not permit provider-specific domain types or
+  production ingress before the guarded-start condition is resolved.
