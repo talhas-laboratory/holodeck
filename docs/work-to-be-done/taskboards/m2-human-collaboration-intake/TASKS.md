@@ -5,7 +5,7 @@
 | `M2-000` | done | codex | Establish M2 entry readiness and workspace-model contract | M1-025 artifact |
 | `M2-001` | done | cursor | Define collaboration boundary and intake scenario specification | M2-000 |
 | `M2-002` | done | cursor | Add collaboration bindings, external actor mappings, and durable event receipts | M2-001 |
-| `M2-003` | ready | unassigned | Record task origins and source-thread context through the M1 application seam | M2-001, M2-002 |
+| `M2-003` | in-progress | cursor | Record task origins and source-thread context through the M1 application seam | M2-001, M2-002 |
 | `M2-004` | backlog | unassigned | Add transactional outbound collaboration-message delivery | M2-001, M2-002 |
 | `M2-005` | backlog | unassigned | Define repository/project and collaboration-location workspace bindings | M2-002 |
 | `M2-006` | backlog | unassigned | Implement explainable workspace discovery and eligibility evaluation | M2-003, M2-005 |

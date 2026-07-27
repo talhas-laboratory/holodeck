@@ -1,4 +1,4 @@
-"""Application seam for collaboration bindings and inbound receipts."""
+"""Application seam for collaboration bindings, receipts, and task origins."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from holodeck_governance.domain.collaboration.bindings import (
     CollaborationEndpoint,
     ExternalActorMapping,
 )
+from holodeck_governance.domain.collaboration.origins import TaskOrigin
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
 from holodeck_governance.domain.collaboration.types import ProcessingOutcome
 from holodeck_governance.domain.errors import CrossTenantAccessError, MalformedCommandError
@@ -39,6 +40,23 @@ class CollaborationRepositoryPort(Protocol):
         endpoint_id: str | None = None,
     ) -> InboundEventReceipt: ...
 
+    def get_task_origin(self, object_id: str) -> TaskOrigin | None: ...
+
+    def get_task_origin_by_external(
+        self, *, tenant_id: str, provider: str, external_event_id: str
+    ) -> TaskOrigin | None: ...
+
+    def record_accepted_origin(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> tuple[TaskOrigin, InboundEventReceipt, bool]: ...
+
 
 @dataclass(frozen=True, slots=True)
 class RecordReceiptResult:
@@ -48,12 +66,21 @@ class RecordReceiptResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordOriginResult:
+    origin: TaskOrigin
+    receipt: InboundEventReceipt
+    processing_outcome: ProcessingOutcome
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationApplicationService:
-    """Adapter-facing collaboration binding/receipt seam.
+    """Adapter-facing collaboration binding/receipt/origin seam.
 
     Uses the M1 bootstrap/admin persistence exception for create envelopes until
     typed ``collaboration.*.record`` command handlers exist. Never mutates
-    task/run lifecycle state and never creates missions or approvals.
+    task/run lifecycle state and never creates missions, approvals, or outbound
+    success deliveries.
     """
 
     repository: CollaborationRepositoryPort
@@ -94,6 +121,10 @@ class CollaborationApplicationService:
             )
         if source_reference.tenant_id != receipt.tenant_id:
             raise CrossTenantAccessError("source reference tenant mismatch")
+        if receipt.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN:
+            raise MalformedCommandError(
+                "use accept_task_origin for accepted_origin receipts"
+            )
 
         self.repository.save_external_reference(source_reference)
         existing = self.repository.get_inbound_receipt_by_external(
@@ -113,3 +144,37 @@ class CollaborationApplicationService:
             processing_outcome=stored.processing_outcome,
             created=True,
         )
+
+    def accept_task_origin(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> RecordOriginResult:
+        """Record an explicit authorized intake as a durable task origin."""
+
+        stored_origin, stored_receipt, created = self.repository.record_accepted_origin(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source_reference,
+            location_reference=location_reference,
+            parent_location_reference=parent_location_reference,
+            endpoint_id=endpoint_id,
+        )
+        return RecordOriginResult(
+            origin=stored_origin,
+            receipt=stored_receipt,
+            processing_outcome=(
+                stored_receipt.processing_outcome
+                if created
+                else ProcessingOutcome.DUPLICATE_REPLAY
+            ),
+            created=created,
+        )
+
+    def get_task_origin(self, object_id: str) -> TaskOrigin | None:
+        return self.repository.get_task_origin(object_id)

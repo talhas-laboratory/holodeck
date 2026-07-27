@@ -15,6 +15,7 @@ from holodeck_governance.storage.sqlite.migrate_v10 import upgrade_authority_iss
 from holodeck_governance.storage.sqlite.migrate_v11 import (
     upgrade_collaboration_bindings_and_receipts,
 )
+from holodeck_governance.storage.sqlite.migrate_v12 import upgrade_task_origins
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -326,6 +327,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (9, "tenant_coupled_authority", upgrade_tenant_coupled_authority),
     (10, "authority_issuance_basis", upgrade_authority_issuance_basis),
     (11, "collaboration_bindings_and_receipts", upgrade_collaboration_bindings_and_receipts),
+    (12, "task_origins", upgrade_task_origins),
 ]
 
 
@@ -348,6 +350,11 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 12:
+        conn.execute("DROP TABLE IF EXISTS gov_task_origins")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 11:
         for table in (
             "gov_inbound_event_receipts",

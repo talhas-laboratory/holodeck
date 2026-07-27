@@ -163,7 +163,7 @@ def _receipt(
 def test_migrate_v11_creates_collaboration_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 11
+    assert governance_schema_version(conn) == 12
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -244,12 +244,7 @@ def test_record_rejected_receipt_without_origin_cis002() -> None:
     assert result.created is True
     assert result.processing_outcome is ProcessingOutcome.REJECTED
     assert result.receipt.task_origin_object_id is None
-    assert (
-        conn.execute(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='gov_task_origins'"
-        ).fetchone()[0]
-        == 0
-    )
+    assert conn.execute("SELECT COUNT(*) FROM gov_task_origins").fetchone()[0] == 0
     assert (
         conn.execute("SELECT COUNT(*) FROM gov_inbound_event_receipts").fetchone()[0] == 1
     )

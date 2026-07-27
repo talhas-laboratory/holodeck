@@ -11,17 +11,25 @@ from holodeck_governance.domain.collaboration.bindings import (
     CollaborationEndpoint,
     ExternalActorMapping,
 )
+from holodeck_governance.domain.collaboration.origins import TaskOrigin
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
-from holodeck_governance.domain.collaboration.types import ProcessingOutcome, VerificationResult
+from holodeck_governance.domain.collaboration.types import (
+    LocationKind,
+    ProcessingOutcome,
+    VerificationResult,
+)
 from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     IdempotencyConflictError,
+    MalformedCommandError,
     NotFoundGovernanceError,
     RevisionImmutableError,
 )
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
+from holodeck_governance.domain.registry import GovernanceObject
 from holodeck_governance.storage.sqlite.graph_seed import persist_external_reference
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
+from holodeck_governance.storage.sqlite.revisions import SqliteRevisionRepository
 
 
 def _insert_immutable(conn: sqlite3.Connection, sql: str, params: tuple) -> None:
@@ -235,6 +243,282 @@ class SqliteCollaborationRepository:
             ),
         )
         return receipt
+
+    def get_task_origin(self, object_id: str) -> TaskOrigin | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_task_origins WHERE object_id = ?",
+            (object_id,),
+        ).fetchone()
+        return None if row is None else self._origin_from_row(row)
+
+    def get_task_origin_by_external(
+        self, *, tenant_id: str, provider: str, external_event_id: str
+    ) -> TaskOrigin | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_task_origins
+            WHERE tenant_id = ? AND provider = ? AND external_event_id = ?
+            """,
+            (tenant_id, provider, external_event_id),
+        ).fetchone()
+        return None if row is None else self._origin_from_row(row)
+
+    def record_accepted_origin(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> tuple[TaskOrigin, InboundEventReceipt, bool]:
+        """Atomically persist accepted intake origin + linked receipt."""
+
+        self._validate_accepted_origin_inputs(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source_reference,
+            location_reference=location_reference,
+            parent_location_reference=parent_location_reference,
+            endpoint_id=endpoint_id,
+        )
+        existing = self.get_task_origin_by_external(
+            tenant_id=origin.tenant_id,
+            provider=origin.provider,
+            external_event_id=origin.external_event_id,
+        )
+        if existing is not None:
+            prior_receipt = self.get_inbound_receipt_by_external(
+                tenant_id=origin.tenant_id,
+                provider=origin.provider,
+                external_event_id=origin.external_event_id,
+            )
+            if prior_receipt is None:
+                raise NotFoundGovernanceError(
+                    "task origin exists without inbound receipt"
+                )
+            return existing, prior_receipt, False
+
+        prior_receipt = self.get_inbound_receipt_by_external(
+            tenant_id=origin.tenant_id,
+            provider=origin.provider,
+            external_event_id=origin.external_event_id,
+        )
+        if prior_receipt is not None:
+            # Crash/retry: receipt landed without origin. Complete the origin only
+            # when the prior receipt already points at this origin object.
+            if (
+                prior_receipt.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
+                and prior_receipt.task_origin_object_id == origin.object_id
+                and prior_receipt.receipt_id == origin.inbound_receipt_id
+            ):
+                previous = self._conn.isolation_level
+                self._conn.isolation_level = None
+                try:
+                    self._conn.execute("BEGIN IMMEDIATE")
+                    again = self.get_task_origin_by_external(
+                        tenant_id=origin.tenant_id,
+                        provider=origin.provider,
+                        external_event_id=origin.external_event_id,
+                    )
+                    if again is not None:
+                        self._conn.execute("COMMIT")
+                        return again, prior_receipt, False
+                    self.save_external_reference(source_reference)
+                    self.save_external_reference(location_reference)
+                    if parent_location_reference is not None:
+                        self.save_external_reference(parent_location_reference)
+                    revisions = SqliteRevisionRepository(self._conn)
+                    if revisions.get_object(origin.object_id) is None:
+                        revisions.register_object(
+                            GovernanceObject(
+                                object_id=origin.object_id,
+                                tenant_id=origin.tenant_id,
+                                object_type="TaskOrigin",
+                                created_at=origin.created_at,
+                                created_by_actor_id=origin.created_by_actor_id,
+                            )
+                        )
+                    self._insert_task_origin(origin)
+                    self._conn.execute("COMMIT")
+                    return origin, prior_receipt, True
+                except Exception:
+                    self._conn.execute("ROLLBACK")
+                    raise
+                finally:
+                    self._conn.isolation_level = previous
+            raise IdempotencyConflictError(
+                "inbound receipt exists without a compatible task origin"
+            )
+
+        previous = self._conn.isolation_level
+        self._conn.isolation_level = None
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            # Re-check inside the transaction for crash/retry races.
+            existing = self.get_task_origin_by_external(
+                tenant_id=origin.tenant_id,
+                provider=origin.provider,
+                external_event_id=origin.external_event_id,
+            )
+            if existing is not None:
+                found_receipt = self.get_inbound_receipt_by_external(
+                    tenant_id=origin.tenant_id,
+                    provider=origin.provider,
+                    external_event_id=origin.external_event_id,
+                )
+                assert found_receipt is not None
+                self._conn.execute("COMMIT")
+                return existing, found_receipt, False
+
+            self.save_external_reference(source_reference)
+            self.save_external_reference(location_reference)
+            if parent_location_reference is not None:
+                self.save_external_reference(parent_location_reference)
+
+            revisions = SqliteRevisionRepository(self._conn)
+            if revisions.get_object(origin.object_id) is None:
+                revisions.register_object(
+                    GovernanceObject(
+                        object_id=origin.object_id,
+                        tenant_id=origin.tenant_id,
+                        object_type="TaskOrigin",
+                        created_at=origin.created_at,
+                        created_by_actor_id=origin.created_by_actor_id,
+                    )
+                )
+
+            # Receipt first so origin can reference it.
+            self.save_inbound_receipt(receipt, endpoint_id=endpoint_id)
+            self._insert_task_origin(origin)
+            self._conn.execute("COMMIT")
+            return origin, receipt, True
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._conn.isolation_level = previous
+
+    def _validate_accepted_origin_inputs(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        parent_location_reference: ExternalReference | None,
+        endpoint_id: str | None,
+    ) -> None:
+        if receipt.processing_outcome is not ProcessingOutcome.ACCEPTED_ORIGIN:
+            raise MalformedCommandError(
+                "task origins require accepted_origin receipts"
+            )
+        if receipt.task_origin_object_id != origin.object_id:
+            raise MalformedCommandError(
+                "receipt.task_origin_object_id must equal origin.object_id"
+            )
+        if origin.inbound_receipt_id != receipt.receipt_id:
+            raise MalformedCommandError(
+                "origin.inbound_receipt_id must equal receipt.receipt_id"
+            )
+        if origin.tenant_id != receipt.tenant_id:
+            raise CrossTenantAccessError("origin/receipt tenant mismatch")
+        if (
+            origin.provider != receipt.provider
+            or origin.external_event_id != receipt.external_event_id
+        ):
+            raise MalformedCommandError("origin external event must match receipt")
+        if origin.source_reference_id != source_reference.reference_id:
+            raise MalformedCommandError("source_reference must match origin")
+        if receipt.signed_source_reference_id != source_reference.reference_id:
+            raise MalformedCommandError("source_reference must match receipt")
+        if location_reference.reference_id != origin.location_reference_id:
+            raise MalformedCommandError("location_reference must match origin")
+        for ref in (source_reference, location_reference, parent_location_reference):
+            if ref is None:
+                continue
+            if ref.tenant_id != origin.tenant_id:
+                raise CrossTenantAccessError("origin reference tenant mismatch")
+        if parent_location_reference is not None:
+            if (
+                origin.parent_location_reference_id
+                != parent_location_reference.reference_id
+            ):
+                raise MalformedCommandError(
+                    "parent_location_reference must match origin"
+                )
+        elif origin.parent_location_reference_id is not None:
+            raise MalformedCommandError(
+                "parent_location_reference required when origin has parent id"
+            )
+        effective_endpoint = endpoint_id or origin.endpoint_id
+        if effective_endpoint is not None:
+            self.require_endpoint(effective_endpoint, tenant_id=origin.tenant_id)
+        actor = self._conn.execute(
+            "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
+            (origin.actor_id,),
+        ).fetchone()
+        if actor is None:
+            raise NotFoundGovernanceError(f"unknown actor {origin.actor_id}")
+        if str(actor["tenant_id"]) != origin.tenant_id:
+            raise CrossTenantAccessError("origin actor tenant mismatch")
+
+    def _insert_task_origin(self, origin: TaskOrigin) -> None:
+        _insert_immutable(
+            self._conn,
+            """
+            INSERT INTO gov_task_origins(
+                object_id, tenant_id, actor_id, inbound_receipt_id, source_reference_id,
+                provider, external_event_id, subject_text, body_text, location_kind,
+                location_reference_id, parent_location_reference_id, endpoint_id,
+                created_at, created_by_actor_id, adapter_metadata_json, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                origin.object_id,
+                origin.tenant_id,
+                origin.actor_id,
+                origin.inbound_receipt_id,
+                origin.source_reference_id,
+                origin.provider,
+                origin.external_event_id,
+                origin.subject_text,
+                origin.body_text,
+                origin.location_kind.value,
+                origin.location_reference_id,
+                origin.parent_location_reference_id,
+                origin.endpoint_id,
+                origin.created_at.isoformat(),
+                origin.created_by_actor_id,
+                json.dumps(dict(origin.adapter_metadata), sort_keys=True),
+                origin.schema_version,
+            ),
+        )
+
+    @staticmethod
+    def _origin_from_row(row: sqlite3.Row) -> TaskOrigin:
+        parent = row["parent_location_reference_id"]
+        endpoint = row["endpoint_id"]
+        return TaskOrigin(
+            object_id=str(row["object_id"]),
+            tenant_id=str(row["tenant_id"]),
+            actor_id=str(row["actor_id"]),
+            inbound_receipt_id=str(row["inbound_receipt_id"]),
+            source_reference_id=str(row["source_reference_id"]),
+            provider=str(row["provider"]),
+            external_event_id=str(row["external_event_id"]),
+            subject_text=str(row["subject_text"]),
+            body_text=str(row["body_text"]),
+            location_kind=LocationKind(str(row["location_kind"])),
+            location_reference_id=str(row["location_reference_id"]),
+            parent_location_reference_id=None if parent is None else str(parent),
+            endpoint_id=None if endpoint is None else str(endpoint),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            adapter_metadata=json.loads(str(row["adapter_metadata_json"])),
+            schema_version=str(row["schema_version"]),
+        )
 
     @staticmethod
     def _endpoint_from_row(row: sqlite3.Row) -> CollaborationEndpoint:

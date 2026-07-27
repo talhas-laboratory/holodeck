@@ -24,6 +24,10 @@ from holodeck_governance.domain.collaboration.intake import (
     IntakePolicyInputs,
     parse_intake_command,
 )
+from holodeck_governance.domain.collaboration.origins import (
+    TaskOrigin,
+    task_origin_dedupe_key,
+)
 from holodeck_governance.domain.collaboration.outbound import (
     OutboundCollaborationMessage,
     outbound_idempotency_key,
@@ -75,6 +79,7 @@ __all__ = [
     "NormalizedInboundEvent",
     "OutboundCollaborationMessage",
     "ProcessingOutcome",
+    "TaskOrigin",
     "VerificationResult",
     "VerifiedActorIdentity",
     "actor_mapping_dedupe_key",
@@ -83,4 +88,5 @@ __all__ = [
     "outbound_idempotency_key",
     "parse_intake_command",
     "required_scenario_ids",
+    "task_origin_dedupe_key",
 ]
