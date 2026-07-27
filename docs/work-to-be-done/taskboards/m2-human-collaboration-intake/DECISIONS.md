@@ -31,3 +31,17 @@
 - M2-009 remains downstream of the provider-neutral contract and in-memory
   harness; this confirmation does not permit provider-specific domain types or
   production ingress before the guarded-start condition is resolved.
+
+## 2026-07-27 — M2-001 collaboration contract locked
+
+- Provider-neutral intake contracts and CIS-001..008 live under
+  `holodeck_governance.domain.collaboration` with design and test
+  specifications dated 2026-07-27.
+- Stable Holodeck fields are distinct from `adapter_metadata`; receipts dedupe
+  on `(tenant_id, provider, external_event_id)`; outbound status uses durable
+  outbox idempotency keys correlated to the task origin.
+- Intended M1 application-seam command types are
+  `collaboration.receipt.record`, `collaboration.origin.record`, and
+  `collaboration.outbound.enqueue`. Persistence begins in M2-002.
+- Explicit intake grammar is `@holodeck work: <subject>` (with documented
+  aliases). Ordinary conversation remains non-executable.
