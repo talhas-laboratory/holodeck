@@ -77,3 +77,12 @@
   tables; raw cross-tenant mapping inserts abort.
 - Documented verification uses `uv run --extra dev pytest -q` (also available via
   uv default dependency group `dev`).
+
+## 2026-07-27 — Exact accepted-intake mapping attribution
+
+- Accepted receipts and task origins persist `mapping_id`; receipts also persist
+  the verified inbound `external_actor_id`.
+- `accept_task_origin` requires the exact active mapping for
+  endpoint/provider/actor/`external_actor_id`, not merely *some* mapping for the
+  claimed Holodeck actor.
+- Migration v14 adds the attribution columns and tenant-coupled mapping triggers.

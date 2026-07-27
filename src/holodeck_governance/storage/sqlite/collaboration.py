@@ -202,6 +202,13 @@ class SqliteCollaborationRepository:
         )
         self._commit_write()
 
+    def get_actor_mapping(self, mapping_id: str) -> ExternalActorMapping | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_external_actor_mappings WHERE mapping_id = ?",
+            (mapping_id,),
+        ).fetchone()
+        return None if row is None else self._mapping_from_row(row)
+
     def get_active_actor_mapping(
         self,
         *,
@@ -222,6 +229,37 @@ class SqliteCollaborationRepository:
             (tenant_id, provider, actor_id, endpoint_id, BindingStatus.ACTIVE.value),
         ).fetchone()
         return None if row is None else self._mapping_from_row(row)
+
+    def require_exact_active_actor_mapping(
+        self,
+        *,
+        mapping_id: str,
+        tenant_id: str,
+        provider: str,
+        actor_id: str,
+        endpoint_id: str,
+        external_actor_id: str,
+    ) -> ExternalActorMapping:
+        mapping = self.get_actor_mapping(mapping_id)
+        if mapping is None:
+            raise MissingAuthorityError(
+                "accepted intake requires a known external actor mapping"
+            )
+        if mapping.tenant_id != tenant_id:
+            raise CrossTenantAccessError("actor mapping tenant mismatch")
+        if mapping.status is not BindingStatus.ACTIVE:
+            raise MissingAuthorityError("external actor mapping is not active")
+        if (
+            mapping.provider != provider
+            or mapping.endpoint_id != endpoint_id
+            or mapping.actor_id != actor_id
+            or mapping.external_actor_id != external_actor_id
+        ):
+            raise MissingAuthorityError(
+                "accepted intake requires the exact active mapping for "
+                "endpoint/provider/actor/external_actor"
+            )
+        return mapping
 
     def actor_may_intake(
         self, *, tenant_id: str, actor_id: str, at: datetime
@@ -328,8 +366,9 @@ class SqliteCollaborationRepository:
                 receipt_id, tenant_id, provider, external_event_id, inbound_event_id,
                 signed_source_reference_id, verification_result, processing_outcome,
                 reason_codes_json, checkpoint_token, created_at, command_id,
-                task_origin_object_id, endpoint_id, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                task_origin_object_id, endpoint_id, mapping_id, external_actor_id,
+                schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 receipt.receipt_id,
@@ -346,6 +385,8 @@ class SqliteCollaborationRepository:
                 receipt.command_id,
                 receipt.task_origin_object_id,
                 endpoint_id,
+                receipt.mapping_id,
+                receipt.external_actor_id,
                 receipt.schema_version,
             ),
         )
@@ -578,16 +619,22 @@ class SqliteCollaborationRepository:
         if origin.endpoint_id is not None and origin.endpoint_id != effective_endpoint:
             raise MalformedCommandError("origin.endpoint_id must match endpoint_id")
         self.require_active_endpoint(effective_endpoint, tenant_id=origin.tenant_id)
-        mapping = self.get_active_actor_mapping(
+        if receipt.mapping_id is None or receipt.external_actor_id is None:
+            raise MalformedCommandError(
+                "accepted intake requires mapping_id and external_actor_id on receipt"
+            )
+        if origin.mapping_id != receipt.mapping_id:
+            raise MalformedCommandError(
+                "origin.mapping_id must equal receipt.mapping_id"
+            )
+        self.require_exact_active_actor_mapping(
+            mapping_id=origin.mapping_id,
             tenant_id=origin.tenant_id,
             provider=origin.provider,
             actor_id=origin.actor_id,
             endpoint_id=effective_endpoint,
+            external_actor_id=receipt.external_actor_id,
         )
-        if mapping is None:
-            raise MissingAuthorityError(
-                "accepted intake requires an active external actor mapping"
-            )
         if not self.actor_may_intake(
             tenant_id=origin.tenant_id,
             actor_id=origin.actor_id,
@@ -613,8 +660,9 @@ class SqliteCollaborationRepository:
                 object_id, tenant_id, actor_id, inbound_receipt_id, source_reference_id,
                 provider, external_event_id, subject_text, body_text, location_kind,
                 location_reference_id, parent_location_reference_id, endpoint_id,
-                created_at, created_by_actor_id, adapter_metadata_json, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mapping_id, created_at, created_by_actor_id, adapter_metadata_json,
+                schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin.object_id,
@@ -630,6 +678,7 @@ class SqliteCollaborationRepository:
                 origin.location_reference_id,
                 origin.parent_location_reference_id,
                 origin.endpoint_id,
+                origin.mapping_id,
                 origin.created_at.isoformat(),
                 origin.created_by_actor_id,
                 json.dumps(dict(origin.adapter_metadata), sort_keys=True),
@@ -653,6 +702,7 @@ class SqliteCollaborationRepository:
             body_text=str(row["body_text"]),
             location_kind=LocationKind(str(row["location_kind"])),
             location_reference_id=str(row["location_reference_id"]),
+            mapping_id=str(row["mapping_id"]),
             parent_location_reference_id=None if parent is None else str(parent),
             endpoint_id=None if endpoint is None else str(endpoint),
             created_at=datetime.fromisoformat(str(row["created_at"])),
@@ -699,6 +749,10 @@ class SqliteCollaborationRepository:
         reasons = tuple(json.loads(str(row["reason_codes_json"])))
         origin = row["task_origin_object_id"]
         command = row["command_id"]
+        mapping = row["mapping_id"] if "mapping_id" in row.keys() else None
+        external_actor = (
+            row["external_actor_id"] if "external_actor_id" in row.keys() else None
+        )
         return InboundEventReceipt(
             receipt_id=str(row["receipt_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -713,5 +767,7 @@ class SqliteCollaborationRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
             command_id=None if command is None else str(command),
             task_origin_object_id=None if origin is None else str(origin),
+            mapping_id=None if mapping is None else str(mapping),
+            external_actor_id=None if external_actor is None else str(external_actor),
             schema_version=str(row["schema_version"]),
         )

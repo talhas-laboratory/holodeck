@@ -41,6 +41,7 @@ class TaskOrigin:
     location_reference_id: str
     created_at: datetime
     created_by_actor_id: str
+    mapping_id: str
     endpoint_id: str | None = None
     parent_location_reference_id: str | None = None
     adapter_metadata: AdapterMetadata = field(default_factory=dict)
@@ -55,6 +56,7 @@ class TaskOrigin:
             ("source_reference_id", self.source_reference_id),
             ("location_reference_id", self.location_reference_id),
             ("created_by_actor_id", self.created_by_actor_id),
+            ("mapping_id", self.mapping_id),
         ):
             require_opaque_id(value, name)
         if self.endpoint_id is not None:

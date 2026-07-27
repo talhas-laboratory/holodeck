@@ -29,6 +29,8 @@ class InboundEventReceipt:
     created_at: datetime
     command_id: str | None = None
     task_origin_object_id: str | None = None
+    mapping_id: str | None = None
+    external_actor_id: str | None = None
     schema_version: str = "m2.inbound_event_receipt.v1"
 
     def __post_init__(self) -> None:
@@ -47,12 +49,30 @@ class InboundEventReceipt:
             require_opaque_id(self.command_id, "command_id")
         if self.task_origin_object_id is not None:
             require_opaque_id(self.task_origin_object_id, "task_origin_object_id")
+        if self.mapping_id is not None:
+            require_opaque_id(self.mapping_id, "mapping_id")
+        if self.external_actor_id is not None and not self.external_actor_id.strip():
+            raise MalformedCommandError("external_actor_id must be non-empty when set")
         if (
             self.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
             and self.task_origin_object_id is None
         ):
             raise MalformedCommandError(
                 "accepted_origin receipts require task_origin_object_id"
+            )
+        if (
+            self.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
+            and self.mapping_id is None
+        ):
+            raise MalformedCommandError(
+                "accepted_origin receipts require mapping_id"
+            )
+        if (
+            self.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
+            and (self.external_actor_id is None or not self.external_actor_id.strip())
+        ):
+            raise MalformedCommandError(
+                "accepted_origin receipts require external_actor_id"
             )
         if (
             self.processing_outcome is not ProcessingOutcome.ACCEPTED_ORIGIN

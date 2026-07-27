@@ -142,6 +142,8 @@ Durable inbound receipt. Uniqueness:
 | `reason_codes` | stable | Catalog codes |
 | `command_id` | stable | Optional M1 command that processed intake |
 | `task_origin_object_id` | stable | Set only on `accepted_origin` |
+| `mapping_id` | stable | Required on `accepted_origin`; exact verified actor mapping |
+| `external_actor_id` | stable | Required on `accepted_origin`; verified inbound sender identity |
 | `checkpoint_token` | stable | Crash/retry resume token |
 | `created_at` | stable | UTC |
 
@@ -158,6 +160,13 @@ A receipt is always written once verification has been attempted for a
 deliverable event that Holodeck accepted into its inbox path. Authentication
 failures that never produce a tenant-scoped event may omit a tenant receipt;
 see CIS-001.
+
+Accepted intake must persist the verified `mapping_id` and inbound
+`external_actor_id` on the receipt and the same `mapping_id` on the task
+origin. `accept_task_origin` may only accept when that mapping is active and
+exactly matches tenant, endpoint, provider, Holodeck `actor_id`, and
+`external_actor_id`. Having *some* active mapping for the claimed actor is not
+sufficient.
 
 ### OutboundCollaborationMessage
 

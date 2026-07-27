@@ -212,11 +212,14 @@ def _origin_bundle(
     ids: FixtureIds,
     *,
     endpoint_id: str,
+    mapping: ExternalActorMapping,
     external_event_id: str = "evt-origin-1",
     subject: str = "fix flaky claim race",
     actor_id: str | None = None,
     tenant_id: str | None = None,
     verification_result: VerificationResult = VerificationResult.VERIFIED,
+    mapping_id: str | None = None,
+    external_actor_id: str | None = None,
 ):
     tenant = tenant_id or ids.tenant_alpha
     source = _ref(
@@ -243,6 +246,8 @@ def _origin_bundle(
     origin_id = generate_uuidv7()
     receipt_id = generate_uuidv7()
     body = f"@holodeck work: {subject}"
+    resolved_mapping_id = mapping_id or mapping.mapping_id
+    resolved_external_actor_id = external_actor_id or mapping.external_actor_id
     receipt = InboundEventReceipt(
         receipt_id=receipt_id,
         tenant_id=tenant,
@@ -256,6 +261,8 @@ def _origin_bundle(
         checkpoint_token=generate_uuidv7(),
         created_at=NOW,
         task_origin_object_id=origin_id,
+        mapping_id=resolved_mapping_id,
+        external_actor_id=resolved_external_actor_id,
     )
     origin = TaskOrigin(
         object_id=origin_id,
@@ -271,6 +278,7 @@ def _origin_bundle(
         location_reference_id=location.reference_id,
         parent_location_reference_id=parent.reference_id,
         endpoint_id=endpoint_id,
+        mapping_id=resolved_mapping_id,
         created_at=NOW,
         created_by_actor_id=ids.system_service,
         adapter_metadata={"thread_title": "claims"},
@@ -281,21 +289,26 @@ def _origin_bundle(
 def test_migrate_v12_creates_task_origins_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 13
+    assert governance_schema_version(conn) == 14
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     assert "gov_task_origins" in tables
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(gov_task_origins)").fetchall()
+    }
+    assert "mapping_id" in columns
 
 
 def test_accept_task_origin_persists_source_thread_context_cis008() -> None:
     conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
-    _bind_actor(service, ids, endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
     origin, receipt, source, location, parent = _origin_bundle(
-        ids, endpoint_id=endpoint.endpoint_id
+        ids, endpoint_id=endpoint.endpoint_id, mapping=mapping
     )
     result = service.accept_task_origin(
         origin=origin,
@@ -310,7 +323,10 @@ def test_accept_task_origin_persists_source_thread_context_cis008() -> None:
     assert result.origin.subject_text == "fix flaky claim race"
     assert result.origin.location_kind is LocationKind.THREAD
     assert result.origin.parent_location_reference_id == parent.reference_id
+    assert result.origin.mapping_id == mapping.mapping_id
     assert result.receipt.task_origin_object_id == origin.object_id
+    assert result.receipt.mapping_id == mapping.mapping_id
+    assert result.receipt.external_actor_id == mapping.external_actor_id
     loaded = service.get_task_origin(origin.object_id)
     assert loaded == result.origin
     assert conn.execute("SELECT COUNT(*) FROM gov_task_origins").fetchone()[0] == 1
@@ -324,9 +340,9 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
     conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
-    _bind_actor(service, ids, endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
     origin, receipt, source, location, parent = _origin_bundle(
-        ids, endpoint_id=endpoint.endpoint_id
+        ids, endpoint_id=endpoint.endpoint_id, mapping=mapping
     )
     first = service.accept_task_origin(
         origin=origin,
@@ -339,6 +355,7 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
     retry_origin, retry_receipt, _s, _l, _p = _origin_bundle(
         ids,
         endpoint_id=endpoint.endpoint_id,
+        mapping=mapping,
         external_event_id=origin.external_event_id,
     )
     retry_receipt = InboundEventReceipt(
@@ -354,6 +371,8 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
         checkpoint_token=retry_receipt.checkpoint_token,
         created_at=NOW,
         task_origin_object_id=retry_origin.object_id,
+        mapping_id=mapping.mapping_id,
+        external_actor_id=mapping.external_actor_id,
     )
     retry_origin = TaskOrigin(
         object_id=retry_origin.object_id,
@@ -369,6 +388,7 @@ def test_duplicate_accept_replays_same_origin_cis003_origin_slice() -> None:
         location_reference_id=location.reference_id,
         parent_location_reference_id=parent.reference_id,
         endpoint_id=endpoint.endpoint_id,
+        mapping_id=mapping.mapping_id,
         created_at=NOW,
         created_by_actor_id=ids.system_service,
     )
@@ -395,9 +415,12 @@ def test_cross_tenant_origin_actor_rejected() -> None:
     _conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
-    _bind_actor(service, ids, endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
     origin, receipt, source, location, parent = _origin_bundle(
-        ids, endpoint_id=endpoint.endpoint_id, actor_id=ids.human_reviewer
+        ids,
+        endpoint_id=endpoint.endpoint_id,
+        mapping=mapping,
+        actor_id=ids.human_reviewer,
     )
     with pytest.raises((CrossTenantAccessError, MissingAuthorityError)):
         service.accept_task_origin(
@@ -414,10 +437,11 @@ def test_unverified_actor_cannot_create_origin() -> None:
     _conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
-    _bind_actor(service, ids, endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
     origin, receipt, source, location, parent = _origin_bundle(
         ids,
         endpoint_id=endpoint.endpoint_id,
+        mapping=mapping,
         verification_result=VerificationResult.FAILED,
     )
     with pytest.raises(MissingAuthorityError):
@@ -435,8 +459,67 @@ def test_record_inbound_receipt_rejects_accepted_origin_shortcut() -> None:
     _conn, service, ids = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
     origin, receipt, source, _location, _parent = _origin_bundle(
-        ids, endpoint_id=endpoint.endpoint_id
+        ids, endpoint_id=endpoint.endpoint_id, mapping=mapping
     )
     with pytest.raises(MalformedCommandError):
         service.record_inbound_receipt(receipt, source_reference=source)
+
+
+def test_accept_rejects_mismatched_sender_mapping_attribution() -> None:
+    conn, service, ids = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    owner_mapping = _bind_actor(service, ids, endpoint)
+    other_actor_id = generate_uuidv7()
+    auth = SqliteAuthorityRepository(conn)
+    auth.save_actor(
+        Actor(
+            actor_id=other_actor_id,
+            tenant_id=ids.tenant_alpha,
+            kind=ActorKind.HUMAN,
+            display_name="Other",
+            created_at=FIXED_CLOCK,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    _grant_intake_authority(conn, ids, actor_id=other_actor_id)
+    other_mapping = _bind_actor(service, ids, endpoint, actor_id=other_actor_id)
+
+    # Verified sender is "other", but origin attributes via owner's mapping/actor.
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids,
+        endpoint_id=endpoint.endpoint_id,
+        mapping=owner_mapping,
+        actor_id=ids.human_owner,
+        external_actor_id=other_mapping.external_actor_id,
+    )
+    with pytest.raises(MissingAuthorityError):
+        service.accept_task_origin(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source,
+            location_reference=location,
+            parent_location_reference=parent,
+            endpoint_id=endpoint.endpoint_id,
+        )
+
+    # Sender external id matches other mapping, but claimed Holodeck actor is owner.
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids,
+        endpoint_id=endpoint.endpoint_id,
+        mapping=other_mapping,
+        actor_id=ids.human_owner,
+        external_event_id="evt-misattrib-2",
+    )
+    with pytest.raises(MissingAuthorityError):
+        service.accept_task_origin(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source,
+            location_reference=location,
+            parent_location_reference=parent,
+            endpoint_id=endpoint.endpoint_id,
+        )
+    assert conn.execute("SELECT COUNT(*) FROM gov_task_origins").fetchone()[0] == 0

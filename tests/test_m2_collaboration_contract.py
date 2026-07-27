@@ -55,6 +55,7 @@ ORIGIN = "00000000-0000-7000-8000-0000000000c1"
 MESSAGE = "00000000-0000-7000-8000-0000000000c2"
 COMMAND = "00000000-0000-7000-8000-0000000000c3"
 CHECKPOINT = "00000000-0000-7000-8000-0000000000c4"
+MAPPING = "00000000-0000-7000-8000-0000000000c5"
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 
 
@@ -231,6 +232,8 @@ def test_receipt_dedupe_and_accepted_origin_invariant() -> None:
         created_at=NOW,
         command_id=COMMAND,
         task_origin_object_id=ORIGIN,
+        mapping_id=MAPPING,
+        external_actor_id="ext-actor-1",
     )
     assert inbound_receipt_dedupe_key(receipt) == (TENANT, "memory", "evt-1")
     with pytest.raises(MalformedCommandError):
@@ -246,6 +249,21 @@ def test_receipt_dedupe_and_accepted_origin_invariant() -> None:
             reason_codes=("reason.allowed",),
             checkpoint_token=CHECKPOINT,
             created_at=NOW,
+        )
+    with pytest.raises(MalformedCommandError):
+        InboundEventReceipt(
+            receipt_id=RECEIPT,
+            tenant_id=TENANT,
+            provider="memory",
+            external_event_id="evt-1",
+            inbound_event_id=INBOUND,
+            signed_source_reference_id=SOURCE_REF,
+            verification_result=VerificationResult.VERIFIED,
+            processing_outcome=ProcessingOutcome.ACCEPTED_ORIGIN,
+            reason_codes=("reason.allowed",),
+            checkpoint_token=CHECKPOINT,
+            created_at=NOW,
+            task_origin_object_id=ORIGIN,
         )
 
 

@@ -159,6 +159,8 @@ def test_accept_task_origin_rejects_failed_verification_without_mapping() -> Non
         checkpoint_token=generate_uuidv7(),
         created_at=NOW,
         task_origin_object_id=origin_id,
+        mapping_id=generate_uuidv7(),
+        external_actor_id="ext-unmapped",
     )
     origin = TaskOrigin(
         object_id=origin_id,
@@ -173,6 +175,7 @@ def test_accept_task_origin_rejects_failed_verification_without_mapping() -> Non
         location_kind=LocationKind.THREAD,
         location_reference_id=location.reference_id,
         endpoint_id=endpoint.endpoint_id,
+        mapping_id=receipt.mapping_id,
         created_at=NOW,
         created_by_actor_id=ids.system_service,
     )
