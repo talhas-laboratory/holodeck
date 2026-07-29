@@ -1,0 +1,58 @@
+"""M2-021 code-graph migration checks."""
+
+from __future__ import annotations
+
+import sqlite3
+
+from holodeck_governance.storage.sqlite.migrate_v23 import CODE_GRAPH_TABLES
+from holodeck_governance.storage.sqlite.migrations import (
+    governance_schema_version,
+    migrate_governance,
+    rollback_governance_migration,
+)
+
+
+def test_migration_23_creates_code_graph_tables_and_active_index() -> None:
+    conn = sqlite3.connect(":memory:")
+    migrate_governance(conn)
+    assert governance_schema_version(conn) >= 23
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    for table in CODE_GRAPH_TABLES:
+        assert table in tables
+    indexes = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+    }
+    assert "gov_code_graph_snapshots_one_active" in indexes
+    assert "gov_code_entity_facts_lookup" in indexes
+    assert "gov_code_relation_facts_expand" in indexes
+
+
+def test_migration_23_is_additive_from_v22_baseline() -> None:
+    conn = sqlite3.connect(":memory:")
+    migrate_governance(conn)
+    # Simulate starting from v22 by rolling back 23 then re-applying.
+    rollback_governance_migration(conn, 23)
+    assert governance_schema_version(conn) == 22
+    tables = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "gov_code_graph_snapshots" not in tables
+    migrate_governance(conn)
+    assert governance_schema_version(conn) >= 23
+    assert "gov_code_graph_snapshots" in {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }

@@ -1,6 +1,6 @@
 # M2-022 — Implement the Python reference extractor
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
 **Depends on:** M2-019, M2-020
 

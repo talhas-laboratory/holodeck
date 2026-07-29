@@ -22,8 +22,8 @@
 | `M2-018` | done | cursor | Preserve conversation context manifests on task origins | M2-003, M2-008 |
 | `M2-019` | done | cursor | Define factual code-graph contracts and golden fixture | M2-016 |
 | `M2-020` | done | cursor | Establish extractor port and provider assessment | M2-019 |
-| `M2-021` | ready | unassigned | Persist immutable code-graph snapshots in SQLite | M2-019 |
-| `M2-022` | backlog | unassigned | Implement the Python reference extractor | M2-019, M2-020 |
+| `M2-021` | done | cursor | Persist immutable code-graph snapshots in SQLite | M2-019 |
+| `M2-022` | ready | unassigned | Implement the Python reference extractor | M2-019, M2-020 |
 | `M2-023` | backlog | unassigned | Ingest, validate, and activate factual graph snapshots | M2-021, M2-022 |
 | `M2-024` | backlog | unassigned | Implement safe incremental graph refresh and invalidation | M2-023 |
 | `M2-025` | backlog | unassigned | Expose bounded factual queries and high-recall sentinels | M2-023, M2-024 |

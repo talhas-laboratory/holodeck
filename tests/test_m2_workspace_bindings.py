@@ -134,7 +134,7 @@ def _ref(
 def test_migrate_v16_creates_workspace_binding_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 22
+    assert governance_schema_version(conn) == 23
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")

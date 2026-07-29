@@ -46,6 +46,10 @@ from holodeck_governance.storage.sqlite.migrate_v21 import (
 from holodeck_governance.storage.sqlite.migrate_v22 import (
     upgrade_readiness_auth_and_observation_coupling,
 )
+from holodeck_governance.storage.sqlite.migrate_v23 import (
+    CODE_GRAPH_TABLES,
+    upgrade_code_graph_persistence,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -368,6 +372,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (20, "source_promotion_decision", upgrade_source_promotion_decision),
     (21, "source_observations", upgrade_source_observations),
     (22, "readiness_auth_observation_coupling", upgrade_readiness_auth_and_observation_coupling),
+    (23, "code_graph_persistence", upgrade_code_graph_persistence),
 ]
 
 
@@ -390,6 +395,12 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 23:
+        for table in reversed(CODE_GRAPH_TABLES):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 22:
         # Column + trigger migration; rolling back removes the version marker only.
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))

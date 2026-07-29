@@ -402,3 +402,13 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
 - **Tree-sitter:** deferred preferred multi-language adapter. **Joern:** later
   deep-analysis research adapter only.
 - Assessment artifact: `artifacts/m2-code-graph-provider-assessment.md`.
+
+## 2026-07-29 — M2-021 immutable code-graph SQLite persistence
+
+- Additive migration **23** stores snapshots, extraction runs/diagnostics,
+  entity/relation facts, and snapshot memberships.
+- At most one `active` snapshot per tenant/workspace/repository binding via a
+  partial unique index; activation uses `BEGIN IMMEDIATE`, supersedes the prior
+  active row, and refuses revision mismatches / dangling endpoints.
+- Facts are insert-immutable; later snapshots reuse unchanged facts through
+  membership rows only. Failed builds never replace the active snapshot.
