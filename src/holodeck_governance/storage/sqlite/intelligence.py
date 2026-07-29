@@ -48,6 +48,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     ModuleApprovalStatus,
     ReadinessLevel,
     SectionCertainty,
+    module_ids_depending_on_source,
     SourceType,
     StaleStatus,
     TrustClass,
@@ -603,18 +604,38 @@ class SqliteWorkspaceIntelligenceRepository:
 
         observation = self.get_source_observation(observation_id)
         if observation is None:
-            self._insert_source_observation_and_point(
-                source_id=source_id,
+            modules = self.list_context_modules(
+                workspace_object_id, tenant_id=tenant_id
+            )
+            dependent_ids = module_ids_depending_on_source(modules, source_id)
+            dependent_modules = self._load_dependent_modules(
+                dependent_ids,
                 tenant_id=tenant_id,
                 workspace_object_id=workspace_object_id,
-                observed_revision=observed_revision,
-                content_hash=None,
-                observed_at=at,
-                created_at=at,
-                created_by_actor_id=actor_id,
-                observation_id=observation_id,
             )
-            self._commit_write()
+            previous = self._begin_write()
+            try:
+                self._insert_source_observation_and_point(
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                    observed_revision=observed_revision,
+                    content_hash=None,
+                    observed_at=at,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
+                    observation_id=observation_id,
+                )
+                self._mark_source_and_modules_stale_in_txn(
+                    existing,
+                    modules=dependent_modules,
+                    actor_id=actor_id,
+                    at=at,
+                )
+                self._commit_txn(previous)
+            except Exception:
+                self._rollback_txn(previous)
+                raise
             return
 
         if observation.source_id != source_id:

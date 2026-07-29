@@ -1,7 +1,7 @@
 # M2-024 — Implement safe incremental graph refresh and invalidation
 
-**Status:** ready
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-023
 
 ## Objective

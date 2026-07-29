@@ -337,9 +337,12 @@ class PythonStdlibAstExtractor:
         selected: list[Path] = []
         for path in _iter_repo_files(root):
             relative = path.relative_to(root).as_posix()
-            if request.path_includes and not any(
+            includes = tuple(
+                dict.fromkeys((*request.path_includes, *request.changed_paths))
+            )
+            if includes and not any(
                 relative == inc or relative.startswith(inc.rstrip("/") + "/")
-                for inc in request.path_includes
+                for inc in includes
             ):
                 continue
             if any(

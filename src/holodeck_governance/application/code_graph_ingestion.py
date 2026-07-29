@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Protocol
 
 from holodeck_governance.application.repository_extractor import (
+    ExtractionCoverage,
     ExtractionRequest,
     ExtractionResult,
     RepositoryExtractor,
@@ -48,6 +49,7 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     CoverageStatus,
     ExtractionLimits,
     ExtractionRunStatus,
+    IncrementalMergeStats,
     RepositoryExtractionRun,
     RepositoryGraphSnapshot,
     SnapshotStatus,
@@ -55,7 +57,19 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     assert_relation_endpoints_resolve,
     assert_snapshot_counts_match,
     code_graph_error,
+    merge_incremental_facts,
+    plan_incremental_refresh,
     require_immutable_repository_revision,
+)
+
+_TRUNCATION_DIAGNOSTIC_CODES = frozenset(
+    {
+        "file_limit",
+        "entity_limit",
+        "relation_limit",
+        "time_limit",
+        "file_too_large",
+    }
 )
 
 M2_CODE_GRAPH_EVENT_SCHEMA_VERSION = "m2.workspace.code_graph.event.v1"
@@ -97,6 +111,7 @@ class GraphBuildRequest:
     base_snapshot_id: str | None = None
     path_includes: tuple[str, ...] = ()
     path_excludes: tuple[str, ...] = ()
+    changed_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -120,6 +135,17 @@ class GraphBuildRequest:
                 CodeGraphReason.QUERY_LIMIT,
                 "build requests require at least one of max_files or max_entities",
             )
+        for name, values in (
+            ("path_includes", self.path_includes),
+            ("path_excludes", self.path_excludes),
+            ("changed_paths", self.changed_paths),
+        ):
+            for item in values:
+                if not item.strip():
+                    raise code_graph_error(
+                        CodeGraphReason.MALFORMED_FACT,
+                        f"{name} entries must be non-empty",
+                    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +163,12 @@ class GraphBuildResult:
     replayed: bool
     coverage_notes: tuple[str, ...] = ()
     diagnostics: tuple[str, ...] = ()
+    reused_entity_count: int = 0
+    rebuilt_entity_count: int = 0
+    reused_relation_count: int = 0
+    rebuilt_relation_count: int = 0
+    incremental: bool = False
+    fallback_full: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +277,16 @@ class CodeGraphStorePort(Protocol):
     def list_snapshot_entities(
         self, snapshot_id: str, *, tenant_id: str
     ) -> tuple[CodeEntityFact, ...]:
+        ...
+
+    def list_snapshot_relations(
+        self, snapshot_id: str, *, tenant_id: str
+    ) -> tuple[CodeRelationFact, ...]:
+        ...
+
+    def require_snapshot(
+        self, snapshot_id: str, *, tenant_id: str
+    ) -> RepositoryGraphSnapshot:
         ...
 
 
@@ -425,18 +467,20 @@ class CodeGraphIngestionService:
             )
         )
 
+        incremental = False
+        fallback_full = False
+        merge_stats = IncrementalMergeStats(
+            reused_entities=0,
+            rebuilt_entities=0,
+            reused_relations=0,
+            rebuilt_relations=0,
+        )
+
         try:
-            extraction = self._extractor.extract(
-                ExtractionRequest(
-                    repository_path=request.repository_path,
-                    tenant_id=request.tenant_id,
-                    workspace_object_id=request.workspace_object_id,
-                    repository_binding_id=binding.binding_id,
-                    requested_revision=request.requested_revision,
-                    limits=request.limits,
-                    path_includes=request.path_includes,
-                    path_excludes=request.path_excludes,
-                    base_snapshot_id=request.base_snapshot_id,
+            extraction, incremental, fallback_full, merge_stats = (
+                self._extract_for_build(
+                    request=request,
+                    binding=binding,
                 )
             )
         except Exception as exc:
@@ -468,6 +512,8 @@ class CodeGraphIngestionService:
                 replayed=False,
                 coverage_notes=("extraction failed before persistence",),
                 diagnostics=(str(exc),),
+                incremental=incremental,
+                fallback_full=fallback_full,
             )
             self._save_receipt(
                 request=request,
@@ -488,7 +534,155 @@ class CodeGraphIngestionService:
             extraction_run_id=extraction_run_id,
             fingerprint=fingerprint,
             event_types=event_types,
+            merge_stats=merge_stats,
+            incremental=incremental,
+            fallback_full=fallback_full,
         )
+
+    def _extract_for_build(
+        self,
+        *,
+        request: GraphBuildRequest,
+        binding: RepositoryBinding,
+    ) -> tuple[ExtractionResult, bool, bool, IncrementalMergeStats]:
+        """Extract facts, optionally merging an incremental neighborhood."""
+
+        empty_stats = IncrementalMergeStats(
+            reused_entities=0,
+            rebuilt_entities=0,
+            reused_relations=0,
+            rebuilt_relations=0,
+        )
+
+        if request.base_snapshot_id is not None and request.changed_paths:
+            base = self._graphs.require_snapshot(
+                request.base_snapshot_id, tenant_id=request.tenant_id
+            )
+            if base.workspace_object_id != request.workspace_object_id:
+                raise MalformedCommandError(
+                    "base snapshot does not belong to workspace"
+                )
+            if base.repository_binding_id != binding.binding_id:
+                raise MalformedCommandError(
+                    "base snapshot does not belong to repository binding"
+                )
+            base_entities = self._graphs.list_snapshot_entities(
+                base.snapshot_id, tenant_id=request.tenant_id
+            )
+            base_relations = self._graphs.list_snapshot_relations(
+                base.snapshot_id, tenant_id=request.tenant_id
+            )
+            plan = plan_incremental_refresh(
+                changed_paths=request.changed_paths,
+                base_entities=base_entities,
+                base_relations=base_relations,
+            )
+            if not plan.fallback_full:
+                path_includes = tuple(
+                    sorted(
+                        set(request.path_includes)
+                        | set(plan.reextract_paths)
+                    )
+                )
+                neighborhood = self._extractor.extract(
+                    self._extraction_request(
+                        request,
+                        binding=binding,
+                        path_includes=path_includes,
+                    )
+                )
+                merged_entities, merged_relations, stats = merge_incremental_facts(
+                    base_entities=base_entities,
+                    base_relations=base_relations,
+                    extracted_entities=neighborhood.candidate_entities,
+                    extracted_relations=neighborhood.candidate_relations,
+                    reextract_paths=plan.reextract_paths,
+                )
+                try:
+                    if not merged_entities:
+                        raise code_graph_error(
+                            CodeGraphReason.MALFORMED_FACT,
+                            "incremental merge produced no entities",
+                        )
+                    assert_relation_endpoints_resolve(
+                        entities=merged_entities,
+                        relations=merged_relations,
+                    )
+                except Exception:
+                    full = self._extractor.extract(
+                        self._extraction_request(
+                            request, binding=binding, path_includes=request.path_includes
+                        )
+                    )
+                    return full, True, True, empty_stats
+
+                coverage = self._coverage_after_merge(neighborhood)
+                merged = ExtractionResult(
+                    actual_revision=neighborhood.actual_revision,
+                    provider=neighborhood.provider,
+                    candidate_entities=merged_entities,
+                    candidate_relations=merged_relations,
+                    diagnostics=neighborhood.diagnostics,
+                    coverage=coverage,
+                )
+                return merged, True, False, stats
+
+            full = self._extractor.extract(
+                self._extraction_request(
+                    request, binding=binding, path_includes=request.path_includes
+                )
+            )
+            return full, True, True, empty_stats
+
+        if request.base_snapshot_id is not None and not request.changed_paths:
+            # Base without a trusted changed-path set cannot prove a safe
+            # neighborhood — fall back to a full extract.
+            full = self._extractor.extract(
+                self._extraction_request(
+                    request, binding=binding, path_includes=request.path_includes
+                )
+            )
+            return full, True, True, empty_stats
+
+        full = self._extractor.extract(
+            self._extraction_request(
+                request, binding=binding, path_includes=request.path_includes
+            )
+        )
+        return full, False, False, empty_stats
+
+    def _extraction_request(
+        self,
+        request: GraphBuildRequest,
+        *,
+        binding: RepositoryBinding,
+        path_includes: tuple[str, ...],
+    ) -> ExtractionRequest:
+        return ExtractionRequest(
+            repository_path=request.repository_path,
+            tenant_id=request.tenant_id,
+            workspace_object_id=request.workspace_object_id,
+            repository_binding_id=binding.binding_id,
+            requested_revision=request.requested_revision,
+            limits=request.limits,
+            path_includes=path_includes,
+            path_excludes=request.path_excludes,
+            changed_paths=request.changed_paths,
+            base_snapshot_id=request.base_snapshot_id,
+        )
+
+    @staticmethod
+    def _coverage_after_merge(neighborhood: ExtractionResult) -> ExtractionCoverage:
+        truncated = any(
+            item.code in _TRUNCATION_DIAGNOSTIC_CODES
+            for item in neighborhood.diagnostics
+        )
+        if truncated:
+            notes = neighborhood.coverage.notes or (
+                "neighborhood extract reported truncation diagnostics",
+            )
+            return ExtractionCoverage(status=CoverageStatus.PARTIAL, notes=notes)
+        return ExtractionCoverage(status=CoverageStatus.COMPLETE)
 
     def _persist_and_activate(
         self,
@@ -501,7 +695,16 @@ class CodeGraphIngestionService:
         extraction_run_id: str,
         fingerprint: str,
         event_types: list[str],
+        merge_stats: IncrementalMergeStats | None = None,
+        incremental: bool = False,
+        fallback_full: bool = False,
     ) -> GraphBuildResult:
+        stats = merge_stats or IncrementalMergeStats(
+            reused_entities=0,
+            rebuilt_entities=0,
+            reused_relations=0,
+            rebuilt_relations=0,
+        )
         if extraction.actual_revision != request.requested_revision:
             raise code_graph_error(
                 CodeGraphReason.REVISION_MISMATCH,
@@ -552,6 +755,12 @@ class CodeGraphIngestionService:
                 replayed=False,
                 coverage_notes=("normalization/validation failed",),
                 diagnostics=(str(exc),),
+                reused_entity_count=stats.reused_entities,
+                rebuilt_entity_count=stats.rebuilt_entities,
+                reused_relation_count=stats.reused_relations,
+                rebuilt_relation_count=stats.rebuilt_relations,
+                incremental=incremental,
+                fallback_full=fallback_full,
             )
             self._save_receipt(
                 request=request,
@@ -667,6 +876,12 @@ class CodeGraphIngestionService:
                     replayed=False,
                     coverage_notes=policy_notes,
                     diagnostics=tuple(d.code for d in extraction.diagnostics),
+                    reused_entity_count=stats.reused_entities,
+                    rebuilt_entity_count=stats.rebuilt_entities,
+                    reused_relation_count=stats.reused_relations,
+                    rebuilt_relation_count=stats.rebuilt_relations,
+                    incremental=incremental,
+                    fallback_full=fallback_full,
                 )
                 self._save_receipt(
                     request=request,
@@ -728,6 +943,12 @@ class CodeGraphIngestionService:
                 replayed=False,
                 coverage_notes=(f"activation/persist failed: {exc}",),
                 diagnostics=tuple(d.code for d in extraction.diagnostics),
+                reused_entity_count=stats.reused_entities,
+                rebuilt_entity_count=stats.rebuilt_entities,
+                reused_relation_count=stats.reused_relations,
+                rebuilt_relation_count=stats.rebuilt_relations,
+                incremental=incremental,
+                fallback_full=fallback_full,
             )
             self._save_receipt(
                 request=request,
@@ -790,6 +1011,12 @@ class CodeGraphIngestionService:
             replayed=False,
             coverage_notes=activated.coverage_notes,
             diagnostics=tuple(d.code for d in extraction.diagnostics),
+            reused_entity_count=stats.reused_entities,
+            rebuilt_entity_count=stats.rebuilt_entities,
+            reused_relation_count=stats.reused_relations,
+            rebuilt_relation_count=stats.rebuilt_relations,
+            incremental=incremental,
+            fallback_full=fallback_full,
         )
         self._save_receipt(
             request=request,
@@ -907,6 +1134,7 @@ class CodeGraphIngestionService:
                 "base_snapshot_id": request.base_snapshot_id,
                 "path_includes": list(request.path_includes),
                 "path_excludes": list(request.path_excludes),
+                "changed_paths": list(request.changed_paths),
                 "limits": {
                     "max_files": request.limits.max_files,
                     "max_file_bytes": request.limits.max_file_bytes,

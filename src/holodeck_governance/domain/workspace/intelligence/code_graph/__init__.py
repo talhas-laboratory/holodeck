@@ -18,6 +18,14 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.extractors imp
     assert_relation_catalog_closed,
     relation_kinds_covered,
 )
+from holodeck_governance.domain.workspace.intelligence.code_graph.incremental import (
+    IncrementalMergeStats,
+    IncrementalRefreshPlan,
+    NormalizedSnapshotFacts,
+    compare_normalized_snapshots,
+    merge_incremental_facts,
+    plan_incremental_refresh,
+)
 from holodeck_governance.domain.workspace.intelligence.code_graph.paths import (
     normalize_repository_relative_path,
     require_immutable_repository_revision,
@@ -80,6 +88,9 @@ __all__ = [
     "ExtractionDiagnostic",
     "ExtractionLimits",
     "ExtractionRunStatus",
+    "IncrementalMergeStats",
+    "IncrementalRefreshPlan",
+    "NormalizedSnapshotFacts",
     "ObservationMethod",
     "RelationKind",
     "RepositoryExtractionRun",
@@ -95,7 +106,10 @@ __all__ = [
     "build_entity_key",
     "build_relation_key",
     "code_graph_error",
+    "compare_normalized_snapshots",
+    "merge_incremental_facts",
     "normalize_repository_relative_path",
+    "plan_incremental_refresh",
     "relation_kinds_covered",
     "require_immutable_repository_revision",
 ]

@@ -474,3 +474,20 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
 - Migration v24 rebuilds entity, relation, and membership tables in dependency
   order under normal foreign-key enforcement. The migration is covered against
   a populated v23 graph, not only an empty database.
+
+## 2026-07-29 — M2-024 safe incremental code-graph refresh
+
+- Incremental builds accept `base_snapshot_id` + trusted `changed_paths`.
+  Empty changed paths with a base snapshot fall back to full extraction
+  (`fallback_full=True`); they never claim a safe neighborhood from absence.
+- Domain `plan_incremental_refresh` expands via impact relations (imports,
+  calls, inherits, defines, tests, reads/writes, exposes, handles, configures,
+  migrates) and deliberately excludes `CONTAINS` to avoid whole-tree pull.
+- `merge_incremental_facts` reuses base entities outside the neighborhood and
+  remaps extract relation endpoints onto final entity ids by `entity_key` so
+  structural edges (e.g. directory→file `CONTAINS`) stay intact without
+  rebuilding directories.
+- New source observations on existing repository-file sources mark the source
+  and only modules that list that source as stale (existing M2-016 seam).
+- Partial neighborhood extracts still cannot activate; no `allow_partial`
+  boolean. Metrics: `artifacts/m2-024-incremental-refresh-metrics.json`.
