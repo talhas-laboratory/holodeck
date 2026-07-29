@@ -517,3 +517,16 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
 - M2-011 remains open to consolidate this handoff into the final M2→M3 packet;
   M2-009 Buzz remains gated.
 
+## 2026-07-29 — M2-011 publish M2 contracts and M3 handoff
+
+- Published stable M2 contracts index (`artifacts/m2-contracts-index.md`),
+  consolidated acceptance evidence
+  (`artifacts/m2-consolidated-acceptance-evidence.md`), and the independent
+  M2→M3 handoff (`artifacts/m2-to-m3-handoff.md`).
+- Graph handoff from M2-026 is incorporated by reference; Buzz (M2-009) remains
+  gated and is explicitly not published as ready.
+- M3-000 is unblocked for contract validation and benchmark protocol lock;
+  M2-011 does not implement M3 features.
+- Board artifacts/ indexed and symlinked; smoke test
+  `tests/test_m2_011_handoff_artifacts.py` guards required headings.
+

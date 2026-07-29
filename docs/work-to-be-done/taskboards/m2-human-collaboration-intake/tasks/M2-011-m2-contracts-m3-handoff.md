@@ -1,7 +1,7 @@
 # M2-011 — Publish M2 contracts and M3 handoff
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-010, M2-017, M2-018, M2-026
 
 ## Objective
@@ -55,8 +55,9 @@ replacement.
 
 ## Expected artifacts
 
-- M2 contract index.
-- Consolidated M2 acceptance evidence.
-- M2-to-M3 handoff linking M2-026 graph handoff
-  (`artifacts/m2-code-graph-m3-handoff.md`, already published by M2-026).
-- Updated board and milestone documentation.
+- `artifacts/m2-contracts-index.md`
+- `artifacts/m2-consolidated-acceptance-evidence.md`
+- `artifacts/m2-to-m3-handoff.md` (links `artifacts/m2-code-graph-m3-handoff.md`)
+- Board/M3 documentation updates; artifacts indexed under
+  `m2-human-collaboration-intake/artifacts/`
+- Optional: `tests/test_m2_011_handoff_artifacts.py`

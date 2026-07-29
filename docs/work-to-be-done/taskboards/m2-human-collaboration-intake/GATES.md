@@ -46,3 +46,7 @@
 - Acceptance criteria have direct evidence.
 - Task packet, task index, lane, and updates agree.
 - Residual risks and later-milestone deferrals are explicit.
+- **M2→M3 handoff published (M2-011):** contracts index, consolidated
+  acceptance evidence, and `artifacts/m2-to-m3-handoff.md` (links M2-026 graph
+  handoff). M2-009 Buzz remains gated; M3-000 may begin without hidden chat
+  context.

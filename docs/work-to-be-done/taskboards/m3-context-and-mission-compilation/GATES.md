@@ -7,6 +7,7 @@
 
 ## Readiness
 
+- M2→M3 handoff published (M2-011); board `blocked_on` cleared.
 - M2 snapshot/query schemas and coverage semantics are accepted and pinned.
 - Benchmark arms, metrics, budgets, repetitions, and promotion thresholds are
   registered before interpretive experiments.

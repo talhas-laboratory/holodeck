@@ -25,3 +25,11 @@
   and bounded; omitted items retain reasons and retrieval handles.
 - Context expansion creates a linked immutable supplement, never a silent
   mutation of the initial packet.
+
+## 2026-07-29 — M2-011 handoff available; M3-000 unblocked
+
+- M2 published `artifacts/m2-to-m3-handoff.md`, `artifacts/m2-contracts-index.md`,
+  and `artifacts/m2-consolidated-acceptance-evidence.md` (plus M2-026 graph handoff).
+- `blocked_on: M2-011` cleared. M3-000 moves to **ready** and must still validate
+  contracts and lock benchmark arms A–D before M3-001.
+- Buzz (M2-009) is not required for M3-000.

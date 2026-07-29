@@ -1,8 +1,8 @@
 # M3-000 — Validate M3 entry, handoff, and benchmark protocol
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
-**Depends on:** M2-011
+**Depends on:** M2-011 (done — handoff artifacts published)
 
 ## Objective
 
@@ -12,15 +12,19 @@ agent quality.
 
 ## Scope
 
-- Graph handoff path ready from M2-026: `artifacts/m2-code-graph-m3-handoff.md`
-  (still depends on M2-011 for final consolidation).
+- Graph handoff path ready from M2-026: `artifacts/m2-code-graph-m3-handoff.md`.
+- Final consolidation ready from M2-011:
+  - `artifacts/m2-to-m3-handoff.md`
+  - `artifacts/m2-contracts-index.md`
+  - `artifacts/m2-consolidated-acceptance-evidence.md`
 - Validate M2 task-origin, source-manifest, workspace-model, source/module,
   readiness, repository snapshot, query, sentinel, provenance, coverage, error,
   and omission contracts.
 - Create representative task corpus categories and expert-labelled expected
   context/impact surfaces.
 - Lock benchmark arms A–D, model/harness versions, budgets, permissions,
-  repetitions, metrics, and promotion/stop thresholds.
+  repetitions, metrics, and promotion/stop thresholds (preregistered in M2
+  handoff §9 / graph handoff §10 — M3-000 must lock numbers).
 - Record missing M2 inputs as blockers; do not patch around them in M3.
 - Establish baseline full-suite and package evidence.
 
@@ -43,3 +47,9 @@ uv build
 - `artifacts/m3-entry-and-m2-contract-matrix.md`.
 - `artifacts/m3-context-quality-benchmark-protocol.md`.
 - Accepted or blocked board decision.
+
+## Note
+
+Handoff artifacts are ready. This task still requires M3-000 validation work
+(matrix + locked benchmark protocol); publication of M2-011 alone is not
+completion of M3-000.

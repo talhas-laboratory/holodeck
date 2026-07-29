@@ -6,8 +6,8 @@
 **Acceptance evidence:** `artifacts/m2-code-graph-acceptance-evidence.md`  
 **Acceptance metrics:** `artifacts/m2-026-acceptance-metrics.json`
 
-This handoff is sufficient to begin M3-000 contract validation. Final M2→M3
-publication consolidation remains **M2-011** (not completed by M2-026).
+This handoff is sufficient for graph contract details. Final M2→M3 publication
+consolidation is **M2-011** (`artifacts/m2-to-m3-handoff.md`) — completed.
 
 ---
 
@@ -253,4 +253,4 @@ M2 readiness for graph-backed work must reflect:
   `tests/test_m2_017_onboarding_refresh_acceptance.py` (prior board completion)
 - Design: `docs/plans/2026-07-29-persistent-codebase-factual-graph-design.md`
 - M3-000: `docs/work-to-be-done/taskboards/m3-context-and-mission-compilation/tasks/M3-000-entry-handoff-and-benchmark-protocol.md`
-- Final consolidation: M2-011 must include this handoff in the published M2→M3 packet
+- Final consolidation: M2-011 published `artifacts/m2-to-m3-handoff.md`
