@@ -42,6 +42,8 @@ from python_reference.golden import (  # noqa: E402
 )
 
 BINDING = "01900000-0000-7000-8000-00000000a003"
+TENANT = "01900000-0000-7000-8000-00000000a001"
+WORKSPACE = "01900000-0000-7000-8000-00000000a002"
 ASSESSMENT = ROOT / "artifacts" / "m2-code-graph-provider-assessment.md"
 FORBIDDEN_PROVIDER_IMPORTS = (
     "tree_sitter",
@@ -58,6 +60,8 @@ def _limits() -> ExtractionLimits:
 def _request(*, revision: str | None = None) -> ExtractionRequest:
     return ExtractionRequest(
         repository_path=TREES_ROOT / "rev_a",
+        tenant_id=TENANT,
+        workspace_object_id=WORKSPACE,
         repository_binding_id=BINDING,
         requested_revision=revision or fixture_revision_id("rev_a"),
         limits=_limits(),
@@ -68,6 +72,8 @@ def test_request_requires_immutable_revision_and_limits() -> None:
     with pytest.raises(MalformedCommandError, match=CodeGraphReason.MUTABLE_REVISION.value):
         ExtractionRequest(
             repository_path=TREES_ROOT / "rev_a",
+            tenant_id=TENANT,
+            workspace_object_id=WORKSPACE,
             repository_binding_id=BINDING,
             requested_revision="main",
             limits=_limits(),
@@ -75,6 +81,8 @@ def test_request_requires_immutable_revision_and_limits() -> None:
     with pytest.raises(MalformedCommandError, match=CodeGraphReason.QUERY_LIMIT.value):
         ExtractionRequest(
             repository_path=TREES_ROOT / "rev_a",
+            tenant_id=TENANT,
+            workspace_object_id=WORKSPACE,
             repository_binding_id=BINDING,
             requested_revision=fixture_revision_id("rev_a"),
             limits=ExtractionLimits(),
@@ -141,19 +149,21 @@ def test_fake_extractor_conformance_against_golden_fixture() -> None:
     assert result.actual_revision == fixture_revision_id("rev_a")
 
 
-def test_selected_python_ast_adapter_conformance_is_honest_partial() -> None:
+def test_selected_python_ast_adapter_emits_candidates_and_dynamic_diagnostic() -> None:
+    from holodeck_governance.domain.workspace.intelligence.code_graph import (
+        UNRESOLVED_DYNAMIC_CALL,
+    )
+
     extractor = PythonStdlibAstExtractor()
     caps = extractor.describe_capabilities()
     assert caps.provider.provider_key == PYTHON_AST_PROVIDER_KEY
     assert caps.supports_offline is True
     assert "python" in caps.languages
     result = run_extractor_conformance(extractor, _request())
-    assert result.coverage.status is CoverageStatus.PARTIAL
-    assert result.candidate_entities == ()
-    assert result.candidate_relations == ()
-    assert any(item.code == "extractor_deferred" for item in result.diagnostics)
-    # Stdlib ast is exercised against the fixture tree.
-    assert any("parsed" in note for note in result.coverage.notes)
+    assert result.candidate_entities
+    assert result.candidate_relations
+    assert any(item.code == UNRESOLVED_DYNAMIC_CALL for item in result.diagnostics)
+    assert result.actual_revision == fixture_revision_id("rev_a")
 
 
 def test_assessment_artifact_records_license_and_selection() -> None:

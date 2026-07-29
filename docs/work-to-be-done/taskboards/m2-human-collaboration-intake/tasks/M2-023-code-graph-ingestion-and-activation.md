@@ -1,6 +1,6 @@
 # M2-023 — Ingest, validate, and activate factual graph snapshots
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
 **Depends on:** M2-021, M2-022
 

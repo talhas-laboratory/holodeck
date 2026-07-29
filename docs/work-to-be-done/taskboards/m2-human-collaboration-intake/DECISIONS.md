@@ -412,3 +412,14 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
   active row, and refuses revision mismatches / dangling endpoints.
 - Facts are insert-immutable; later snapshots reuse unchanged facts through
   membership rows only. Failed builds never replace the active snapshot.
+
+## 2026-07-29 — M2-022 Python stdlib AST reference extractor
+
+- `python_stdlib_ast` now emits full candidate entities/relations through the
+  M2-020 port (no longer deferred/partial).
+- Resolution stays syntax-backed: import aliases, same-repo defs, constructor
+  receivers, parameter/annotation and `isinstance` type maps, and class-scoped
+  `self.*` instance attrs. Dynamic `globals()[...]` is diagnostic-only.
+- Fixture revision identity remains `fixture:<content_hash>`; requested and
+  actual revisions must match before and after extraction.
+- Metrics artifact: `artifacts/m2-022-python-extractor-metrics.json`.
