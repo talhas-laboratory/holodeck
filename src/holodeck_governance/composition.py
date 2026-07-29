@@ -21,6 +21,7 @@ from holodeck_governance.storage.sqlite.migrations import migrate_governance
 from holodeck_governance.application.code_graph_ingestion import (
     CodeGraphIngestionService,
 )
+from holodeck_governance.application.code_graph_queries import CodeGraphQueryService
 from holodeck_governance.adapters.code_graph.python_ast import PythonStdlibAstExtractor
 from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
 
@@ -88,4 +89,20 @@ def open_code_graph_ingestion_app(
         events=SqliteDomainEventRepository(conn),
         receipts=SqliteCommandReceiptRepository(conn),
         commit=conn.commit,
+    )
+
+
+def open_code_graph_query_app(database: str) -> CodeGraphQueryService:
+    """Open the read-only bounded factual code-graph query seam."""
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return CodeGraphQueryService(
+        collaboration=CollaborationApplicationService(
+            repository=SqliteCollaborationRepository(conn)
+        ),
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=SqliteCodeGraphRepository(conn),
     )

@@ -1,7 +1,7 @@
 # M2-025 — Expose bounded factual queries and high-recall sentinels
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-023, M2-024
 
 ## Objective

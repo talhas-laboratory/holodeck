@@ -491,3 +491,16 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
   and only modules that list that source as stale (existing M2-016 seam).
 - Partial neighborhood extracts still cannot activate; no `allow_partial`
   boolean. Metrics: `artifacts/m2-024-incremental-refresh-metrics.json`.
+
+## 2026-07-29 — M2-025 bounded factual queries and sentinels
+
+- Domain `queries.py` owns budgets, path/neighbor/traverse helpers, change
+  neighborhood (via incremental impact plan), provenance mapping, and snapshot
+  compare wrap. No SQL/Cypher; empty results never mean absence.
+- Domain `sentinels.py` emits only `ACTIVATED` / `UNRESOLVED` (never `cleared`)
+  for public export, API, schema/migration, manifest, configuration, tests,
+  ownership tags, sensitive paths/symbols, and partial coverage.
+- `CodeGraphQueryService` is read-only (no curate), scopes tenant/workspace/
+  binding/snapshot, and returns coverage + omissions + diagnostics on every
+  result. HTTP/CLI omitted; `open_code_graph_query_app` is optional composition.
+- Metrics: `artifacts/m2-025-code-graph-queries-metrics.json`.
