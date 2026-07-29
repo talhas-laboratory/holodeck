@@ -9,8 +9,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from holodeck_governance.adapters.code_graph.python_ast import (
     PythonStdlibAstExtractor,
     stable_source_id,
@@ -87,16 +85,14 @@ def _changed_paths_rev_b() -> tuple[str, ...]:
     return tuple(payload["revisions"]["rev_b"]["changed_paths_from_rev_a"])
 
 
-def _service() -> (
-    tuple[
-        sqlite3.Connection,
-        CodeGraphIngestionService,
-        FixtureIds,
-        str,
-        SqliteWorkspaceIntelligenceRepository,
-        SqliteCodeGraphRepository,
-    ]
-):
+def _service() -> tuple[
+    sqlite3.Connection,
+    CodeGraphIngestionService,
+    FixtureIds,
+    str,
+    SqliteWorkspaceIntelligenceRepository,
+    SqliteCodeGraphRepository,
+]:
     ids = FixtureIds()
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -620,13 +616,7 @@ def test_changed_source_stales_dependent_module() -> None:
         changed_paths=_changed_paths_rev_b(),
     )
     assert inc.status is SnapshotStatus.ACTIVE
-    assert (
-        intel.get_context_module(dependent.module_id).freshness is StaleStatus.STALE
-    )
-    assert (
-        intel.get_context_module(unrelated.module_id).freshness is StaleStatus.FRESH
-    )
+    assert intel.get_context_module(dependent.module_id).freshness is StaleStatus.STALE
+    assert intel.get_context_module(unrelated.module_id).freshness is StaleStatus.FRESH
     # Prior snapshot membership remains queryable after supersession.
-    assert graphs.list_snapshot_entities(
-        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
-    )
+    assert graphs.list_snapshot_entities(rev_a.snapshot_id, tenant_id=ids.tenant_alpha)

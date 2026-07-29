@@ -16,9 +16,9 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.spans import (
 from holodeck_governance.domain.workspace.intelligence.code_graph.types import (
     CODE_ENTITY_FACT_SCHEMA_VERSION,
     ENTITY_KEY_SCHEMA_VERSION,
+    INITIAL_ENTITY_KINDS,
     CodeGraphReason,
     EntityKind,
-    INITIAL_ENTITY_KINDS,
     ObservationMethod,
     code_graph_error,
 )

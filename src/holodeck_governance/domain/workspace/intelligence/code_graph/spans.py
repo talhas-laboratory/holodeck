@@ -42,10 +42,7 @@ class SourceSpan:
                 raise code_graph_error(
                     CodeGraphReason.INVALID_SPAN, "span columns must be >= 1"
                 )
-            if (
-                self.start_line == self.end_line
-                and self.end_column < self.start_column
-            ):
+            if self.start_line == self.end_line and self.end_column < self.start_column:
                 raise code_graph_error(
                     CodeGraphReason.INVALID_SPAN,
                     "end_column must be greater than or equal to start_column "

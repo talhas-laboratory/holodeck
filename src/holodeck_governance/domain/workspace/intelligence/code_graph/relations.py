@@ -12,10 +12,10 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.spans import (
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph.types import (
     CODE_RELATION_FACT_SCHEMA_VERSION,
-    CodeGraphReason,
     INITIAL_RELATION_KINDS,
-    ObservationMethod,
     RELATION_KEY_SCHEMA_VERSION,
+    CodeGraphReason,
+    ObservationMethod,
     RelationKind,
     code_graph_error,
 )

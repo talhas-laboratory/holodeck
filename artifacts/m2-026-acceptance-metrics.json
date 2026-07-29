@@ -23,8 +23,8 @@
     "build_rev_a": {
       "entity_count": 43,
       "relation_count": 49,
-      "seconds": 0.0143,
-      "snapshot_id": "019faf98-03ac-7c95-b8b3-1509e488d809",
+      "seconds": 0.0179,
+      "snapshot_id": "019faf9c-2052-7c0c-a645-8f0b322e357b",
       "status": "pass"
     },
     "events": {
@@ -53,10 +53,10 @@
       },
       "full_entity_count": 45,
       "full_relation_count": 53,
-      "full_seconds": 0.0133,
+      "full_seconds": 0.0132,
       "incremental_entity_count": 45,
       "incremental_relation_count": 53,
-      "incremental_seconds": 0.0149,
+      "incremental_seconds": 0.0144,
       "rebuilt_entity_count": 32,
       "rebuilt_relation_count": 42,
       "reused_entity_count": 13,

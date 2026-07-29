@@ -12,14 +12,19 @@ from holodeck_governance.application.code_graph_ingestion import (
     CodeGraphIngestionService,
     GraphBuildRequest,
 )
-from holodeck_governance.application.collaboration import CollaborationApplicationService
+from holodeck_governance.application.collaboration import (
+    CollaborationApplicationService,
+)
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.authority.assignments import RoleAssignment
 from holodeck_governance.domain.authority.roles import RoleProfile
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
 from holodeck_governance.domain.registry import GovernanceObject
-from holodeck_governance.domain.workspace import RepositoryBinding, WorkspaceBindingStatus
+from holodeck_governance.domain.workspace import (
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 from holodeck_governance.domain.workspace.intelligence import (
     INTELLIGENCE_CURATE_PERMISSION,
     M2_EVENT_CODE_GRAPH_BUILD_FAILED,
@@ -30,7 +35,9 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
 )
 from holodeck_governance.storage.sqlite.authority import SqliteAuthorityRepository
 from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
-from holodeck_governance.storage.sqlite.collaboration import SqliteCollaborationRepository
+from holodeck_governance.storage.sqlite.collaboration import (
+    SqliteCollaborationRepository,
+)
 from holodeck_governance.storage.sqlite.intelligence import (
     SqliteWorkspaceIntelligenceRepository,
 )

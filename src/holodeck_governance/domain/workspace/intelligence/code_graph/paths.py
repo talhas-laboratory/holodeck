@@ -5,8 +5,8 @@ from __future__ import annotations
 import re
 
 from holodeck_governance.domain.workspace.intelligence.code_graph.types import (
-    CodeGraphReason,
     REJECTED_REVISION_NAMES,
+    CodeGraphReason,
     code_graph_error,
 )
 

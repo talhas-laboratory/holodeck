@@ -13,9 +13,9 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.snapshots impo
     assert_relation_endpoints_resolve,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph.types import (
-    CodeGraphReason,
     INITIAL_ENTITY_KINDS,
     INITIAL_RELATION_KINDS,
+    CodeGraphReason,
     ObservationMethod,
     RelationKind,
     code_graph_error,

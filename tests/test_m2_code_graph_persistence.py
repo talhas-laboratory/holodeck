@@ -171,12 +171,13 @@ def _world(
     # Bypass curate for fixture setup via direct inserts through domain helpers
     # by granting via raw source insert path used in tests: use onboard pieces.
     # Simpler: insert source/observation using intelligence repo after granting.
+    from datetime import timedelta
+
     from holodeck_governance.domain.authority.assignments import RoleAssignment
     from holodeck_governance.domain.authority.roles import RoleProfile
     from holodeck_governance.domain.workspace.intelligence import (
         INTELLIGENCE_CURATE_PERMISSION,
     )
-    from datetime import timedelta
 
     role_object_id = generate_uuidv7()
     revisions.register_object(

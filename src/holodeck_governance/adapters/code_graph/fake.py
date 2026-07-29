@@ -10,6 +10,7 @@ from holodeck_governance.application.repository_extractor import (
     ProviderDescriptor,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph import (
+    UNRESOLVED_DYNAMIC_CALL,
     CodeEntityFact,
     CodeGraphReason,
     CodeRelationFact,
@@ -17,7 +18,6 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     EntityKind,
     ExtractionDiagnostic,
     RelationKind,
-    UNRESOLVED_DYNAMIC_CALL,
     assert_extraction_candidates_conform,
     code_graph_error,
 )

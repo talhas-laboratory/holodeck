@@ -198,10 +198,7 @@ class RepositoryGraphSnapshot:
                     CodeGraphReason.PARTIAL_COVERAGE,
                     "active snapshots cannot have unknown coverage",
                 )
-        if (
-            self.coverage_status is CoverageStatus.PARTIAL
-            and not self.coverage_notes
-        ):
+        if self.coverage_status is CoverageStatus.PARTIAL and not self.coverage_notes:
             raise code_graph_error(
                 CodeGraphReason.PARTIAL_COVERAGE,
                 "partial coverage requires explicit coverage_notes",
