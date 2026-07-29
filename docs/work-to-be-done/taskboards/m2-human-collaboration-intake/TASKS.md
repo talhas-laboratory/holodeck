@@ -18,7 +18,7 @@
 | `M2-014` | done | cursor | Implement repository/source discovery and trust classification | M2-012, M2-013 |
 | `M2-015` | done | cursor | Implement workspace curation, approval, activation, and readiness | M2-012–M2-014 |
 | `M2-016` | done | cursor | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
-| `M2-017` | ready | unassigned | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
+| `M2-017` | done | cursor | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
 | `M2-018` | done | cursor | Preserve conversation context manifests on task origins | M2-003, M2-008 |
 | `M2-019` | ready | unassigned | Define factual code-graph contracts and golden fixture | M2-016 |
 | `M2-020` | backlog | unassigned | Establish extractor port and provider assessment | M2-019 |

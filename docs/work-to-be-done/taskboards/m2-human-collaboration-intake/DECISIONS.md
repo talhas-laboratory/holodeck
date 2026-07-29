@@ -360,3 +360,15 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
 - The provider assessment and factual graph must be benchmarked against cheap
   heuristics and ordinary agent search; architectural elegance is not
   acceptance evidence.
+
+## 2026-07-29 — M2-017 onboarding/refresh acceptance path
+
+- Composed intelligence acceptance is a single pytest scenario over the existing
+  application surface (`onboard`, discover/register, decisions, activate,
+  refresh, query). No new orchestration layer or Buzz/mission objects.
+- Knowledge gaps remain insert-immutable; closure uses
+  `resolve_knowledge_gap` with an in-tenant `resolution_reference_id` (external
+  reference), not overwrite via `save_knowledge_gap`.
+- Assured-readiness bypass is rejected by the shared evidence-derived readiness
+  gate; GOVERNED activation still requires HUMAN trust + readiness decisions
+  and zero open gaps.

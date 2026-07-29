@@ -1,7 +1,7 @@
 # M2-017 — Prove workspace onboarding and refresh scenarios
 
-**Status:** ready
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-012, M2-013, M2-014, M2-015, M2-016
 
 ## Outcome
@@ -42,15 +42,26 @@ compilation.
 ## Verification
 
 ```text
-uv run --extra dev pytest -q tests/test_m2_workspace_refresh_query.py tests/test_m2_workspace_curation.py
+uv run --extra dev pytest -q tests/test_m2_017_onboarding_refresh_acceptance.py
 uv run --extra dev pytest -q
 ```
 
 ## Evidence and handoff
 
-Pending implementation.
+Acceptance scenario landed on
+`cursor/m2-017-onboarding-refresh-acceptance-2175`:
+
+- `tests/test_m2_017_onboarding_refresh_acceptance.py` covers onboard →
+  discover/register → reject assured readiness bypass → resolve open gap via
+  `resolve_knowledge_gap` → HUMAN trust + readiness decisions → activate
+  GOVERNED → refresh observations → query snapshot.
+- Asserts discovery never invents instruction authority; refresh appends
+  immutable observations while prior revisions remain queryable; snapshot
+  returns approved model, sources/modules, empty open gaps, GOVERNED readiness,
+  and stale sets; no Mission/Run objects created.
 
 ## Residual risks
 
-- Live Buzz ingress remains gated.
+- Live Buzz ingress remains gated (M2-009).
 - Typed intelligence command handlers may still be deferred.
+- Factual code-graph lane (M2-019–M2-026) and M2-011 handoff remain open.
