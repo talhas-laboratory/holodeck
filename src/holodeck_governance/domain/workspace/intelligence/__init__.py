@@ -53,6 +53,8 @@ from holodeck_governance.domain.workspace.intelligence.sources import (
 )
 from holodeck_governance.domain.workspace.intelligence.trust import (
     assert_trust_promotion_allowed,
+    assert_trust_promotion_decision_authorizes,
+    trust_promotion_requires_human_decision,
 )
 from holodeck_governance.domain.workspace.intelligence.types import (
     INTELLIGENCE_CURATE_PERMISSION,
@@ -146,6 +148,7 @@ __all__ = [
     "WorkspaceReadinessAssessment",
     "WorkspaceSource",
     "assert_trust_promotion_allowed",
+    "assert_trust_promotion_decision_authorizes",
     "classify_observed_path",
     "invent_sources_from_observations",
     "module_ids_depending_on_source",
@@ -155,6 +158,7 @@ __all__ = [
     "required_intelligence_scenario_ids",
     "section_certainty_map",
     "select_preferred_model_revision",
+    "trust_promotion_requires_human_decision",
     "validate_curation_proposal",
     "workspace_source_dedupe_key",
 ]

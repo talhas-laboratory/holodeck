@@ -37,6 +37,7 @@ class WorkspaceSource:
     content_hash: str | None = None
     provenance_reference_id: str | None = None
     module_tags: tuple[str, ...] = ()
+    promotion_decision_id: str | None = None
     schema_version: str = "m2.workspace_source.v1"
 
     def __post_init__(self) -> None:
@@ -62,6 +63,8 @@ class WorkspaceSource:
             raise MalformedCommandError("content_hash must be non-empty when set")
         if self.provenance_reference_id is not None:
             require_opaque_id(self.provenance_reference_id, "provenance_reference_id")
+        if self.promotion_decision_id is not None:
+            require_opaque_id(self.promotion_decision_id, "promotion_decision_id")
         for tag in self.module_tags:
             if not tag.strip():
                 raise MalformedCommandError("module_tags entries must be non-empty")

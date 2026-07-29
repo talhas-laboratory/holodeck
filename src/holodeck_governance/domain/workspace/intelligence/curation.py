@@ -2,7 +2,7 @@
 
 Curators emit structured proposals. Deterministic validation rejects missing IDs,
 readiness claims above evidence, governed+ readiness with open gaps, and silent
-trust escalation into instruction authority.
+trust escalation into instruction authority without a durable human decision_id.
 """
 
 from __future__ import annotations
@@ -29,13 +29,20 @@ from holodeck_governance.domain.workspace.intelligence.types import (
 
 @dataclass(frozen=True, slots=True)
 class TrustPromotion:
-    """Explicit source trust change requested by a curation proposal."""
+    """Explicit source trust change requested by a curation proposal.
+
+    ``decision_id`` is required when the elevation needs a human decision
+    (see ``trust_promotion_requires_human_decision``).
+    """
 
     source_id: str
     to_trust: TrustClass
+    decision_id: str | None = None
 
     def __post_init__(self) -> None:
         require_opaque_id(self.source_id, "source_id")
+        if self.decision_id is not None:
+            require_opaque_id(self.decision_id, "decision_id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,14 +86,13 @@ class WorkspaceCurationProposal:
 def validate_curation_proposal(
     proposal: WorkspaceCurationProposal,
     *,
-    authorized_human_promotion: bool = False,
     current_trust_by_source_id: Mapping[str, TrustClass] | None = None,
 ) -> None:
     """Reject structurally invalid curation proposals.
 
     When ``current_trust_by_source_id`` is provided, each promotion is checked
     with ``assert_trust_promotion_allowed``. Without current trust, promotions
-    targeting ``instruction_authority`` still require ``authorized_human_promotion``.
+    targeting ``instruction_authority`` still require a ``decision_id``.
     """
 
     for name, value in (
@@ -122,12 +128,12 @@ def validate_curation_proposal(
             assert_trust_promotion_allowed(
                 from_trust=from_trust,
                 to_trust=promotion.to_trust,
-                authorized_human_promotion=authorized_human_promotion,
+                decision_id=promotion.decision_id,
             )
         elif (
             promotion.to_trust is TrustClass.INSTRUCTION_AUTHORITY
-            and not authorized_human_promotion
+            and promotion.decision_id is None
         ):
             raise MalformedCommandError(
-                "instruction_authority requires explicit authorized human promotion"
+                "trust elevation requires an approved human workspace decision_id"
             )

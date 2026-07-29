@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, Sequence
 
+from holodeck_governance.domain.authority.actors import Actor
 from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     MalformedCommandError,
@@ -37,9 +38,11 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
+    assert_trust_promotion_decision_authorizes,
     invent_sources_from_observations,
     module_ids_depending_on_source,
     select_preferred_model_revision,
+    trust_promotion_requires_human_decision,
     validate_curation_proposal,
 )
 
@@ -153,9 +156,11 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
         tenant_id: str,
         to_trust: TrustClass,
         actor_id: str,
-        authorized_human_promotion: bool,
         at: datetime,
+        promotion_decision_id: str | None = None,
     ) -> WorkspaceSource: ...
+
+    def get_actor(self, actor_id: str) -> Actor | None: ...
 
     def mark_source_stale(
         self,
@@ -282,8 +287,6 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
     def activate_curation(
         self,
         proposal: WorkspaceCurationProposal,
-        *,
-        authorized_human_promotion: bool,
     ) -> tuple[
         WorkspaceModelRevision,
         tuple[ContextModule, ...],
@@ -458,16 +461,26 @@ class WorkspaceIntelligenceApplicationService:
         tenant_id: str,
         to_trust: TrustClass,
         actor_id: str,
-        authorized_human_promotion: bool,
         at: datetime,
+        promotion_decision_id: str | None = None,
     ) -> WorkspaceSource:
+        source = self.repository.get_source(source_id)
+        if source is None:
+            raise NotFoundGovernanceError(f"unknown source {source_id}")
+        if source.tenant_id != tenant_id:
+            raise CrossTenantAccessError("source tenant mismatch")
+        if trust_promotion_requires_human_decision(source.trust_class, to_trust):
+            self._require_human_promotion_decision(
+                decision_id=promotion_decision_id,
+                source=source,
+            )
         return self.repository.update_source_trust(
             source_id,
             tenant_id=tenant_id,
             to_trust=to_trust,
             actor_id=actor_id,
-            authorized_human_promotion=authorized_human_promotion,
             at=at,
+            promotion_decision_id=promotion_decision_id,
         )
 
     def mark_source_stale(
@@ -809,8 +822,6 @@ class WorkspaceIntelligenceApplicationService:
     def validate_curation(
         self,
         proposal: WorkspaceCurationProposal,
-        *,
-        authorized_human_promotion: bool = False,
     ) -> None:
         """Load records and reject structurally or referentially invalid proposals."""
 
@@ -834,6 +845,7 @@ class WorkspaceIntelligenceApplicationService:
             )
 
         current_trust: dict[str, TrustClass] = {}
+        sources_by_id: dict[str, WorkspaceSource] = {}
         for promotion in proposal.trust_promotions:
             source = self.repository.get_source(promotion.source_id)
             if source is None:
@@ -847,6 +859,7 @@ class WorkspaceIntelligenceApplicationService:
                     "source workspace does not match curation proposal"
                 )
             current_trust[promotion.source_id] = source.trust_class
+            sources_by_id[promotion.source_id] = source
 
         for module_id in proposal.module_ids_to_approve:
             module = self.repository.get_context_module(module_id)
@@ -863,17 +876,37 @@ class WorkspaceIntelligenceApplicationService:
                     "only proposed context modules can be approved"
                 )
 
+        actual_open = {
+            gap.gap_id
+            for gap in self.repository.list_knowledge_gaps(
+                proposal.workspace_object_id,
+                tenant_id=proposal.tenant_id,
+                status=GapStatus.OPEN,
+            )
+        }
+        if set(proposal.open_gap_ids) != actual_open:
+            raise MalformedCommandError(
+                "open_gap_ids must exactly match open knowledge gaps"
+            )
+
         validate_curation_proposal(
             proposal,
-            authorized_human_promotion=authorized_human_promotion,
             current_trust_by_source_id=current_trust,
         )
+
+        for promotion in proposal.trust_promotions:
+            source = sources_by_id[promotion.source_id]
+            if trust_promotion_requires_human_decision(
+                source.trust_class, promotion.to_trust
+            ):
+                self._require_human_promotion_decision(
+                    decision_id=promotion.decision_id,
+                    source=source,
+                )
 
     def activate_curation(
         self,
         proposal: WorkspaceCurationProposal,
-        *,
-        authorized_human_promotion: bool,
     ) -> CurationActivationResult:
         """Approve model/modules, apply trust promotions, and store readiness."""
 
@@ -886,22 +919,42 @@ class WorkspaceIntelligenceApplicationService:
             raise MissingAuthorityError(
                 "actor lacks workspace.intelligence.curate authority"
             )
-        self.validate_curation(
-            proposal, authorized_human_promotion=authorized_human_promotion
-        )
+        self.validate_curation(proposal)
         (
             approved_model,
             approved_modules,
             promoted_sources,
             readiness,
             event_types,
-        ) = self.repository.activate_curation(
-            proposal, authorized_human_promotion=authorized_human_promotion
-        )
+        ) = self.repository.activate_curation(proposal)
         return CurationActivationResult(
             approved_model=approved_model,
             approved_modules=approved_modules,
             promoted_sources=promoted_sources,
             readiness=readiness,
             event_types=event_types,
+        )
+
+    def _require_human_promotion_decision(
+        self,
+        *,
+        decision_id: str | None,
+        source: WorkspaceSource,
+    ) -> None:
+        if decision_id is None:
+            raise MalformedCommandError(
+                "trust elevation requires an approved human workspace decision_id"
+            )
+        decision = self.repository.get_workspace_decision(decision_id)
+        if decision is None:
+            raise NotFoundGovernanceError(f"unknown workspace decision {decision_id}")
+        actor = self.repository.get_actor(decision.authorized_actor_id)
+        if actor is None:
+            raise NotFoundGovernanceError(
+                f"unknown actor {decision.authorized_actor_id}"
+            )
+        assert_trust_promotion_decision_authorizes(
+            decision=decision,
+            actor=actor,
+            source=source,
         )

@@ -14,6 +14,7 @@ import sqlite3
 from datetime import datetime
 from typing import Sequence
 
+from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     IdempotencyConflictError,
@@ -170,6 +171,22 @@ class SqliteWorkspaceIntelligenceRepository:
                 return True
         return False
 
+    def get_actor(self, actor_id: str) -> Actor | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_actors WHERE actor_id = ?",
+            (actor_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return Actor(
+            actor_id=str(row["actor_id"]),
+            tenant_id=str(row["tenant_id"]),
+            kind=ActorKind(str(row["kind"])),
+            display_name=str(row["display_name"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            schema_version=str(row["schema_version"]),
+        )
     def require_workspace_object(
         self, workspace_object_id: str, *, tenant_id: str
     ) -> None:
@@ -398,14 +415,14 @@ class SqliteWorkspaceIntelligenceRepository:
         source: WorkspaceSource,
         *,
         to_trust: TrustClass,
-        authorized_human_promotion: bool,
+        promotion_decision_id: str | None,
     ) -> WorkspaceSource:
         """Apply a trust promotion (caller owns txn / authority checks)."""
 
         assert_trust_promotion_allowed(
             from_trust=source.trust_class,
             to_trust=to_trust,
-            authorized_human_promotion=authorized_human_promotion,
+            decision_id=promotion_decision_id,
         )
         instruction_authority = to_trust is TrustClass.INSTRUCTION_AUTHORITY
         updated = WorkspaceSource(
@@ -427,17 +444,21 @@ class SqliteWorkspaceIntelligenceRepository:
             content_hash=source.content_hash,
             provenance_reference_id=source.provenance_reference_id,
             module_tags=source.module_tags,
+            promotion_decision_id=promotion_decision_id
+            if promotion_decision_id is not None
+            else source.promotion_decision_id,
             schema_version=source.schema_version,
         )
         self._conn.execute(
             """
             UPDATE gov_workspace_sources
-            SET trust_class = ?, instruction_authority = ?
+            SET trust_class = ?, instruction_authority = ?, promotion_decision_id = ?
             WHERE source_id = ?
             """,
             (
                 updated.trust_class.value,
                 1 if updated.instruction_authority else 0,
+                updated.promotion_decision_id,
                 source.source_id,
             ),
         )
@@ -518,8 +539,9 @@ class SqliteWorkspaceIntelligenceRepository:
                 observed_revision, trust_class, owner_actor_id, sensitivity,
                 refresh_policy, observed_at, stale_status, created_at,
                 created_by_actor_id, instruction_authority, content_hash,
-                provenance_reference_id, module_tags_json, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                provenance_reference_id, module_tags_json, promotion_decision_id,
+                schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source.source_id,
@@ -540,6 +562,7 @@ class SqliteWorkspaceIntelligenceRepository:
                 source.content_hash,
                 source.provenance_reference_id,
                 _json_list(source.module_tags),
+                source.promotion_decision_id,
                 source.schema_version,
             ),
         )
@@ -583,8 +606,8 @@ class SqliteWorkspaceIntelligenceRepository:
         tenant_id: str,
         to_trust: TrustClass,
         actor_id: str,
-        authorized_human_promotion: bool,
         at: datetime,
+        promotion_decision_id: str | None = None,
     ) -> WorkspaceSource:
         source = self.get_source(source_id)
         if source is None:
@@ -595,7 +618,7 @@ class SqliteWorkspaceIntelligenceRepository:
         updated = self._apply_source_trust_update(
             source,
             to_trust=to_trust,
-            authorized_human_promotion=authorized_human_promotion,
+            promotion_decision_id=promotion_decision_id,
         )
         self._commit_write()
         return updated
@@ -1421,8 +1444,6 @@ class SqliteWorkspaceIntelligenceRepository:
     def activate_curation(
         self,
         proposal: WorkspaceCurationProposal,
-        *,
-        authorized_human_promotion: bool,
     ) -> tuple[
         WorkspaceModelRevision,
         tuple[ContextModule, ...],
@@ -1456,7 +1477,7 @@ class SqliteWorkspaceIntelligenceRepository:
                 "only proposed model revisions can be activated"
             )
 
-        sources_to_promote: list[tuple[WorkspaceSource, TrustClass]] = []
+        sources_to_promote: list[tuple[WorkspaceSource, TrustClass, str | None]] = []
         for promotion in proposal.trust_promotions:
             source = self.get_source(promotion.source_id)
             if source is None:
@@ -1467,7 +1488,9 @@ class SqliteWorkspaceIntelligenceRepository:
                 raise MalformedCommandError(
                     "source workspace does not match curation proposal"
                 )
-            sources_to_promote.append((source, promotion.to_trust))
+            sources_to_promote.append(
+                (source, promotion.to_trust, promotion.decision_id)
+            )
 
         modules_to_approve: list[ContextModule] = []
         for module_id in proposal.module_ids_to_approve:
@@ -1505,12 +1528,12 @@ class SqliteWorkspaceIntelligenceRepository:
         previous = self._begin_write()
         try:
             promoted_sources: list[WorkspaceSource] = []
-            for source, to_trust in sources_to_promote:
+            for source, to_trust, decision_id in sources_to_promote:
                 promoted_sources.append(
                     self._apply_source_trust_update(
                         source,
                         to_trust=to_trust,
-                        authorized_human_promotion=authorized_human_promotion,
+                        promotion_decision_id=decision_id,
                     )
                 )
 
@@ -1529,6 +1552,19 @@ class SqliteWorkspaceIntelligenceRepository:
                         approved_by_actor_id=proposal.actor_id,
                         approved_at=proposal.at,
                     )
+                )
+
+            actual_open = {
+                gap.gap_id
+                for gap in self.list_knowledge_gaps(
+                    workspace_object_id,
+                    tenant_id=tenant_id,
+                    status=GapStatus.OPEN,
+                )
+            }
+            if set(proposal.open_gap_ids) != actual_open:
+                raise MalformedCommandError(
+                    "open_gap_ids must exactly match open knowledge gaps"
                 )
 
             self._insert_readiness(readiness)
@@ -1605,6 +1641,12 @@ class SqliteWorkspaceIntelligenceRepository:
     def _source_from_row(row: sqlite3.Row) -> WorkspaceSource:
         content_hash = row["content_hash"]
         provenance = row["provenance_reference_id"]
+        keys = row.keys()
+        promotion_decision = (
+            row["promotion_decision_id"]
+            if "promotion_decision_id" in keys
+            else None
+        )
         return WorkspaceSource(
             source_id=str(row["source_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -1624,6 +1666,9 @@ class SqliteWorkspaceIntelligenceRepository:
             content_hash=None if content_hash is None else str(content_hash),
             provenance_reference_id=None if provenance is None else str(provenance),
             module_tags=_read_list(row["module_tags_json"]),
+            promotion_decision_id=(
+                None if promotion_decision is None else str(promotion_decision)
+            ),
             schema_version=str(row["schema_version"]),
         )
 

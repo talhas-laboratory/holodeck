@@ -38,6 +38,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     ContextModule,
     Contradiction,
     ContradictionStatus,
+    DecisionOutcome,
     GapStatus,
     IntentSeed,
     KnowledgeGap,
@@ -50,6 +51,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     StaleStatus,
     TrustClass,
     ValidationStatus,
+    WorkspaceDecision,
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
@@ -297,7 +299,7 @@ def _readiness(
 def test_migrate_v19_creates_intelligence_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 19
+    assert governance_schema_version(conn) == 20
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -313,6 +315,11 @@ def test_migrate_v19_creates_intelligence_tables() -> None:
         "gov_workspace_readiness_assessments",
     ):
         assert name in tables
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(gov_workspace_sources)").fetchall()
+    }
+    assert "promotion_decision_id" in columns
 
 
 def test_onboard_persists_intelligence_without_mission_or_run() -> None:
@@ -361,25 +368,36 @@ def test_untrusted_source_cannot_silently_become_instruction_authority() -> None
     _conn, service, ids, _ = _service()
     source = _source(ids)
     service.register_source(source)
-    with pytest.raises(MalformedCommandError):
+    with pytest.raises(MalformedCommandError, match="decision_id"):
         service.update_source_trust(
             source.source_id,
             tenant_id=ids.tenant_alpha,
             to_trust=TrustClass.INSTRUCTION_AUTHORITY,
             actor_id=ids.human_owner,
-            authorized_human_promotion=False,
             at=NOW,
         )
+    decision = WorkspaceDecision(
+        decision_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        subject_revision_id=source.source_id,
+        outcome=DecisionOutcome.APPROVED,
+        rationale="Human approved instruction authority",
+        authorized_actor_id=ids.human_owner,
+        decided_at=NOW,
+    )
+    service.save_workspace_decision(decision)
     promoted = service.update_source_trust(
         source.source_id,
         tenant_id=ids.tenant_alpha,
         to_trust=TrustClass.INSTRUCTION_AUTHORITY,
         actor_id=ids.human_owner,
-        authorized_human_promotion=True,
         at=NOW,
+        promotion_decision_id=decision.decision_id,
     )
     assert promoted.trust_class is TrustClass.INSTRUCTION_AUTHORITY
     assert promoted.instruction_authority is True
+    assert promoted.promotion_decision_id == decision.decision_id
 
 
 def test_generated_summary_requires_provenance_and_cannot_be_instruction() -> None:

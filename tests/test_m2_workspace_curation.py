@@ -26,7 +26,10 @@ from holodeck_governance.domain.workspace.intelligence import (
     M2_EVENT_MODEL_APPROVED,
     M2_EVENT_READINESS_ASSESSED,
     REQUIRED_MODEL_SECTIONS,
+    DecisionOutcome,
+    GapStatus,
     IntentSeed,
+    KnowledgeGap,
     ModelRevisionStatus,
     ModelSectionState,
     ModuleApprovalStatus,
@@ -38,6 +41,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     TrustClass,
     TrustPromotion,
     WorkspaceCurationProposal,
+    WorkspaceDecision,
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
@@ -249,6 +253,21 @@ def _module(
     )
 
 
+def _gap(ids: FixtureIds, *, question: str = "What is approved topology?") -> KnowledgeGap:
+    return KnowledgeGap(
+        gap_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        question=question,
+        affected_sections=("architecture_and_system_map",),
+        impact_text="Cannot claim governed readiness",
+        risk_if_unresolved_text="Incorrect autonomous action",
+        status=GapStatus.OPEN,
+        created_at=NOW,
+        created_by_actor_id=ids.human_owner,
+    )
+
+
 def _readiness(ids: FixtureIds, *, model_id: str) -> WorkspaceReadinessAssessment:
     return WorkspaceReadinessAssessment(
         assessment_id=generate_uuidv7(),
@@ -297,7 +316,26 @@ def _proposal(
     )
 
 
-def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
+def _human_decision(
+    ids: FixtureIds,
+    *,
+    source_id: str,
+    outcome: DecisionOutcome = DecisionOutcome.APPROVED,
+    actor_id: str | None = None,
+) -> WorkspaceDecision:
+    return WorkspaceDecision(
+        decision_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        subject_revision_id=source_id,
+        outcome=outcome,
+        rationale="Human approved trust elevation",
+        authorized_actor_id=actor_id or ids.human_owner,
+        decided_at=NOW,
+    )
+
+
+def test_activate_curation_happy_path_with_human_decision_and_supersede() -> None:
     conn, service, ids, _ = _service()
     first = _model(ids, revision=1)
     first_module = _module(ids)
@@ -318,8 +356,7 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
             claimed=ReadinessLevel.DISCOVERED,
             evidenced=ReadinessLevel.DISCOVERED,
             at=LATER,
-        ),
-        authorized_human_promotion=False,
+        )
     )
     assert first_activation.approved_model.status is ModelRevisionStatus.APPROVED
 
@@ -351,6 +388,9 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
     assert discovered.registered_count == 1
     discovered_source_id = discovered.registered_source_ids[0]
 
+    decision = _human_decision(ids, source_id=source.source_id)
+    service.save_workspace_decision(decision)
+
     activate_at = LATER + timedelta(minutes=30)
     result = service.activate_curation(
         _proposal(
@@ -361,6 +401,7 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
                 TrustPromotion(
                     source_id=source.source_id,
                     to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                    decision_id=decision.decision_id,
                 ),
                 TrustPromotion(
                     source_id=discovered_source_id,
@@ -370,8 +411,7 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
             claimed=ReadinessLevel.CONTEXTUALIZED,
             evidenced=ReadinessLevel.CONTEXTUALIZED,
             at=activate_at,
-        ),
-        authorized_human_promotion=True,
+        )
     )
 
     assert result.approved_model.status is ModelRevisionStatus.APPROVED
@@ -389,6 +429,7 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
     assert promoted is not None
     assert promoted.trust_class is TrustClass.INSTRUCTION_AUTHORITY
     assert promoted.instruction_authority is True
+    assert promoted.promotion_decision_id == decision.decision_id
     auth_ref = service.get_source(discovered_source_id)
     assert auth_ref is not None
     assert auth_ref.trust_class is TrustClass.AUTHORITATIVE_REFERENCE
@@ -416,7 +457,7 @@ def test_activate_curation_happy_path_with_promotion_and_supersede() -> None:
     ).fetchone()[0] == 0
 
 
-def test_silent_instruction_authority_without_flag_fails() -> None:
+def test_silent_instruction_authority_without_decision_fails() -> None:
     _conn, service, ids, _ = _service()
     model = _model(ids)
     source = _source(ids, trust=TrustClass.UNTRUSTED_REFERENCE)
@@ -441,8 +482,8 @@ def test_silent_instruction_authority_without_flag_fails() -> None:
         claimed=ReadinessLevel.DISCOVERED,
         evidenced=ReadinessLevel.DISCOVERED,
     )
-    with pytest.raises(MalformedCommandError, match="instruction_authority"):
-        service.activate_curation(proposal, authorized_human_promotion=False)
+    with pytest.raises(MalformedCommandError, match="decision_id"):
+        service.activate_curation(proposal)
     assert (
         service.get_model_revision(model.model_revision_id).status
         is ModelRevisionStatus.PROPOSED
@@ -453,16 +494,233 @@ def test_silent_instruction_authority_without_flag_fails() -> None:
     )
 
 
-def test_validate_rejects_bad_ids_cross_tenant_readiness_and_gaps() -> None:
+def test_service_actor_decision_rejected() -> None:
+    conn, service, ids, _ = _service()
+    _grant_curate(conn, ids, actor_id=ids.system_service)
+    model = _model(ids)
+    source = _source(ids, trust=TrustClass.UNTRUSTED_REFERENCE)
+    service.onboard(
+        model=model,
+        sources=(source,),
+        modules=(),
+        gaps=(),
+        readiness=_readiness(ids, model_id=model.model_revision_id),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    decision = _human_decision(
+        ids, source_id=source.source_id, actor_id=ids.system_service
+    )
+    service.save_workspace_decision(decision)
+    with pytest.raises(MalformedCommandError, match="must be human"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                promotions=(
+                    TrustPromotion(
+                        source_id=source.source_id,
+                        to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                        decision_id=decision.decision_id,
+                    ),
+                ),
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+            )
+        )
+
+
+def test_wrong_subject_and_rejected_decision_fail() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    source = _source(ids, trust=TrustClass.UNTRUSTED_REFERENCE)
+    other = _source(ids, locator="repo://OTHER.md", trust=TrustClass.ORDINARY_REFERENCE)
+    service.onboard(
+        model=model,
+        sources=(source, other),
+        modules=(),
+        gaps=(),
+        readiness=_readiness(ids, model_id=model.model_revision_id),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    wrong_subject = _human_decision(ids, source_id=other.source_id)
+    service.save_workspace_decision(wrong_subject)
+    with pytest.raises(MalformedCommandError, match="subject must be the source"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                promotions=(
+                    TrustPromotion(
+                        source_id=source.source_id,
+                        to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                        decision_id=wrong_subject.decision_id,
+                    ),
+                ),
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+            )
+        )
+
+    rejected = _human_decision(
+        ids, source_id=source.source_id, outcome=DecisionOutcome.REJECTED
+    )
+    service.save_workspace_decision(rejected)
+    with pytest.raises(MalformedCommandError, match="approved workspace decision"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                promotions=(
+                    TrustPromotion(
+                        source_id=source.source_id,
+                        to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                        decision_id=rejected.decision_id,
+                    ),
+                ),
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+            )
+        )
+
+
+def test_missing_decision_id_fails() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    source = _source(ids)
+    service.onboard(
+        model=model,
+        sources=(source,),
+        modules=(),
+        gaps=(),
+        readiness=_readiness(ids, model_id=model.model_revision_id),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    with pytest.raises(NotFoundGovernanceError, match="unknown workspace decision"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                promotions=(
+                    TrustPromotion(
+                        source_id=source.source_id,
+                        to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                        decision_id=generate_uuidv7(),
+                    ),
+                ),
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+            )
+        )
+
+
+def test_service_activator_with_valid_human_decision_succeeds() -> None:
+    conn, service, ids, _ = _service()
+    _grant_curate(conn, ids, actor_id=ids.system_service)
+    model = _model(ids)
+    source = _source(ids, trust=TrustClass.UNTRUSTED_REFERENCE)
+    service.onboard(
+        model=model,
+        sources=(source,),
+        modules=(),
+        gaps=(),
+        readiness=_readiness(ids, model_id=model.model_revision_id),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    decision = _human_decision(ids, source_id=source.source_id)
+    service.save_workspace_decision(decision)
+    result = service.activate_curation(
+        _proposal(
+            ids,
+            model_id=model.model_revision_id,
+            actor_id=ids.system_service,
+            promotions=(
+                TrustPromotion(
+                    source_id=source.source_id,
+                    to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                    decision_id=decision.decision_id,
+                ),
+            ),
+            claimed=ReadinessLevel.DISCOVERED,
+            evidenced=ReadinessLevel.DISCOVERED,
+        )
+    )
+    assert result.approved_model.status is ModelRevisionStatus.APPROVED
+    promoted = service.get_source(source.source_id)
+    assert promoted is not None
+    assert promoted.trust_class is TrustClass.INSTRUCTION_AUTHORITY
+    assert promoted.promotion_decision_id == decision.decision_id
+
+
+def test_open_gap_ids_must_match_actual_open_gaps() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    gap = _gap(ids)
+    service.onboard(
+        model=model,
+        sources=(),
+        modules=(),
+        gaps=(gap,),
+        readiness=_readiness(ids, model_id=model.model_revision_id),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+
+    with pytest.raises(MalformedCommandError, match="open_gap_ids must exactly match"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+                open_gap_ids=(),
+            )
+        )
+
+    with pytest.raises(MalformedCommandError, match="open_gap_ids must exactly match"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                claimed=ReadinessLevel.DISCOVERED,
+                evidenced=ReadinessLevel.DISCOVERED,
+                open_gap_ids=(generate_uuidv7(),),
+            )
+        )
+
+    with pytest.raises(MalformedCommandError, match="open knowledge gaps"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                claimed=ReadinessLevel.GOVERNED,
+                evidenced=ReadinessLevel.GOVERNED,
+                open_gap_ids=(gap.gap_id,),
+            )
+        )
+
+    result = service.activate_curation(
+        _proposal(
+            ids,
+            model_id=model.model_revision_id,
+            claimed=ReadinessLevel.DISCOVERED,
+            evidenced=ReadinessLevel.DISCOVERED,
+            open_gap_ids=(gap.gap_id,),
+        )
+    )
+    assert result.readiness.open_gap_ids == (gap.gap_id,)
+
+
+def test_validate_rejects_bad_ids_cross_tenant_and_readiness() -> None:
     _conn, service, ids, _ = _service()
     model = _model(ids)
     service.save_model_revision(model)
 
     with pytest.raises(NotFoundGovernanceError):
-        service.validate_curation(
-            _proposal(ids, model_id=generate_uuidv7()),
-            authorized_human_promotion=False,
-        )
+        service.validate_curation(_proposal(ids, model_id=generate_uuidv7()))
 
     with pytest.raises(CrossTenantAccessError):
         service.validate_curation(
@@ -470,8 +728,7 @@ def test_validate_rejects_bad_ids_cross_tenant_readiness_and_gaps() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 workspace_object_id=ids.workspace_beta_1,
-            ),
-            authorized_human_promotion=False,
+            )
         )
 
     with pytest.raises(MalformedCommandError, match="readiness cannot exceed"):
@@ -481,8 +738,7 @@ def test_validate_rejects_bad_ids_cross_tenant_readiness_and_gaps() -> None:
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.GOVERNED,
                 evidenced=ReadinessLevel.DISCOVERED,
-            ),
-            authorized_human_promotion=False,
+            )
         )
 
     with pytest.raises(MalformedCommandError, match="open knowledge gaps"):
@@ -493,8 +749,7 @@ def test_validate_rejects_bad_ids_cross_tenant_readiness_and_gaps() -> None:
                 claimed=ReadinessLevel.GOVERNED,
                 evidenced=ReadinessLevel.GOVERNED,
                 open_gap_ids=(generate_uuidv7(),),
-            ),
-            authorized_human_promotion=False,
+            )
         )
 
     with pytest.raises(NotFoundGovernanceError):
@@ -505,8 +760,7 @@ def test_validate_rejects_bad_ids_cross_tenant_readiness_and_gaps() -> None:
                 module_ids=(generate_uuidv7(),),
                 claimed=ReadinessLevel.DISCOVERED,
                 evidenced=ReadinessLevel.DISCOVERED,
-            ),
-            authorized_human_promotion=False,
+            )
         )
 
 
@@ -522,8 +776,7 @@ def test_missing_curate_permission_denied() -> None:
                 actor_id=unauthorized,
                 claimed=ReadinessLevel.DISCOVERED,
                 evidenced=ReadinessLevel.DISCOVERED,
-            ),
-            authorized_human_promotion=False,
+            )
         )
 
 
@@ -537,8 +790,7 @@ def test_no_mission_or_run_writes_on_curation() -> None:
             model_id=model.model_revision_id,
             claimed=ReadinessLevel.DISCOVERED,
             evidenced=ReadinessLevel.DISCOVERED,
-        ),
-        authorized_human_promotion=False,
+        )
     )
     assert conn.execute(
         "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Mission'"
@@ -558,6 +810,6 @@ def test_reactivating_already_approved_model_fails_cleanly() -> None:
         claimed=ReadinessLevel.DISCOVERED,
         evidenced=ReadinessLevel.DISCOVERED,
     )
-    service.activate_curation(proposal, authorized_human_promotion=False)
+    service.activate_curation(proposal)
     with pytest.raises(MalformedCommandError, match="only proposed"):
-        service.activate_curation(proposal, authorized_human_promotion=False)
+        service.activate_curation(proposal)

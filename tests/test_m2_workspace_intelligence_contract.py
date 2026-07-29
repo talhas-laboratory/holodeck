@@ -37,6 +37,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     assert_trust_promotion_allowed,
     readiness_at_most,
     required_intelligence_scenario_ids,
+    trust_promotion_requires_human_decision,
     workspace_source_dedupe_key,
 )
 
@@ -151,17 +152,25 @@ def test_generated_source_cannot_be_instruction_authority() -> None:
         )
 
 
-def test_trust_promotion_requires_authorized_human() -> None:
+def test_trust_promotion_requires_human_decision_id() -> None:
     with pytest.raises(MalformedCommandError):
         assert_trust_promotion_allowed(
             from_trust=TrustClass.UNTRUSTED_REFERENCE,
             to_trust=TrustClass.INSTRUCTION_AUTHORITY,
-            authorized_human_promotion=False,
+            decision_id=None,
         )
     assert_trust_promotion_allowed(
         from_trust=TrustClass.UNTRUSTED_REFERENCE,
         to_trust=TrustClass.INSTRUCTION_AUTHORITY,
-        authorized_human_promotion=True,
+        decision_id=SOURCE,
+    )
+    assert not trust_promotion_requires_human_decision(
+        TrustClass.ORDINARY_REFERENCE,
+        TrustClass.TRUSTED_OBSERVATION,
+    )
+    assert trust_promotion_requires_human_decision(
+        TrustClass.UNTRUSTED_REFERENCE,
+        TrustClass.AUTHORITATIVE_REFERENCE,
     )
 
 

@@ -202,11 +202,30 @@
   `TrustPromotion` with `validate_curation_proposal` for structural safety.
 - Application `validate_curation` / `activate_curation` orchestrate existing
   M2-013 ops; repository `activate_curation` owns one transaction.
-- Permission remains `workspace.intelligence.curate` only; no new migration.
-- Silent instruction-authority promotion requires
-  `authorized_human_promotion=True`.
+- Permission remains `workspace.intelligence.curate`.
 - Freshness/query APIs and onboarding E2E remain M2-016..017; Buzz remains
   gated (M2-009).
+
+## 2026-07-29 — M2-015 follow-up: durable promotion authority + open gaps
+
+- **Release blockers found after initial M2-015 done mark** and fixed in this
+  follow-up: (1) caller-controlled `authorized_human_promotion: bool` was not
+  durable human authority; (2) `open_gap_ids` were not required to equal real
+  OPEN gaps.
+- Removed the boolean from public `update_source_trust` /
+  `validate_curation` / `activate_curation` seams.
+- Elevations that need human decision require `decision_id` on
+  `TrustPromotion` / `promotion_decision_id` on `update_source_trust`,
+  verified against an APPROVED HUMAN `WorkspaceDecision` whose
+  `subject_revision_id` is the source (tenant/workspace match).
+- Migration v20 adds nullable `gov_workspace_sources.promotion_decision_id`
+  referencing `gov_workspace_decisions`; persisted on elevated trust updates.
+- `validate_curation` and the activation write txn reject when
+  `set(proposal.open_gap_ids) != actual OPEN gap ids`; governed+ with real
+  open gaps remains rejected.
+- Activating actor still needs `workspace.intelligence.curate`; authorizing
+  actor on the decision must be HUMAN (SERVICE activator + HUMAN decision
+  may succeed).
 
 ## 2026-07-29 — M2-016 refresh, stale propagation, and query snapshot
 
