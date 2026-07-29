@@ -504,3 +504,16 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
   binding/snapshot, and returns coverage + omissions + diagnostics on every
   result. HTTP/CLI omitted; `open_code_graph_query_app` is optional composition.
 - Metrics: `artifacts/m2-025-code-graph-queries-metrics.json`.
+
+## 2026-07-29 — M2-026 factual graph acceptance and M3 handoff
+
+- End-to-end acceptance proves onboard/binding → build → query → incremental/full
+  equivalence → history → stale propagation → fail-closed partial/mismatch →
+  idempotent replay → concurrent single-active activation.
+- Evidence: `artifacts/m2-code-graph-acceptance-evidence.md` and
+  `artifacts/m2-026-acceptance-metrics.json`.
+- M3 graph handoff published at `artifacts/m2-code-graph-m3-handoff.md` (board
+  index/symlinks under `m2-human-collaboration-intake/artifacts/`).
+- M2-011 remains open to consolidate this handoff into the final M2→M3 packet;
+  M2-009 Buzz remains gated.
+

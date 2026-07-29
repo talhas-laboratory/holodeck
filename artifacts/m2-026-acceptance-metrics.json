@@ -1,0 +1,102 @@
+{
+  "fixture": {
+    "changed_paths": [
+      "sample_app/service.py",
+      "tests/test_api.py",
+      "tests/test_service.py"
+    ],
+    "rev_a": "fixture:c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb",
+    "rev_b": "fixture:9714592f9bbc4b5c5a7b2548d52d57e88d5af1d43e6e27ac0a9864e0a3ec021e"
+  },
+  "m2_022_precision_recall_reference": "artifacts/m2-022-python-extractor-metrics.json",
+  "m2_024_equivalence_reference": "artifacts/m2-024-incremental-refresh-metrics.json",
+  "pass": true,
+  "residual_risks": [
+    "contains/defines/imports precision is low vs golden because the extractor emits structural edges beyond the minimal golden set; recall on supported kinds remains 1.0.",
+    "unresolved_dynamic_call is diagnostic-only and never becomes a CALLS fact.",
+    "Impact neighbors receive new observations even when file bytes are unchanged.",
+    "Partial coverage cannot activate until a durable policy-decision seam exists.",
+    "GitNexus remains research-only (PolyForm NC); not a production dependency."
+  ],
+  "schema_version": 24,
+  "steps": {
+    "build_rev_a": {
+      "entity_count": 43,
+      "relation_count": 49,
+      "seconds": 0.0142,
+      "snapshot_id": "019faf63-6679-7917-802f-4303a349bca1",
+      "status": "pass"
+    },
+    "events": {
+      "status": "pass",
+      "types": [
+        "workspace.code_graph.build_completed",
+        "workspace.code_graph.build_requested",
+        "workspace.code_graph.snapshot_activated",
+        "workspace.source.stale"
+      ]
+    },
+    "historical_rev_a": {
+      "status": "pass"
+    },
+    "idempotent_replay": {
+      "status": "pass"
+    },
+    "incremental_vs_full": {
+      "equivalence": {
+        "matching_entities": 45,
+        "matching_relations": 53,
+        "only_left_entities": 0,
+        "only_left_relations": 0,
+        "only_right_entities": 0,
+        "only_right_relations": 0
+      },
+      "full_entity_count": 45,
+      "full_relation_count": 53,
+      "full_seconds": 0.0133,
+      "incremental_entity_count": 45,
+      "incremental_relation_count": 53,
+      "incremental_seconds": 0.0146,
+      "rebuilt_entity_count": 32,
+      "rebuilt_relation_count": 42,
+      "reused_entity_count": 13,
+      "reused_relation_count": 11,
+      "status": "pass"
+    },
+    "partial_coverage": {
+      "status": "pass"
+    },
+    "queries": {
+      "kinds_found": {
+        "api_entry_point": 1,
+        "class": 1,
+        "configuration": 1,
+        "manifest": 1,
+        "migration": 1,
+        "module": 1,
+        "schema_object": 1,
+        "test": 2
+      },
+      "neighbor_count": 5,
+      "sentinel_count": 8,
+      "sentinel_statuses": [
+        "activated",
+        "unresolved"
+      ],
+      "status": "pass"
+    },
+    "revision_mismatch": {
+      "status": "pass"
+    },
+    "stale_propagation": {
+      "status": "pass"
+    }
+  },
+  "task": "M2-026",
+  "verification": {
+    "build": "uv build -> holodeck_control_plane-0.1.0 wheel+sdist",
+    "focused": "uv run --extra dev pytest -q tests/test_m2_code_graph_acceptance.py -> 2 passed",
+    "full": "uv run --extra dev pytest -q -> 487 passed in 51.46s",
+    "twine": "uvx twine check dist/* -> PASSED"
+  }
+}

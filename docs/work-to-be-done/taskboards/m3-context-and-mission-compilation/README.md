@@ -24,7 +24,8 @@ harness plan as binding authority.
 2. `docs/plans/2026-07-29-persistent-codebase-factual-graph-design.md`
 3. `docs/work-to-be-done/governance/04-curation/specification.md`
 4. `docs/work-to-be-done/governance/05-context-compiler/specification.md`
-5. M2-011 and `m2-human-collaboration-intake/artifacts/m2-code-graph-m3-handoff.md`
+5. M2-011 and `artifacts/m2-code-graph-m3-handoff.md` (also indexed under
+   `m2-human-collaboration-intake/artifacts/`)
 
 ## Agent start protocol
 

@@ -1,7 +1,7 @@
 # M2-026 — Prove factual graph acceptance and publish the M3 handoff
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-017, M2-023, M2-024, M2-025
 
 ## Objective

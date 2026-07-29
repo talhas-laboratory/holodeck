@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`
 Owner: `talha`
-Status: **implementation in cumulative review; M2-025 done; M2-026 next; M2-009 Buzz gated**
+Status: **implementation in cumulative review; M2-026 done; next M2-011 (M2-009 Buzz gated)**
 
 ## Boundary
 
@@ -38,9 +38,10 @@ agents (M5), or make completion decisions (M6).
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
 2. Use cumulative M2 review PR #5 as the implementation baseline until it is
    merged; do not implement new work against the older base branch by accident.
-3. `M2-001`–`M2-008`, `M2-010`, `M2-012`–`M2-025` are done. Next is
-   M2-026. **M2-009** (Buzz adapter) remains gated for live ingress.
-   `M2-011` waits on `M2-017` (done), `M2-018` (done), and `M2-026`.
+3. `M2-001`–`M2-008`, `M2-010`, `M2-012`–`M2-026` are done. Next is
+   M2-011 (consolidate contracts + M3 handoff, including
+   `artifacts/m2-code-graph-m3-handoff.md`). **M2-009** (Buzz adapter)
+   remains gated for live ingress.
 4. No collaboration or repository extractor adapter may be built before its
    neutral contract and executable scenario specification are accepted.
 5. Keep provider SDK types inside adapters; domain records use stable external

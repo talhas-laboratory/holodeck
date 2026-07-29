@@ -12,6 +12,8 @@ agent quality.
 
 ## Scope
 
+- Graph handoff path ready from M2-026: `artifacts/m2-code-graph-m3-handoff.md`
+  (still depends on M2-011 for final consolidation).
 - Validate M2 task-origin, source-manifest, workspace-model, source/module,
   readiness, repository snapshot, query, sentinel, provenance, coverage, error,
   and omission contracts.

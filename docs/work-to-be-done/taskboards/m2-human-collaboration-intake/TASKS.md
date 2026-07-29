@@ -27,7 +27,7 @@
 | `M2-023` | done | cursor | Ingest, validate, and activate factual graph snapshots | M2-021, M2-022 |
 | `M2-024` | done | cursor | Implement safe incremental graph refresh and invalidation | M2-023 + foundation hardening |
 | `M2-025` | done | cursor | Expose bounded factual queries and high-recall sentinels | M2-023, M2-024 |
-| `M2-026` | backlog | unassigned | Prove factual graph acceptance and publish the M3 handoff | M2-017, M2-023–M2-025 |
+| `M2-026` | done | cursor | Prove factual graph acceptance and publish the M3 handoff | M2-017, M2-023–M2-025 |
 | `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010, M2-017, M2-018, M2-026 |
 
 Status values: `backlog`, `ready`, `in-progress`, `review`, `blocked`, `done`.
