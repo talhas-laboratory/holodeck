@@ -19,6 +19,9 @@ from holodeck_governance.domain.workspace.discovery import (
 )
 from holodeck_governance.domain.workspace.genesis import (
     GENESIS_DECIDE_PERMISSION,
+    GENESIS_EVENT_DECIDED,
+    GENESIS_EVENT_PROPOSED,
+    GENESIS_EVENT_SCHEMA_VERSION,
     GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
@@ -55,6 +58,9 @@ __all__ = [
     "GenesisDecisionOutcome",
     "GenesisProposalStatus",
     "GENESIS_DECIDE_PERMISSION",
+    "GENESIS_EVENT_DECIDED",
+    "GENESIS_EVENT_PROPOSED",
+    "GENESIS_EVENT_SCHEMA_VERSION",
     "GENESIS_PROPOSE_PERMISSION",
     "IntentSeed",
     "KnowledgeGap",

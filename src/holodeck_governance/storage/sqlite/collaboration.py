@@ -13,7 +13,11 @@ from holodeck_governance.domain.collaboration.bindings import (
     ExternalActorMapping,
 )
 from holodeck_governance.domain.collaboration.inbound import ConversationLocation
-from holodeck_governance.domain.collaboration.origins import TaskOrigin
+from holodeck_governance.domain.collaboration.origins import (
+    TaskOrigin,
+    conversation_context_manifest_from_jsonable,
+    conversation_context_manifest_to_jsonable,
+)
 from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
 from holodeck_governance.domain.collaboration.types import (
@@ -37,8 +41,12 @@ from holodeck_governance.domain.workspace.bindings import (
     RepositoryBinding,
     WorkspaceBindingStatus,
 )
+from holodeck_governance.domain.authority.actors import ActorKind
 from holodeck_governance.domain.workspace.genesis import (
     GENESIS_DECIDE_PERMISSION,
+    GENESIS_EVENT_DECIDED,
+    GENESIS_EVENT_PROPOSED,
+    GENESIS_EVENT_SCHEMA_VERSION,
     GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
@@ -1270,103 +1278,137 @@ class SqliteCollaborationRepository:
             raise MalformedCommandError(
                 "new genesis proposals must start as proposed"
             )
-        self.require_endpoint(proposal.endpoint_id, tenant_id=proposal.tenant_id)
-        ref = self.get_external_reference(proposal.location_reference_id)
-        if ref is None:
-            raise NotFoundGovernanceError(
-                f"unknown location reference {proposal.location_reference_id}"
-            )
-        if ref.tenant_id != proposal.tenant_id:
-            raise CrossTenantAccessError("genesis location reference tenant mismatch")
-        if proposal.repository_reference_id is not None:
-            repo_ref = self.get_external_reference(proposal.repository_reference_id)
-            if repo_ref is None:
-                raise NotFoundGovernanceError(
-                    f"unknown repository reference {proposal.repository_reference_id}"
-                )
-            if repo_ref.tenant_id != proposal.tenant_id:
-                raise CrossTenantAccessError(
-                    "genesis repository reference tenant mismatch"
-                )
-        actor = self._conn.execute(
-            "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
-            (proposal.created_by_actor_id,),
-        ).fetchone()
-        if actor is None:
-            raise NotFoundGovernanceError(
-                f"unknown actor {proposal.created_by_actor_id}"
-            )
-        if str(actor["tenant_id"]) != proposal.tenant_id:
-            raise CrossTenantAccessError("genesis proposal actor tenant mismatch")
-        if not self.actor_has_permission(
-            tenant_id=proposal.tenant_id,
-            actor_id=proposal.created_by_actor_id,
-            permission=GENESIS_PROPOSE_PERMISSION,
-            at=proposal.created_at,
-        ):
-            raise MissingAuthorityError(
-                "actor lacks workspace.genesis.propose authority"
-            )
-        existing_object = self._conn.execute(
-            "SELECT object_id FROM gov_objects WHERE object_id = ?",
-            (proposal.proposed_workspace_object_id,),
-        ).fetchone()
-        if existing_object is not None:
-            raise MalformedCommandError(
-                "proposed_workspace_object_id already exists"
-            )
-        open_existing = self.get_open_workspace_genesis_proposal(
-            tenant_id=proposal.tenant_id,
-            endpoint_id=proposal.endpoint_id,
-            location_kind=proposal.location_kind,
-            external_location_id=proposal.external_location_id,
-        )
-        if open_existing is not None:
-            raise IdempotencyConflictError(
-                "an open genesis proposal already exists for this location"
-            )
+        previous = self._begin_write()
         try:
-            self._conn.execute(
-                """
-                INSERT INTO gov_workspace_genesis_proposals(
-                    proposal_id, tenant_id, endpoint_id, location_kind,
-                    external_location_id, location_reference_id,
-                    proposed_workspace_object_id, display_name, purpose_text, status,
-                    discovery_reason_codes_json, repository_provider,
-                    external_repository_id, repository_reference_id, created_at,
-                    created_by_actor_id, decided_at, decided_by_actor_id,
-                    decision_outcome, decision_rationale, schema_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    proposal.proposal_id,
-                    proposal.tenant_id,
-                    proposal.endpoint_id,
-                    proposal.location_kind.value,
-                    proposal.external_location_id,
-                    proposal.location_reference_id,
-                    proposal.proposed_workspace_object_id,
-                    proposal.display_name,
-                    proposal.purpose_text,
-                    proposal.status.value,
-                    json.dumps(list(proposal.discovery_reason_codes)),
-                    proposal.repository_provider,
-                    proposal.external_repository_id,
-                    proposal.repository_reference_id,
-                    proposal.created_at.isoformat(),
-                    proposal.created_by_actor_id,
-                    None,
-                    None,
-                    None,
-                    proposal.decision_rationale,
-                    proposal.schema_version,
-                ),
+            self.require_endpoint(proposal.endpoint_id, tenant_id=proposal.tenant_id)
+            ref = self.get_external_reference(proposal.location_reference_id)
+            if ref is None:
+                raise NotFoundGovernanceError(
+                    f"unknown location reference {proposal.location_reference_id}"
+                )
+            if ref.tenant_id != proposal.tenant_id:
+                raise CrossTenantAccessError(
+                    "genesis location reference tenant mismatch"
+                )
+            if proposal.repository_reference_id is not None:
+                repo_ref = self.get_external_reference(proposal.repository_reference_id)
+                if repo_ref is None:
+                    raise NotFoundGovernanceError(
+                        f"unknown repository reference {proposal.repository_reference_id}"
+                    )
+                if repo_ref.tenant_id != proposal.tenant_id:
+                    raise CrossTenantAccessError(
+                        "genesis repository reference tenant mismatch"
+                    )
+            actor = self._conn.execute(
+                "SELECT tenant_id, kind FROM gov_actors WHERE actor_id = ?",
+                (proposal.created_by_actor_id,),
+            ).fetchone()
+            if actor is None:
+                raise NotFoundGovernanceError(
+                    f"unknown actor {proposal.created_by_actor_id}"
+                )
+            if str(actor["tenant_id"]) != proposal.tenant_id:
+                raise CrossTenantAccessError("genesis proposal actor tenant mismatch")
+            if str(actor["kind"]) != ActorKind.HUMAN.value:
+                raise MalformedCommandError(
+                    "genesis proposals require a human created_by actor"
+                )
+            if not self.actor_has_permission(
+                tenant_id=proposal.tenant_id,
+                actor_id=proposal.created_by_actor_id,
+                permission=GENESIS_PROPOSE_PERMISSION,
+                at=proposal.created_at,
+            ):
+                raise MissingAuthorityError(
+                    "actor lacks workspace.genesis.propose authority"
+                )
+            existing_object = self._conn.execute(
+                "SELECT object_id FROM gov_objects WHERE object_id = ?",
+                (proposal.proposed_workspace_object_id,),
+            ).fetchone()
+            if existing_object is not None:
+                raise MalformedCommandError(
+                    "proposed_workspace_object_id already exists"
+                )
+            open_existing = self.get_open_workspace_genesis_proposal(
+                tenant_id=proposal.tenant_id,
+                endpoint_id=proposal.endpoint_id,
+                location_kind=proposal.location_kind,
+                external_location_id=proposal.external_location_id,
             )
-        except sqlite3.IntegrityError as exc:
-            raise IdempotencyConflictError(
-                "an open genesis proposal already exists for this location"
-            ) from exc
-        self._commit_write()
+            if open_existing is not None:
+                raise IdempotencyConflictError(
+                    "an open genesis proposal already exists for this location"
+                )
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO gov_workspace_genesis_proposals(
+                        proposal_id, tenant_id, endpoint_id, location_kind,
+                        external_location_id, location_reference_id,
+                        proposed_workspace_object_id, display_name, purpose_text, status,
+                        discovery_reason_codes_json, repository_provider,
+                        external_repository_id, repository_reference_id, created_at,
+                        created_by_actor_id, decided_at, decided_by_actor_id,
+                        decision_outcome, decision_rationale, schema_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        proposal.proposal_id,
+                        proposal.tenant_id,
+                        proposal.endpoint_id,
+                        proposal.location_kind.value,
+                        proposal.external_location_id,
+                        proposal.location_reference_id,
+                        proposal.proposed_workspace_object_id,
+                        proposal.display_name,
+                        proposal.purpose_text,
+                        proposal.status.value,
+                        json.dumps(list(proposal.discovery_reason_codes)),
+                        proposal.repository_provider,
+                        proposal.external_repository_id,
+                        proposal.repository_reference_id,
+                        proposal.created_at.isoformat(),
+                        proposal.created_by_actor_id,
+                        None,
+                        None,
+                        None,
+                        proposal.decision_rationale,
+                        proposal.schema_version,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise IdempotencyConflictError(
+                    "an open genesis proposal already exists for this location"
+                ) from exc
+            stamp = proposal.created_at.isoformat()
+            SqliteDomainEventRepository(self._conn).append(
+                tenant_id=proposal.tenant_id,
+                event_type=GENESIS_EVENT_PROPOSED,
+                payload={
+                    "proposal_id": proposal.proposal_id,
+                    "endpoint_id": proposal.endpoint_id,
+                    "location_kind": proposal.location_kind.value,
+                    "external_location_id": proposal.external_location_id,
+                    "proposed_workspace_object_id": proposal.proposed_workspace_object_id,
+                },
+                correlation_id=proposal.proposal_id,
+                causation_id=proposal.proposal_id,
+                created_at=stamp,
+                actor_id=proposal.created_by_actor_id,
+                payload_schema_version=GENESIS_EVENT_SCHEMA_VERSION,
+                occurred_at=stamp,
+                subject_object_id=None,
+                subject_refs={
+                    "proposal_id": proposal.proposal_id,
+                    "proposed_workspace_object_id": proposal.proposed_workspace_object_id,
+                },
+            )
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
 
     def decide_workspace_genesis_proposal(
         self,
@@ -1380,30 +1422,13 @@ class SqliteCollaborationRepository:
         repository_canonical_locator: str | None = None,
         repository_default_branch: str | None = None,
     ) -> WorkspaceGenesisProposal:
-        proposal = self.get_workspace_genesis_proposal(proposal_id)
-        if proposal is None:
-            raise NotFoundGovernanceError(f"unknown genesis proposal {proposal_id}")
-        if proposal.tenant_id != tenant_id:
-            raise CrossTenantAccessError("genesis proposal tenant mismatch")
-        if proposal.status is not GenesisProposalStatus.PROPOSED:
-            raise MalformedCommandError("genesis proposal is no longer reversible")
-        actor = self._conn.execute(
-            "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
-            (decided_by_actor_id,),
-        ).fetchone()
-        if actor is None:
-            raise NotFoundGovernanceError(f"unknown actor {decided_by_actor_id}")
-        if str(actor["tenant_id"]) != tenant_id:
-            raise CrossTenantAccessError("genesis decision actor tenant mismatch")
-        if not self.actor_has_permission(
-            tenant_id=tenant_id,
-            actor_id=decided_by_actor_id,
-            permission=GENESIS_DECIDE_PERMISSION,
-            at=decided_at,
-        ):
-            raise MissingAuthorityError(
-                "actor lacks workspace.genesis.decide authority"
-            )
+        """Claim a proposed genesis row first, then create workspace on approve.
+
+        Ordering is intentional: begin write txn → load → validate → atomic
+        ``UPDATE ... WHERE status='proposed'`` (rowcount==1) → only then
+        materialize workspace/bindings on APPROVE. Concurrent decide loses the
+        claim and creates nothing.
+        """
 
         if outcome is GenesisDecisionOutcome.WITHDRAW:
             status = GenesisProposalStatus.WITHDRAWN
@@ -1414,6 +1439,61 @@ class SqliteCollaborationRepository:
 
         previous = self._begin_write()
         try:
+            proposal = self.get_workspace_genesis_proposal(proposal_id)
+            if proposal is None:
+                raise NotFoundGovernanceError(
+                    f"unknown genesis proposal {proposal_id}"
+                )
+            if proposal.tenant_id != tenant_id:
+                raise CrossTenantAccessError("genesis proposal tenant mismatch")
+            if proposal.status is not GenesisProposalStatus.PROPOSED:
+                raise MalformedCommandError(
+                    "genesis proposal is no longer reversible"
+                )
+            actor = self._conn.execute(
+                "SELECT tenant_id, kind FROM gov_actors WHERE actor_id = ?",
+                (decided_by_actor_id,),
+            ).fetchone()
+            if actor is None:
+                raise NotFoundGovernanceError(f"unknown actor {decided_by_actor_id}")
+            if str(actor["tenant_id"]) != tenant_id:
+                raise CrossTenantAccessError("genesis decision actor tenant mismatch")
+            if str(actor["kind"]) != ActorKind.HUMAN.value:
+                raise MalformedCommandError(
+                    "genesis decisions require a human decided_by actor"
+                )
+            if not self.actor_has_permission(
+                tenant_id=tenant_id,
+                actor_id=decided_by_actor_id,
+                permission=GENESIS_DECIDE_PERMISSION,
+                at=decided_at,
+            ):
+                raise MissingAuthorityError(
+                    "actor lacks workspace.genesis.decide authority"
+                )
+
+            claim = self._conn.execute(
+                """
+                UPDATE gov_workspace_genesis_proposals
+                SET status = ?, decided_at = ?, decided_by_actor_id = ?,
+                    decision_outcome = ?, decision_rationale = ?
+                WHERE proposal_id = ? AND status = ?
+                """,
+                (
+                    status.value,
+                    decided_at.isoformat(),
+                    decided_by_actor_id,
+                    outcome.value,
+                    rationale,
+                    proposal_id,
+                    GenesisProposalStatus.PROPOSED.value,
+                ),
+            )
+            if claim.rowcount != 1:
+                raise MalformedCommandError(
+                    "genesis proposal is no longer reversible"
+                )
+
             if outcome is GenesisDecisionOutcome.APPROVE:
                 revisions = SqliteRevisionRepository(self._conn)
                 revisions.register_object(
@@ -1454,7 +1534,6 @@ class SqliteCollaborationRepository:
                     created_at=decided_at,
                     created_by_actor_id=decided_by_actor_id,
                 )
-                # Nested write without double-commit: bump tx depth already open.
                 self.save_collaboration_location_binding(location_binding)
                 if (
                     proposal.repository_provider is not None
@@ -1486,25 +1565,33 @@ class SqliteCollaborationRepository:
                     )
                     self.save_repository_binding(repo_binding)
 
-            self._conn.execute(
-                """
-                UPDATE gov_workspace_genesis_proposals
-                SET status = ?, decided_at = ?, decided_by_actor_id = ?,
-                    decision_outcome = ?, decision_rationale = ?
-                WHERE proposal_id = ? AND status = ?
-                """,
-                (
-                    status.value,
-                    decided_at.isoformat(),
-                    decided_by_actor_id,
-                    outcome.value,
-                    rationale,
-                    proposal_id,
-                    GenesisProposalStatus.PROPOSED.value,
-                ),
+            stamp = decided_at.isoformat()
+            subject_object_id = (
+                proposal.proposed_workspace_object_id
+                if outcome is GenesisDecisionOutcome.APPROVE
+                else None
             )
-            if self._conn.total_changes < 1:
-                raise MalformedCommandError("genesis proposal is no longer reversible")
+            SqliteDomainEventRepository(self._conn).append(
+                tenant_id=tenant_id,
+                event_type=GENESIS_EVENT_DECIDED,
+                payload={
+                    "proposal_id": proposal_id,
+                    "outcome": outcome.value,
+                    "status": status.value,
+                    "proposed_workspace_object_id": proposal.proposed_workspace_object_id,
+                },
+                correlation_id=proposal_id,
+                causation_id=proposal_id,
+                created_at=stamp,
+                actor_id=decided_by_actor_id,
+                payload_schema_version=GENESIS_EVENT_SCHEMA_VERSION,
+                occurred_at=stamp,
+                subject_object_id=subject_object_id,
+                subject_refs={
+                    "proposal_id": proposal_id,
+                    "proposed_workspace_object_id": proposal.proposed_workspace_object_id,
+                },
+            )
             self._commit_txn(previous)
         except Exception:
             self._rollback_txn(previous)
@@ -1523,8 +1610,8 @@ class SqliteCollaborationRepository:
                 provider, external_event_id, subject_text, body_text, location_kind,
                 location_reference_id, parent_location_reference_id, endpoint_id,
                 mapping_id, created_at, created_by_actor_id, adapter_metadata_json,
-                schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                conversation_context_manifest_json, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 origin.object_id,
@@ -1544,6 +1631,12 @@ class SqliteCollaborationRepository:
                 origin.created_at.isoformat(),
                 origin.created_by_actor_id,
                 json.dumps(dict(origin.adapter_metadata), sort_keys=True),
+                json.dumps(
+                    conversation_context_manifest_to_jsonable(
+                        origin.conversation_context_manifest
+                    ),
+                    sort_keys=True,
+                ),
                 origin.schema_version,
             ),
         )
@@ -1552,6 +1645,17 @@ class SqliteCollaborationRepository:
     def _origin_from_row(row: sqlite3.Row) -> TaskOrigin:
         parent = row["parent_location_reference_id"]
         endpoint = row["endpoint_id"]
+        keys = row.keys()
+        raw_manifest = (
+            row["conversation_context_manifest_json"]
+            if "conversation_context_manifest_json" in keys
+            else None
+        )
+        manifest = ()
+        if raw_manifest is not None and str(raw_manifest).strip():
+            manifest = conversation_context_manifest_from_jsonable(
+                json.loads(str(raw_manifest))
+            )
         return TaskOrigin(
             object_id=str(row["object_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -1570,6 +1674,7 @@ class SqliteCollaborationRepository:
             created_at=datetime.fromisoformat(str(row["created_at"])),
             created_by_actor_id=str(row["created_by_actor_id"]),
             adapter_metadata=json.loads(str(row["adapter_metadata_json"])),
+            conversation_context_manifest=manifest,
             schema_version=str(row["schema_version"]),
         )
 

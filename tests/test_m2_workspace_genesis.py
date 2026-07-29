@@ -27,6 +27,8 @@ from holodeck_governance.domain.provenance.external_reference import ExternalRef
 from holodeck_governance.domain.registry import GovernanceObject
 from holodeck_governance.domain.workspace import (
     GENESIS_DECIDE_PERMISSION,
+    GENESIS_EVENT_DECIDED,
+    GENESIS_EVENT_PROPOSED,
     GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
@@ -208,7 +210,7 @@ def _open_proposal(
 def test_migrate_v17_creates_genesis_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 20
+    assert governance_schema_version(conn) == 21
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -486,3 +488,125 @@ def test_cross_tenant_genesis_decision_rejected() -> None:
             )
         )
     assert _conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
+
+
+def test_reject_then_approve_creates_no_workspace() -> None:
+    conn, service, ids, _ = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    proposal = _open_proposal(
+        service, ids, endpoint=endpoint, external_location_id="channel-race"
+    )
+    service.decide_workspace_genesis(
+        WorkspaceGenesisDecision(
+            proposal_id=proposal.proposal_id,
+            tenant_id=ids.tenant_alpha,
+            outcome=GenesisDecisionOutcome.REJECT,
+            decided_at=NOW,
+            decided_by_actor_id=ids.human_owner,
+            rationale="Rejected first",
+        )
+    )
+    with pytest.raises(MalformedCommandError, match="no longer reversible"):
+        service.decide_workspace_genesis(
+            WorkspaceGenesisDecision(
+                proposal_id=proposal.proposal_id,
+                tenant_id=ids.tenant_alpha,
+                outcome=GenesisDecisionOutcome.APPROVE,
+                decided_at=NOW,
+                decided_by_actor_id=ids.human_owner,
+            )
+        )
+    assert conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_collaboration_location_bindings"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_service_actor_with_genesis_decide_cannot_decide() -> None:
+    conn, service, ids, _ = _service()
+    _grant_genesis(conn, ids, actor_id=ids.system_service)
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    proposal = _open_proposal(
+        service, ids, endpoint=endpoint, external_location_id="channel-service-decide"
+    )
+    with pytest.raises(MalformedCommandError, match="human"):
+        service.decide_workspace_genesis(
+            WorkspaceGenesisDecision(
+                proposal_id=proposal.proposal_id,
+                tenant_id=ids.tenant_alpha,
+                outcome=GenesisDecisionOutcome.APPROVE,
+                decided_at=NOW,
+                decided_by_actor_id=ids.system_service,
+            )
+        )
+    assert conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
+
+
+def test_service_actor_with_genesis_propose_cannot_propose() -> None:
+    conn, service, ids, _ = _service()
+    _grant_genesis(conn, ids, actor_id=ids.system_service)
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    location = _ref(
+        ids,
+        object_type="conversation_channel",
+        external_object_id="channel-service-propose",
+        locator="memory://channel-service-propose",
+    )
+    service.save_external_reference(location)
+    with pytest.raises(MalformedCommandError, match="human"):
+        service.propose_workspace_genesis(
+            WorkspaceGenesisProposal(
+                proposal_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                endpoint_id=endpoint.endpoint_id,
+                location_kind=LocationKind.CHANNEL,
+                external_location_id="channel-service-propose",
+                location_reference_id=location.reference_id,
+                proposed_workspace_object_id=generate_uuidv7(),
+                display_name="Service Denied",
+                purpose_text="Should fail",
+                status=GenesisProposalStatus.PROPOSED,
+                created_at=NOW,
+                created_by_actor_id=ids.system_service,
+            )
+        )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_workspace_genesis_proposals"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_genesis_emits_proposed_and_decided_events() -> None:
+    conn, service, ids, _ = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    proposal = _open_proposal(
+        service, ids, endpoint=endpoint, external_location_id="channel-events"
+    )
+    events = {
+        str(row[0])
+        for row in conn.execute("SELECT event_type FROM gov_domain_events").fetchall()
+    }
+    assert GENESIS_EVENT_PROPOSED in events
+    service.decide_workspace_genesis(
+        WorkspaceGenesisDecision(
+            proposal_id=proposal.proposal_id,
+            tenant_id=ids.tenant_alpha,
+            outcome=GenesisDecisionOutcome.APPROVE,
+            decided_at=NOW,
+            decided_by_actor_id=ids.human_owner,
+        )
+    )
+    events = {
+        str(row[0])
+        for row in conn.execute("SELECT event_type FROM gov_domain_events").fetchall()
+    }
+    assert GENESIS_EVENT_DECIDED in events

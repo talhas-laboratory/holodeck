@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, Sequence
 
-from holodeck_governance.domain.authority.actors import Actor
+from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     MalformedCommandError,
@@ -21,15 +21,19 @@ from holodeck_governance.domain.errors import (
 )
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.workspace.intelligence import (
+    AUTHORITY_COVERING_MODULE_KEYS,
     INTELLIGENCE_CURATE_PERMISSION,
     ContextItem,
     ContextModule,
     Contradiction,
+    DecisionOutcome,
     GapStatus,
     KnowledgeGap,
     ModelRevisionStatus,
     ModuleApprovalStatus,
     ObservedSourcePath,
+    ReadinessLevel,
+    SourceObservation,
     SourceRefreshObservation,
     StaleStatus,
     TrustClass,
@@ -39,8 +43,10 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceReadinessAssessment,
     WorkspaceSource,
     assert_trust_promotion_decision_authorizes,
+    derive_evidenced_maximum_readiness,
     invent_sources_from_observations,
     module_ids_depending_on_source,
+    readiness_level_index,
     select_preferred_model_revision,
     trust_promotion_requires_human_decision,
     validate_curation_proposal,
@@ -148,6 +154,14 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
     def list_sources(
         self, workspace_object_id: str, *, tenant_id: str
     ) -> list[WorkspaceSource]: ...
+
+    def list_source_observations(
+        self, source_id: str, *, tenant_id: str
+    ) -> list[SourceObservation]: ...
+
+    def get_source_observation(
+        self, observation_id: str
+    ) -> SourceObservation | None: ...
 
     def update_source_trust(
         self,
@@ -453,6 +467,18 @@ class WorkspaceIntelligenceApplicationService:
         self, workspace_object_id: str, *, tenant_id: str
     ) -> list[WorkspaceSource]:
         return self.repository.list_sources(workspace_object_id, tenant_id=tenant_id)
+
+    def list_source_observations(
+        self, source_id: str, *, tenant_id: str
+    ) -> list[SourceObservation]:
+        return self.repository.list_source_observations(
+            source_id, tenant_id=tenant_id
+        )
+
+    def get_source_observation(
+        self, observation_id: str
+    ) -> SourceObservation | None:
+        return self.repository.get_source_observation(observation_id)
 
     def update_source_trust(
         self,
@@ -861,6 +887,7 @@ class WorkspaceIntelligenceApplicationService:
             current_trust[promotion.source_id] = source.trust_class
             sources_by_id[promotion.source_id] = source
 
+        modules_to_approve: list[ContextModule] = []
         for module_id in proposal.module_ids_to_approve:
             module = self.repository.get_context_module(module_id)
             if module is None:
@@ -875,6 +902,7 @@ class WorkspaceIntelligenceApplicationService:
                 raise MalformedCommandError(
                     "only proposed context modules can be approved"
                 )
+            modules_to_approve.append(module)
 
         actual_open = {
             gap.gap_id
@@ -889,11 +917,6 @@ class WorkspaceIntelligenceApplicationService:
                 "open_gap_ids must exactly match open knowledge gaps"
             )
 
-        validate_curation_proposal(
-            proposal,
-            current_trust_by_source_id=current_trust,
-        )
-
         for promotion in proposal.trust_promotions:
             source = sources_by_id[promotion.source_id]
             if trust_promotion_requires_human_decision(
@@ -903,6 +926,108 @@ class WorkspaceIntelligenceApplicationService:
                     decision_id=promotion.decision_id,
                     source=source,
                 )
+
+        human_authorized = self._resolve_human_authorized_readiness(proposal)
+        evidenced = self._derive_evidenced_maximum_for_proposal(
+            proposal,
+            modules_to_approve=modules_to_approve,
+            sources_by_id=sources_by_id,
+            human_authorized_readiness=human_authorized,
+        )
+        validate_curation_proposal(
+            proposal,
+            evidenced_maximum=evidenced,
+            current_trust_by_source_id=current_trust,
+        )
+
+    def _resolve_human_authorized_readiness(
+        self, proposal: WorkspaceCurationProposal
+    ) -> ReadinessLevel | None:
+        if proposal.readiness_decision_id is None:
+            return None
+        decision = self.repository.get_workspace_decision(
+            proposal.readiness_decision_id
+        )
+        if decision is None:
+            raise NotFoundGovernanceError(
+                f"unknown workspace decision {proposal.readiness_decision_id}"
+            )
+        if decision.tenant_id != proposal.tenant_id:
+            raise CrossTenantAccessError("readiness decision tenant mismatch")
+        if decision.workspace_object_id != proposal.workspace_object_id:
+            raise MalformedCommandError(
+                "readiness decision workspace does not match curation proposal"
+            )
+        if decision.outcome is not DecisionOutcome.APPROVED:
+            raise MalformedCommandError(
+                "readiness requires an approved workspace decision"
+            )
+        if decision.subject_revision_id not in {
+            proposal.model_revision_id,
+            proposal.assessment_id or "",
+        }:
+            raise MalformedCommandError(
+                "readiness decision subject must be the model revision or assessment"
+            )
+        actor = self.repository.get_actor(decision.authorized_actor_id)
+        if actor is None:
+            raise NotFoundGovernanceError(
+                f"unknown actor {decision.authorized_actor_id}"
+            )
+        if actor.kind is not ActorKind.HUMAN:
+            raise MalformedCommandError(
+                "readiness decision authorizing actor must be human"
+            )
+        return proposal.claimed_readiness_level
+
+    def _derive_evidenced_maximum_for_proposal(
+        self,
+        proposal: WorkspaceCurationProposal,
+        *,
+        modules_to_approve: Sequence[ContextModule],
+        sources_by_id: dict[str, WorkspaceSource],
+        human_authorized_readiness: ReadinessLevel | None,
+    ) -> ReadinessLevel:
+        existing_sources = self.repository.list_sources(
+            proposal.workspace_object_id, tenant_id=proposal.tenant_id
+        )
+        existing_modules = self.repository.list_context_modules(
+            proposal.workspace_object_id, tenant_id=proposal.tenant_id
+        )
+        approved_existing = [
+            module
+            for module in existing_modules
+            if module.approval_status is ModuleApprovalStatus.APPROVED
+            and module.module_id not in proposal.module_ids_to_approve
+        ]
+        approving_modules = list(modules_to_approve) + approved_existing
+        approved_or_approving_count = len(approving_modules)
+
+        trust_after: dict[str, TrustClass] = {
+            source.source_id: source.trust_class for source in existing_sources
+        }
+        for promotion in proposal.trust_promotions:
+            trust_after[promotion.source_id] = promotion.to_trust
+        for source_id, source in sources_by_id.items():
+            trust_after.setdefault(source_id, source.trust_class)
+
+        has_ia = any(
+            trust is TrustClass.INSTRUCTION_AUTHORITY
+            for trust in trust_after.values()
+        )
+        has_authority_module = any(
+            module.module_key in AUTHORITY_COVERING_MODULE_KEYS
+            for module in approving_modules
+        )
+        return derive_evidenced_maximum_readiness(
+            has_model=True,
+            model_approved_or_approving=True,
+            has_sources=bool(existing_sources),
+            approved_or_approving_module_count=approved_or_approving_count,
+            open_gap_count=len(proposal.open_gap_ids),
+            has_governed_authority_basis=has_ia or has_authority_module,
+            human_authorized_readiness=human_authorized_readiness,
+        )
 
     def activate_curation(
         self,

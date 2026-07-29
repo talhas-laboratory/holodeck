@@ -348,7 +348,7 @@ def test_migrate_v5_preserves_preexisting_command_path_rows(tmp_path) -> None:
     conn.commit()
     assert governance_schema_version(conn) == 4
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 20
+    assert governance_schema_version(conn) == 21
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM gov_command_receipts WHERE receipt_id = ?",

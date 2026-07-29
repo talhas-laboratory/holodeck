@@ -29,6 +29,11 @@ class GenesisDecisionOutcome(StrEnum):
 GENESIS_PROPOSE_PERMISSION = "workspace.genesis.propose"
 GENESIS_DECIDE_PERMISSION = "workspace.genesis.decide"
 
+# Durable domain-event type strings (M2 genesis ledger).
+GENESIS_EVENT_PROPOSED = "workspace.genesis.proposed"
+GENESIS_EVENT_DECIDED = "workspace.genesis.decided"
+GENESIS_EVENT_SCHEMA_VERSION = "m2.workspace.genesis.event.v1"
+
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceGenesisProposal:

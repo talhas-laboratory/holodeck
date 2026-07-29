@@ -14,6 +14,11 @@ from holodeck_governance.domain.workspace.intelligence.types import (
     ReadinessLevel,
 )
 
+# Context-module keys that count as covering authority concerns for GOVERNED+.
+AUTHORITY_COVERING_MODULE_KEYS: frozenset[str] = frozenset(
+    {"security-and-authority", "core-principles"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class WorkspaceReadinessAssessment:
@@ -78,3 +83,60 @@ def readiness_at_most(
         raise MalformedCommandError(
             "readiness cannot exceed the evidence and approved authority available"
         )
+
+
+def derive_evidenced_maximum_readiness(
+    *,
+    has_model: bool,
+    model_approved_or_approving: bool,
+    has_sources: bool,
+    approved_or_approving_module_count: int,
+    open_gap_count: int,
+    has_governed_authority_basis: bool,
+    human_authorized_readiness: ReadinessLevel | None,
+) -> ReadinessLevel:
+    """Derive the maximum readiness claimable from durable evidence.
+
+    Ladder (deterministic, ascending; never caller-trusted):
+
+    0. No model → ``UNINTERPRETED``.
+    1. Model present but not approved (proposed-only): ``DISCOVERED`` when
+       sources exist, otherwise ``UNINTERPRETED``.
+    2. Approved (or approving) model + ≥1 approved/approving module + no open
+       gaps → ``CONTEXTUALIZED``.
+    3. Plus a governed authority basis (instruction-authority source and/or an
+       authority-covering approved module) **and** a HUMAN-approved readiness
+       decision → up to the authorized level, at least ``GOVERNED`` when the
+       decision authorizes governed or higher.
+    4. ``VERIFIABLE`` / ``OPERATIONALLY_ASSURED`` only when
+       ``human_authorized_readiness`` is that level (or higher).
+
+    Open gaps always cap the ladder at ``DISCOVERED`` (governed+ remains
+    structurally forbidden while gaps remain open).
+    """
+
+    if not has_model:
+        return ReadinessLevel.UNINTERPRETED
+
+    if not model_approved_or_approving:
+        return (
+            ReadinessLevel.DISCOVERED
+            if has_sources
+            else ReadinessLevel.UNINTERPRETED
+        )
+
+    if open_gap_count > 0:
+        return ReadinessLevel.DISCOVERED
+
+    if approved_or_approving_module_count < 1:
+        return ReadinessLevel.DISCOVERED
+
+    maximum = ReadinessLevel.CONTEXTUALIZED
+    if (
+        has_governed_authority_basis
+        and human_authorized_readiness is not None
+        and readiness_level_index(human_authorized_readiness)
+        >= readiness_level_index(ReadinessLevel.GOVERNED)
+    ):
+        maximum = human_authorized_readiness
+    return maximum

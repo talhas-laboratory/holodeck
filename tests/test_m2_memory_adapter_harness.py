@@ -184,3 +184,12 @@ def test_domain_collaboration_does_not_import_adapters() -> None:
 def test_adapters_package_exists_outside_domain() -> None:
     assert (ADAPTERS_ROOT / "collaboration" / "memory.py").is_file()
     assert not (DOMAIN_COLLAB / "memory.py").exists()
+
+
+def test_memory_adapter_fetch_thread_context_stub() -> None:
+    adapter = _adapter()
+    assert adapter.fetch_thread_context(
+        tenant_id=TENANT,
+        location_kind=LocationKind.THREAD.value,
+        external_location_id="thread-1",
+    ) == ()

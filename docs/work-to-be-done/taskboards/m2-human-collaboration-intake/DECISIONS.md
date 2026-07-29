@@ -237,3 +237,35 @@
   existing source/module stale events in one transaction (no new migration).
 - Same-revision observations are no-ops; unknown sources raise NotFound.
 - Onboarding/refresh E2E remains M2-017; Buzz remains gated (M2-009).
+
+## 2026-07-29 — M2 milestone acceptance blockers (PR-facing)
+
+Release blockers found against M2 acceptance and fixed in this change:
+
+1. **Genesis race / non-human decide** — `decide_workspace_genesis_proposal`
+   now begins a write txn first, loads the proposal inside the txn, requires
+   HUMAN `decided_by`, then atomically `UPDATE ... WHERE status='proposed'`
+   and checks `cursor.rowcount == 1` **before** creating workspace/bindings.
+   Concurrent reject-then-approve creates no workspace. Propose also requires
+   HUMAN `created_by`. Emits `workspace.genesis.proposed` /
+   `workspace.genesis.decided` via `SqliteDomainEventRepository.append` with
+   `m2.workspace.genesis.event.v1`.
+2. **Caller-trusted readiness** — removed
+   `WorkspaceCurationProposal.evidenced_maximum_readiness`. Application
+   derives ceilings with `derive_evidenced_maximum_readiness` from durable
+   evidence (model/modules/gaps/authority basis + optional HUMAN readiness
+   decision). Claims ≥ `GOVERNED` require `readiness_decision_id` to a HUMAN
+   APPROVED `WorkspaceDecision` whose subject is the model revision (or
+   assessment). Service actors alone cannot claim `operationally_assured` on
+   an empty workspace.
+3. **Immutable source observations** — migration v21 adds
+   `gov_workspace_source_observations` and nullable
+   `gov_workspace_sources.current_observation_id`. Register/refresh insert
+   observation rows; prior revisions remain queryable via
+   `list_source_observations`.
+4. **Strict provenance** — `save_context_item` / `save_context_module` (and
+   onboard inserts) reject unknown `source_reference_id` / `item_id` /
+   `source_id` values with NotFound / Malformed errors.
+
+Board packets added: M2-017 (ready), M2-011 (backlog), M2-009 (blocked),
+M2-018 (ready). M2-002/M2-013 done-lane symlinks already present.

@@ -14,6 +14,7 @@ from holodeck_governance.domain.authority.roles import RoleProfile
 from holodeck_governance.domain.collaboration import (
     BindingStatus,
     CollaborationEndpoint,
+    ConversationContextManifestEntry,
     ExternalActorMapping,
     InboundEventReceipt,
     LocationKind,
@@ -289,7 +290,7 @@ def _origin_bundle(
 def test_migrate_v12_creates_task_origins_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 20
+    assert governance_schema_version(conn) == 21
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -300,6 +301,7 @@ def test_migrate_v12_creates_task_origins_table() -> None:
         for row in conn.execute("PRAGMA table_info(gov_task_origins)").fetchall()
     }
     assert "mapping_id" in columns
+    assert "conversation_context_manifest_json" in columns
 
 
 def test_accept_task_origin_persists_source_thread_context_cis008() -> None:
@@ -523,3 +525,58 @@ def test_accept_rejects_mismatched_sender_mapping_attribution() -> None:
             endpoint_id=endpoint.endpoint_id,
         )
     assert conn.execute("SELECT COUNT(*) FROM gov_task_origins").fetchone()[0] == 0
+
+
+def test_task_origin_persists_conversation_context_manifest() -> None:
+    _conn, service, ids = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    mapping = _bind_actor(service, ids, endpoint)
+    origin, receipt, source, location, parent = _origin_bundle(
+        ids, endpoint_id=endpoint.endpoint_id, mapping=mapping
+    )
+    origin = TaskOrigin(
+        object_id=origin.object_id,
+        tenant_id=origin.tenant_id,
+        actor_id=origin.actor_id,
+        inbound_receipt_id=origin.inbound_receipt_id,
+        source_reference_id=origin.source_reference_id,
+        provider=origin.provider,
+        external_event_id=origin.external_event_id,
+        subject_text=origin.subject_text,
+        body_text=origin.body_text,
+        location_kind=origin.location_kind,
+        location_reference_id=origin.location_reference_id,
+        parent_location_reference_id=origin.parent_location_reference_id,
+        endpoint_id=origin.endpoint_id,
+        mapping_id=origin.mapping_id,
+        created_at=origin.created_at,
+        created_by_actor_id=origin.created_by_actor_id,
+        adapter_metadata=dict(origin.adapter_metadata),
+        conversation_context_manifest=(
+            ConversationContextManifestEntry(
+                kind="message",
+                external_id="msg-1",
+                locator="memory://thread/msg-1",
+            ),
+            ConversationContextManifestEntry(
+                kind="attachment",
+                external_id="att-1",
+                locator="memory://thread/att-1",
+            ),
+        ),
+    )
+    # Rebuild receipt with matching origin id fields already set.
+    result = service.accept_task_origin(
+        origin=origin,
+        receipt=receipt,
+        source_reference=source,
+        location_reference=location,
+        parent_location_reference=parent,
+        endpoint_id=endpoint.endpoint_id,
+    )
+    stored = service.get_task_origin(result.origin.object_id)
+    assert stored is not None
+    assert len(stored.conversation_context_manifest) == 2
+    assert stored.conversation_context_manifest[0].kind == "message"
+    assert stored.conversation_context_manifest[1].external_id == "att-1"

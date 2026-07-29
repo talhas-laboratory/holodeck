@@ -28,6 +28,7 @@ from holodeck_governance.domain.collaboration.intake import (
     parse_intake_command,
 )
 from holodeck_governance.domain.collaboration.origins import (
+    ConversationContextManifestEntry,
     TaskOrigin,
     task_origin_dedupe_key,
 )
@@ -74,6 +75,7 @@ __all__ = [
     "CollaborationAdapterAuthError",
     "CollaborationEndpoint",
     "CollaborationScenarioExpectation",
+    "ConversationContextManifestEntry",
     "ConversationLocation",
     "ExternalActorMapping",
     "InboundEventReceipt",

@@ -38,7 +38,9 @@ from holodeck_governance.domain.workspace.intelligence.model import (
     section_certainty_map,
 )
 from holodeck_governance.domain.workspace.intelligence.readiness import (
+    AUTHORITY_COVERING_MODULE_KEYS,
     WorkspaceReadinessAssessment,
+    derive_evidenced_maximum_readiness,
     readiness_at_most,
     readiness_level_index,
 )
@@ -48,6 +50,7 @@ from holodeck_governance.domain.workspace.intelligence.refresh import (
     select_preferred_model_revision,
 )
 from holodeck_governance.domain.workspace.intelligence.sources import (
+    SourceObservation,
     WorkspaceSource,
     workspace_source_dedupe_key,
 )
@@ -95,6 +98,7 @@ from holodeck_governance.domain.workspace.intelligence.types import (
 )
 
 __all__ = [
+    "AUTHORITY_COVERING_MODULE_KEYS",
     "INTELLIGENCE_CURATE_PERMISSION",
     "M2_COMMAND_CONTEXT_MODULE_APPROVE",
     "M2_COMMAND_INTELLIGENCE_ONBOARD",
@@ -135,6 +139,7 @@ __all__ = [
     "ObservedSourcePath",
     "ReadinessLevel",
     "SectionCertainty",
+    "SourceObservation",
     "SourceRefreshObservation",
     "SourceType",
     "StaleStatus",
@@ -150,6 +155,7 @@ __all__ = [
     "assert_trust_promotion_allowed",
     "assert_trust_promotion_decision_authorizes",
     "classify_observed_path",
+    "derive_evidenced_maximum_readiness",
     "invent_sources_from_observations",
     "module_ids_depending_on_source",
     "observed_path_for_classification",

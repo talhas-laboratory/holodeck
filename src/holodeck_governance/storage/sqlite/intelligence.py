@@ -57,6 +57,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
+    SourceObservation,
     assert_trust_promotion_allowed,
 )
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
@@ -528,6 +529,16 @@ class SqliteWorkspaceIntelligenceRepository:
                 "a source with this natural key is already registered"
             )
         self._insert_source(source)
+        self._insert_source_observation_and_point(
+            source_id=source.source_id,
+            tenant_id=source.tenant_id,
+            workspace_object_id=source.workspace_object_id,
+            observed_revision=source.observed_revision,
+            content_hash=source.content_hash,
+            observed_at=source.observed_at,
+            created_at=source.created_at,
+            created_by_actor_id=source.created_by_actor_id,
+        )
         self._commit_write()
 
     def _insert_source(self, source: WorkspaceSource) -> None:
@@ -540,8 +551,8 @@ class SqliteWorkspaceIntelligenceRepository:
                 refresh_policy, observed_at, stale_status, created_at,
                 created_by_actor_id, instruction_authority, content_hash,
                 provenance_reference_id, module_tags_json, promotion_decision_id,
-                schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                current_observation_id, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 source.source_id,
@@ -563,9 +574,94 @@ class SqliteWorkspaceIntelligenceRepository:
                 source.provenance_reference_id,
                 _json_list(source.module_tags),
                 source.promotion_decision_id,
+                None,
                 source.schema_version,
             ),
         )
+
+    def _insert_source_observation_and_point(
+        self,
+        *,
+        source_id: str,
+        tenant_id: str,
+        workspace_object_id: str,
+        observed_revision: str,
+        content_hash: str | None,
+        observed_at: datetime,
+        created_at: datetime,
+        created_by_actor_id: str,
+        observation_id: str | None = None,
+    ) -> str:
+        oid = observation_id or generate_uuidv7()
+        self._conn.execute(
+            """
+            INSERT INTO gov_workspace_source_observations(
+                observation_id, source_id, tenant_id, workspace_object_id,
+                observed_revision, content_hash, observed_at, created_at,
+                created_by_actor_id, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                oid,
+                source_id,
+                tenant_id,
+                workspace_object_id,
+                observed_revision,
+                content_hash,
+                observed_at.isoformat(),
+                created_at.isoformat(),
+                created_by_actor_id,
+                "m2.workspace_source_observation.v1",
+            ),
+        )
+        self._conn.execute(
+            """
+            UPDATE gov_workspace_sources
+            SET current_observation_id = ?,
+                observed_revision = ?,
+                content_hash = COALESCE(?, content_hash),
+                observed_at = ?
+            WHERE source_id = ?
+            """,
+            (
+                oid,
+                observed_revision,
+                content_hash,
+                observed_at.isoformat(),
+                source_id,
+            ),
+        )
+        return oid
+
+    def list_source_observations(
+        self, source_id: str, *, tenant_id: str
+    ) -> list[SourceObservation]:
+        source = self.get_source(source_id)
+        if source is None:
+            raise NotFoundGovernanceError(f"unknown source {source_id}")
+        if source.tenant_id != tenant_id:
+            raise CrossTenantAccessError("source tenant mismatch")
+        rows = self._conn.execute(
+            """
+            SELECT * FROM gov_workspace_source_observations
+            WHERE source_id = ? AND tenant_id = ?
+            ORDER BY observed_at ASC, created_at ASC
+            """,
+            (source_id, tenant_id),
+        ).fetchall()
+        return [self._source_observation_from_row(row) for row in rows]
+
+    def get_source_observation(
+        self, observation_id: str
+    ) -> SourceObservation | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_workspace_source_observations
+            WHERE observation_id = ?
+            """,
+            (observation_id,),
+        ).fetchone()
+        return None if row is None else self._source_observation_from_row(row)
 
     def get_source(self, source_id: str) -> WorkspaceSource | None:
         row = self._conn.execute(
@@ -703,20 +799,15 @@ class SqliteWorkspaceIntelligenceRepository:
         previous = self._begin_write()
         try:
             for source, new_revision, content_hash, modules in prepared:
-                self._conn.execute(
-                    """
-                    UPDATE gov_workspace_sources
-                    SET observed_revision = ?,
-                        content_hash = COALESCE(?, content_hash),
-                        observed_at = ?
-                    WHERE source_id = ?
-                    """,
-                    (
-                        new_revision,
-                        content_hash,
-                        at.isoformat(),
-                        source.source_id,
-                    ),
+                self._insert_source_observation_and_point(
+                    source_id=source.source_id,
+                    tenant_id=source.tenant_id,
+                    workspace_object_id=source.workspace_object_id,
+                    observed_revision=new_revision,
+                    content_hash=content_hash,
+                    observed_at=at,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
                 )
                 self._mark_source_and_modules_stale_in_txn(
                     source,
@@ -812,6 +903,9 @@ class SqliteWorkspaceIntelligenceRepository:
         )
         if item.approved_by_actor_id is not None:
             self._require_actor(item.approved_by_actor_id, tenant_id=item.tenant_id)
+        self._require_external_reference_ids(
+            item.source_reference_ids, tenant_id=item.tenant_id
+        )
         self._insert_context_item(item)
         self._commit_write()
 
@@ -869,8 +963,86 @@ class SqliteWorkspaceIntelligenceRepository:
             self._require_actor(
                 module.approved_by_actor_id, tenant_id=module.tenant_id
             )
+        self._require_context_item_ids(
+            module.item_ids,
+            tenant_id=module.tenant_id,
+            workspace_object_id=module.workspace_object_id,
+        )
+        self._require_workspace_source_ids(
+            module.source_ids,
+            tenant_id=module.tenant_id,
+            workspace_object_id=module.workspace_object_id,
+        )
         self._insert_context_module(module)
         self._commit_write()
+
+    def _require_external_reference_ids(
+        self, reference_ids: tuple[str, ...], *, tenant_id: str
+    ) -> None:
+        for reference_id in reference_ids:
+            row = self._conn.execute(
+                """
+                SELECT tenant_id FROM gov_external_references
+                WHERE reference_id = ?
+                """,
+                (reference_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundGovernanceError(
+                    f"unknown external reference {reference_id}"
+                )
+            if str(row["tenant_id"]) != tenant_id:
+                raise CrossTenantAccessError(
+                    "context item source reference tenant mismatch"
+                )
+
+    def _require_context_item_ids(
+        self,
+        item_ids: tuple[str, ...],
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+    ) -> None:
+        for item_id in item_ids:
+            row = self._conn.execute(
+                """
+                SELECT tenant_id, workspace_object_id FROM gov_context_items
+                WHERE item_id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundGovernanceError(f"unknown context item {item_id}")
+            if str(row["tenant_id"]) != tenant_id:
+                raise CrossTenantAccessError("context module item tenant mismatch")
+            if str(row["workspace_object_id"]) != workspace_object_id:
+                raise MalformedCommandError(
+                    "context module item workspace does not match module"
+                )
+
+    def _require_workspace_source_ids(
+        self,
+        source_ids: tuple[str, ...],
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+    ) -> None:
+        for source_id in source_ids:
+            row = self._conn.execute(
+                """
+                SELECT tenant_id, workspace_object_id FROM gov_workspace_sources
+                WHERE source_id = ?
+                """,
+                (source_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundGovernanceError(f"unknown source {source_id}")
+            if str(row["tenant_id"]) != tenant_id:
+                raise CrossTenantAccessError("context module source tenant mismatch")
+            if str(row["workspace_object_id"]) != workspace_object_id:
+                raise MalformedCommandError(
+                    "context module source workspace does not match module"
+                )
 
     def _insert_context_module(self, module: ContextModule) -> None:
         _insert_immutable(
@@ -1350,17 +1522,40 @@ class SqliteWorkspaceIntelligenceRepository:
                         "a source with this natural key is already registered"
                     )
                 self._insert_source(source)
+                self._insert_source_observation_and_point(
+                    source_id=source.source_id,
+                    tenant_id=source.tenant_id,
+                    workspace_object_id=source.workspace_object_id,
+                    observed_revision=source.observed_revision,
+                    content_hash=source.content_hash,
+                    observed_at=source.observed_at,
+                    created_at=source.created_at,
+                    created_by_actor_id=source.created_by_actor_id,
+                )
             for item in items:
                 if item.approved_by_actor_id is not None:
                     self._require_actor(
                         item.approved_by_actor_id, tenant_id=tenant_id
                     )
+                self._require_external_reference_ids(
+                    item.source_reference_ids, tenant_id=tenant_id
+                )
                 self._insert_context_item(item)
             for module in modules:
                 if module.approved_by_actor_id is not None:
                     self._require_actor(
                         module.approved_by_actor_id, tenant_id=tenant_id
                     )
+                self._require_context_item_ids(
+                    module.item_ids,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                )
+                self._require_workspace_source_ids(
+                    module.source_ids,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                )
                 self._insert_context_module(module)
             for gap in gaps:
                 if gap.owner_actor_id is not None:
@@ -1647,6 +1842,11 @@ class SqliteWorkspaceIntelligenceRepository:
             if "promotion_decision_id" in keys
             else None
         )
+        current_observation = (
+            row["current_observation_id"]
+            if "current_observation_id" in keys
+            else None
+        )
         return WorkspaceSource(
             source_id=str(row["source_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -1669,6 +1869,25 @@ class SqliteWorkspaceIntelligenceRepository:
             promotion_decision_id=(
                 None if promotion_decision is None else str(promotion_decision)
             ),
+            current_observation_id=(
+                None if current_observation is None else str(current_observation)
+            ),
+            schema_version=str(row["schema_version"]),
+        )
+
+    @staticmethod
+    def _source_observation_from_row(row: sqlite3.Row) -> SourceObservation:
+        content_hash = row["content_hash"]
+        return SourceObservation(
+            observation_id=str(row["observation_id"]),
+            source_id=str(row["source_id"]),
+            tenant_id=str(row["tenant_id"]),
+            workspace_object_id=str(row["workspace_object_id"]),
+            observed_revision=str(row["observed_revision"]),
+            observed_at=datetime.fromisoformat(str(row["observed_at"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            content_hash=None if content_hash is None else str(content_hash),
             schema_version=str(row["schema_version"]),
         )
 

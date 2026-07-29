@@ -19,6 +19,9 @@ from holodeck_governance.domain.collaboration.inbound import (
     NormalizedInboundEvent,
     VerifiedActorIdentity,
 )
+from holodeck_governance.domain.collaboration.origins import (
+    ConversationContextManifestEntry,
+)
 from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
 from holodeck_governance.domain.collaboration.types import LocationKind, VerificationResult
 from holodeck_governance.domain.errors import MalformedCommandError
@@ -359,6 +362,22 @@ class InMemoryCollaborationAdapter:
         }
         self._acks_by_idempotency_key[message.idempotency_key] = ack
         return dict(ack)
+
+    def fetch_thread_context(
+        self,
+        *,
+        tenant_id: str,
+        location_kind: str,
+        external_location_id: str,
+    ) -> tuple[ConversationContextManifestEntry, ...]:
+        """Memory harness stub: no durable thread history by default."""
+
+        require_opaque_id(tenant_id, "tenant_id")
+        if not location_kind.strip():
+            raise MalformedCommandError("location_kind is required")
+        if not external_location_id.strip():
+            raise MalformedCommandError("external_location_id is required")
+        return ()
 
 
 def _require_str(payload: Mapping[str, Any], key: str) -> str:

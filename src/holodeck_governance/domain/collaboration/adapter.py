@@ -9,6 +9,9 @@ from holodeck_governance.domain.collaboration.inbound import (
     VerifiedActorIdentity,
 )
 from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
+from holodeck_governance.domain.collaboration.origins import (
+    ConversationContextManifestEntry,
+)
 from holodeck_governance.domain.collaboration.types import VerificationResult
 from holodeck_governance.domain.errors import GovernanceError
 
@@ -53,4 +56,17 @@ class CollaborationAdapter(Protocol):
 
         The returned mapping is adapter acknowledgement metadata only. It is not
         proof of downstream Holodeck processing.
+        """
+
+    def fetch_thread_context(
+        self,
+        *,
+        tenant_id: str,
+        location_kind: str,
+        external_location_id: str,
+    ) -> tuple[ConversationContextManifestEntry, ...]:
+        """Optional thread context for origin manifests (M2-018).
+
+        Stub-friendly: may return an empty tuple when the provider has no
+        durable thread history available.
         """

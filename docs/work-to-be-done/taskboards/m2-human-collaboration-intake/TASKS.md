@@ -19,6 +19,7 @@
 | `M2-015` | done | cursor | Implement workspace curation, approval, activation, and readiness | M2-012–M2-014 |
 | `M2-016` | done | cursor | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
 | `M2-017` | ready | unassigned | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
+| `M2-018` | ready | unassigned | Preserve conversation context manifests on task origins | M2-003, M2-008 |
 | `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010, M2-017 |
 
 Status values: `backlog`, `ready`, `in-progress`, `review`, `blocked`, `done`.

@@ -335,6 +335,47 @@ def test_revision_change_stales_only_dependent_modules() -> None:
     assert events.count(M2_EVENT_CONTEXT_MODULE_STALE) == 1
 
 
+def test_refresh_creates_immutable_source_observations() -> None:
+    _conn, service, ids, _ = _service()
+    source = _source(ids, observed_revision="rev-1")
+    service.register_source(source)
+    initial = service.list_source_observations(
+        source.source_id, tenant_id=ids.tenant_alpha
+    )
+    assert len(initial) == 1
+    assert initial[0].observed_revision == "rev-1"
+    prior_id = initial[0].observation_id
+    stored = service.get_source(source.source_id)
+    assert stored is not None
+    assert stored.current_observation_id == prior_id
+
+    service.refresh_sources(
+        ids.workspace_alpha_1,
+        tenant_id=ids.tenant_alpha,
+        observations=(
+            SourceRefreshObservation(
+                source_id=source.source_id,
+                new_observed_revision="rev-2",
+                content_hash="hash-2",
+            ),
+        ),
+        actor_id=ids.human_owner,
+        at=LATER,
+    )
+    observations = service.list_source_observations(
+        source.source_id, tenant_id=ids.tenant_alpha
+    )
+    assert len(observations) == 2
+    assert observations[0].observation_id == prior_id
+    assert observations[0].observed_revision == "rev-1"
+    assert observations[1].observed_revision == "rev-2"
+    latest = service.get_source(source.source_id)
+    assert latest is not None
+    assert latest.observed_revision == "rev-2"
+    assert latest.current_observation_id == observations[1].observation_id
+    assert service.get_source_observation(prior_id) is not None
+
+
 def test_same_revision_refresh_is_noop() -> None:
     conn, service, ids, _ = _service()
     source = _source(ids, observed_revision="abc123")

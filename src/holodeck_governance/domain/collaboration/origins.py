@@ -22,6 +22,23 @@ def _freeze_metadata(metadata: Mapping[str, str] | None) -> Mapping[str, str]:
 
 
 @dataclass(frozen=True, slots=True)
+class ConversationContextManifestEntry:
+    """Opaque message or attachment reference preserved from intake context."""
+
+    kind: str
+    external_id: str
+    locator: str = ""
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"message", "attachment"}:
+            raise MalformedCommandError(
+                "conversation context entry kind must be message or attachment"
+            )
+        if not self.external_id.strip():
+            raise MalformedCommandError("external_id is required")
+
+
+@dataclass(frozen=True, slots=True)
 class TaskOrigin:
     """Durable origin of governed work initiated from collaboration intake.
 
@@ -45,6 +62,7 @@ class TaskOrigin:
     endpoint_id: str | None = None
     parent_location_reference_id: str | None = None
     adapter_metadata: AdapterMetadata = field(default_factory=dict)
+    conversation_context_manifest: tuple[ConversationContextManifestEntry, ...] = ()
     schema_version: str = "m2.task_origin.v1"
 
     def __post_init__(self) -> None:
@@ -75,7 +93,48 @@ class TaskOrigin:
         if not self.body_text.strip():
             raise MalformedCommandError("body_text is required")
         object.__setattr__(self, "adapter_metadata", _freeze_metadata(self.adapter_metadata))
+        object.__setattr__(
+            self,
+            "conversation_context_manifest",
+            tuple(self.conversation_context_manifest),
+        )
 
 
 def task_origin_dedupe_key(origin: TaskOrigin) -> tuple[str, str, str]:
     return (origin.tenant_id, origin.provider, origin.external_event_id)
+
+
+def conversation_context_manifest_to_jsonable(
+    manifest: tuple[ConversationContextManifestEntry, ...],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "kind": entry.kind,
+            "external_id": entry.external_id,
+            "locator": entry.locator,
+        }
+        for entry in manifest
+    ]
+
+
+def conversation_context_manifest_from_jsonable(
+    raw: object,
+) -> tuple[ConversationContextManifestEntry, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise MalformedCommandError("conversation_context_manifest must be a list")
+    entries: list[ConversationContextManifestEntry] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise MalformedCommandError(
+                "conversation_context_manifest entries must be objects"
+            )
+        entries.append(
+            ConversationContextManifestEntry(
+                kind=str(item.get("kind", "")),
+                external_id=str(item.get("external_id", "")),
+                locator=str(item.get("locator", "")),
+            )
+        )
+    return tuple(entries)

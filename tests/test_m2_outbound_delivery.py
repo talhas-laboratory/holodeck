@@ -286,7 +286,7 @@ def _status_message(
 def test_migrate_v15_creates_outbound_messages_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 20
+    assert governance_schema_version(conn) == 21
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")

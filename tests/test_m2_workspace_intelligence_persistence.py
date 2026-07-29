@@ -18,6 +18,7 @@ from holodeck_governance.domain.errors import (
     IdempotencyConflictError,
     MalformedCommandError,
     MissingAuthorityError,
+    NotFoundGovernanceError,
 )
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
@@ -299,7 +300,7 @@ def _readiness(
 def test_migrate_v19_creates_intelligence_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 20
+    assert governance_schema_version(conn) == 21
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -401,7 +402,7 @@ def test_untrusted_source_cannot_silently_become_instruction_authority() -> None
 
 
 def test_generated_summary_requires_provenance_and_cannot_be_instruction() -> None:
-    _conn, service, ids, _ = _service()
+    conn, service, ids, _ = _service()
     ref = ExternalReference(
         reference_id=generate_uuidv7(),
         tenant_id=ids.tenant_alpha,
@@ -413,8 +414,9 @@ def test_generated_summary_requires_provenance_and_cannot_be_instruction() -> No
         created_at=NOW,
         created_by_actor_id=ids.system_service,
     )
-    # Persist reference via raw table used by collaboration path is unnecessary;
-    # context items only store opaque reference ids.
+    from holodeck_governance.storage.sqlite.graph_seed import persist_external_reference
+
+    persist_external_reference(conn, ref)
     item = ContextItem(
         item_id=generate_uuidv7(),
         tenant_id=ids.tenant_alpha,
@@ -448,6 +450,62 @@ def test_generated_summary_requires_provenance_and_cannot_be_instruction() -> No
             created_by_actor_id=ids.human_owner,
             source_reference_ids=(ref.reference_id,),
             confidence=0.5,
+        )
+
+
+def test_context_item_rejects_unknown_source_reference() -> None:
+    _conn, service, ids, _ = _service()
+    with pytest.raises(NotFoundGovernanceError, match="unknown external reference"):
+        service.save_context_item(
+            ContextItem(
+                item_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                item_type=ContextItemType.SOURCE_FACT,
+                statement="missing ref",
+                trust_class=TrustClass.ORDINARY_REFERENCE,
+                validation_status=ValidationStatus.UNVERIFIED,
+                freshness=StaleStatus.FRESH,
+                created_at=NOW,
+                created_by_actor_id=ids.human_owner,
+                source_reference_ids=(generate_uuidv7(),),
+            )
+        )
+
+
+def test_context_module_rejects_unknown_item_and_source_ids() -> None:
+    _conn, service, ids, _ = _service()
+    with pytest.raises(NotFoundGovernanceError, match="unknown context item"):
+        service.save_context_module(
+            ContextModule(
+                module_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                module_key="architecture",
+                purpose_text="arch",
+                applicability_text="all",
+                approval_status=ModuleApprovalStatus.PROPOSED,
+                freshness=StaleStatus.FRESH,
+                created_at=NOW,
+                created_by_actor_id=ids.human_owner,
+                item_ids=(generate_uuidv7(),),
+            )
+        )
+    with pytest.raises(NotFoundGovernanceError, match="unknown source"):
+        service.save_context_module(
+            ContextModule(
+                module_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                module_key="architecture",
+                purpose_text="arch",
+                applicability_text="all",
+                approval_status=ModuleApprovalStatus.PROPOSED,
+                freshness=StaleStatus.FRESH,
+                created_at=NOW,
+                created_by_actor_id=ids.human_owner,
+                source_ids=(generate_uuidv7(),),
+            )
         )
 
 

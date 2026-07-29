@@ -38,6 +38,7 @@ class WorkspaceSource:
     provenance_reference_id: str | None = None
     module_tags: tuple[str, ...] = ()
     promotion_decision_id: str | None = None
+    current_observation_id: str | None = None
     schema_version: str = "m2.workspace_source.v1"
 
     def __post_init__(self) -> None:
@@ -65,6 +66,8 @@ class WorkspaceSource:
             require_opaque_id(self.provenance_reference_id, "provenance_reference_id")
         if self.promotion_decision_id is not None:
             require_opaque_id(self.promotion_decision_id, "promotion_decision_id")
+        if self.current_observation_id is not None:
+            require_opaque_id(self.current_observation_id, "current_observation_id")
         for tag in self.module_tags:
             if not tag.strip():
                 raise MalformedCommandError("module_tags entries must be non-empty")
@@ -90,3 +93,40 @@ class WorkspaceSource:
 
 def workspace_source_dedupe_key(source: WorkspaceSource) -> tuple[str, str, str]:
     return (source.tenant_id, source.workspace_object_id, source.locator)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceObservation:
+    """Immutable observation of a workspace source at a point in time.
+
+    Refresh creates a new row; prior observations remain queryable. The source
+    row may denormalize the latest revision/hash for convenience while
+    ``current_observation_id`` points at this history.
+    """
+
+    observation_id: str
+    source_id: str
+    tenant_id: str
+    workspace_object_id: str
+    observed_revision: str
+    observed_at: datetime
+    created_at: datetime
+    created_by_actor_id: str
+    content_hash: str | None = None
+    schema_version: str = "m2.workspace_source_observation.v1"
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("observation_id", self.observation_id),
+            ("source_id", self.source_id),
+            ("tenant_id", self.tenant_id),
+            ("workspace_object_id", self.workspace_object_id),
+            ("created_by_actor_id", self.created_by_actor_id),
+        ):
+            require_opaque_id(value, name)
+        require_utc(self.observed_at, "observed_at")
+        require_utc(self.created_at, "created_at")
+        if not self.observed_revision.strip():
+            raise MalformedCommandError("observed_revision is required")
+        if self.content_hash is not None and not self.content_hash.strip():
+            raise MalformedCommandError("content_hash must be non-empty when set")

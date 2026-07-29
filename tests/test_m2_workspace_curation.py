@@ -291,12 +291,12 @@ def _proposal(
     module_ids: tuple[str, ...] = (),
     promotions: tuple[TrustPromotion, ...] = (),
     claimed: ReadinessLevel = ReadinessLevel.CONTEXTUALIZED,
-    evidenced: ReadinessLevel = ReadinessLevel.CONTEXTUALIZED,
     open_gap_ids: tuple[str, ...] = (),
     actor_id: str | None = None,
     workspace_object_id: str | None = None,
     tenant_id: str | None = None,
     at: datetime | None = None,
+    readiness_decision_id: str | None = None,
 ) -> WorkspaceCurationProposal:
     return WorkspaceCurationProposal(
         tenant_id=tenant_id or ids.tenant_alpha,
@@ -309,10 +309,10 @@ def _proposal(
         open_gap_ids=open_gap_ids,
         policy_basis="m2.curation.v1",
         evaluator_summary="curator approved binding content",
-        evidenced_maximum_readiness=evidenced,
         actor_id=actor_id or ids.human_owner,
         at=at or NOW,
         confidence_summary="high for descriptive sections",
+        readiness_decision_id=readiness_decision_id,
     )
 
 
@@ -330,6 +330,24 @@ def _human_decision(
         subject_revision_id=source_id,
         outcome=outcome,
         rationale="Human approved trust elevation",
+        authorized_actor_id=actor_id or ids.human_owner,
+        decided_at=NOW,
+    )
+
+
+def _readiness_decision(
+    ids: FixtureIds,
+    *,
+    model_id: str,
+    actor_id: str | None = None,
+) -> WorkspaceDecision:
+    return WorkspaceDecision(
+        decision_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        subject_revision_id=model_id,
+        outcome=DecisionOutcome.APPROVED,
+        rationale="Human authorized readiness level",
         authorized_actor_id=actor_id or ids.human_owner,
         decided_at=NOW,
     )
@@ -354,7 +372,6 @@ def test_activate_curation_happy_path_with_human_decision_and_supersede() -> Non
             model_id=first.model_revision_id,
             module_ids=(first_module.module_id,),
             claimed=ReadinessLevel.DISCOVERED,
-            evidenced=ReadinessLevel.DISCOVERED,
             at=LATER,
         )
     )
@@ -409,7 +426,6 @@ def test_activate_curation_happy_path_with_human_decision_and_supersede() -> Non
                 ),
             ),
             claimed=ReadinessLevel.CONTEXTUALIZED,
-            evidenced=ReadinessLevel.CONTEXTUALIZED,
             at=activate_at,
         )
     )
@@ -480,7 +496,6 @@ def test_silent_instruction_authority_without_decision_fails() -> None:
             ),
         ),
         claimed=ReadinessLevel.DISCOVERED,
-        evidenced=ReadinessLevel.DISCOVERED,
     )
     with pytest.raises(MalformedCommandError, match="decision_id"):
         service.activate_curation(proposal)
@@ -525,7 +540,6 @@ def test_service_actor_decision_rejected() -> None:
                     ),
                 ),
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
 
@@ -559,7 +573,6 @@ def test_wrong_subject_and_rejected_decision_fail() -> None:
                     ),
                 ),
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
 
@@ -580,7 +593,6 @@ def test_wrong_subject_and_rejected_decision_fail() -> None:
                     ),
                 ),
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
 
@@ -611,7 +623,6 @@ def test_missing_decision_id_fails() -> None:
                     ),
                 ),
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
 
@@ -645,7 +656,6 @@ def test_service_activator_with_valid_human_decision_succeeds() -> None:
                 ),
             ),
             claimed=ReadinessLevel.DISCOVERED,
-            evidenced=ReadinessLevel.DISCOVERED,
         )
     )
     assert result.approved_model.status is ModelRevisionStatus.APPROVED
@@ -675,7 +685,6 @@ def test_open_gap_ids_must_match_actual_open_gaps() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
                 open_gap_ids=(),
             )
         )
@@ -686,19 +695,20 @@ def test_open_gap_ids_must_match_actual_open_gaps() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
                 open_gap_ids=(generate_uuidv7(),),
             )
         )
 
     with pytest.raises(MalformedCommandError, match="open knowledge gaps"):
+        decision = _readiness_decision(ids, model_id=model.model_revision_id)
+        service.save_workspace_decision(decision)
         service.activate_curation(
             _proposal(
                 ids,
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.GOVERNED,
-                evidenced=ReadinessLevel.GOVERNED,
                 open_gap_ids=(gap.gap_id,),
+                readiness_decision_id=decision.decision_id,
             )
         )
 
@@ -707,7 +717,6 @@ def test_open_gap_ids_must_match_actual_open_gaps() -> None:
             ids,
             model_id=model.model_revision_id,
             claimed=ReadinessLevel.DISCOVERED,
-            evidenced=ReadinessLevel.DISCOVERED,
             open_gap_ids=(gap.gap_id,),
         )
     )
@@ -728,7 +737,15 @@ def test_validate_rejects_bad_ids_cross_tenant_and_readiness() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 workspace_object_id=ids.workspace_beta_1,
+                claimed=ReadinessLevel.DISCOVERED,
             )
+        )
+
+    with pytest.raises(MalformedCommandError, match="readiness_decision_id is required"):
+        _proposal(
+            ids,
+            model_id=model.model_revision_id,
+            claimed=ReadinessLevel.GOVERNED,
         )
 
     with pytest.raises(MalformedCommandError, match="readiness cannot exceed"):
@@ -737,8 +754,9 @@ def test_validate_rejects_bad_ids_cross_tenant_and_readiness() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.GOVERNED,
-                evidenced=ReadinessLevel.DISCOVERED,
-            )
+                readiness_decision_id=generate_uuidv7(),
+            ),
+            evidenced_maximum=ReadinessLevel.DISCOVERED,
         )
 
     with pytest.raises(MalformedCommandError, match="open knowledge gaps"):
@@ -747,9 +765,10 @@ def test_validate_rejects_bad_ids_cross_tenant_and_readiness() -> None:
                 ids,
                 model_id=model.model_revision_id,
                 claimed=ReadinessLevel.GOVERNED,
-                evidenced=ReadinessLevel.GOVERNED,
+                readiness_decision_id=generate_uuidv7(),
                 open_gap_ids=(generate_uuidv7(),),
-            )
+            ),
+            evidenced_maximum=ReadinessLevel.GOVERNED,
         )
 
     with pytest.raises(NotFoundGovernanceError):
@@ -759,9 +778,40 @@ def test_validate_rejects_bad_ids_cross_tenant_and_readiness() -> None:
                 model_id=model.model_revision_id,
                 module_ids=(generate_uuidv7(),),
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
+
+
+def test_service_actor_cannot_claim_operationally_assured_empty_workspace() -> None:
+    conn, service, ids, _ = _service()
+    _grant_curate(conn, ids, actor_id=ids.system_service)
+    model = _model(ids)
+    service.save_model_revision(model)
+    with pytest.raises(MalformedCommandError, match="readiness_decision_id is required"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                actor_id=ids.system_service,
+                claimed=ReadinessLevel.OPERATIONALLY_ASSURED,
+            )
+        )
+    decision = _readiness_decision(ids, model_id=model.model_revision_id)
+    service.save_workspace_decision(decision)
+    with pytest.raises(MalformedCommandError, match="readiness cannot exceed"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                actor_id=ids.system_service,
+                claimed=ReadinessLevel.OPERATIONALLY_ASSURED,
+                readiness_decision_id=decision.decision_id,
+            )
+        )
+    assert (
+        service.get_model_revision(model.model_revision_id).status
+        is ModelRevisionStatus.PROPOSED
+    )
 
 
 def test_missing_curate_permission_denied() -> None:
@@ -775,7 +825,6 @@ def test_missing_curate_permission_denied() -> None:
                 model_id=model.model_revision_id,
                 actor_id=unauthorized,
                 claimed=ReadinessLevel.DISCOVERED,
-                evidenced=ReadinessLevel.DISCOVERED,
             )
         )
 
@@ -789,7 +838,6 @@ def test_no_mission_or_run_writes_on_curation() -> None:
             ids,
             model_id=model.model_revision_id,
             claimed=ReadinessLevel.DISCOVERED,
-            evidenced=ReadinessLevel.DISCOVERED,
         )
     )
     assert conn.execute(
@@ -808,7 +856,6 @@ def test_reactivating_already_approved_model_fails_cleanly() -> None:
         ids,
         model_id=model.model_revision_id,
         claimed=ReadinessLevel.DISCOVERED,
-        evidenced=ReadinessLevel.DISCOVERED,
     )
     service.activate_curation(proposal)
     with pytest.raises(MalformedCommandError, match="only proposed"):
