@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from holodeck_governance.domain.collaboration.bindings import (
@@ -21,9 +22,15 @@ from holodeck_governance.domain.workspace.bindings import (
     WorkspaceBindingStatus,
 )
 from holodeck_governance.domain.workspace.discovery import (
+    WorkspaceDiscoveryOutcome,
     WorkspaceDiscoveryQuery,
     WorkspaceDiscoveryResult,
     evaluate_workspace_discovery,
+)
+from holodeck_governance.domain.workspace.genesis import (
+    GenesisDecisionOutcome,
+    WorkspaceGenesisDecision,
+    WorkspaceGenesisProposal,
 )
 
 
@@ -110,6 +117,36 @@ class CollaborationRepositoryPort(Protocol):
     ) -> CollaborationLocationBinding: ...
 
     def get_workspace_status(self, workspace_object_id: str) -> str | None: ...
+
+    def get_workspace_genesis_proposal(
+        self, proposal_id: str
+    ) -> WorkspaceGenesisProposal | None: ...
+
+    def get_open_workspace_genesis_proposal(
+        self,
+        *,
+        tenant_id: str,
+        endpoint_id: str,
+        location_kind: LocationKind,
+        external_location_id: str,
+    ) -> WorkspaceGenesisProposal | None: ...
+
+    def save_workspace_genesis_proposal(
+        self, proposal: WorkspaceGenesisProposal
+    ) -> None: ...
+
+    def decide_workspace_genesis_proposal(
+        self,
+        *,
+        proposal_id: str,
+        tenant_id: str,
+        outcome: GenesisDecisionOutcome,
+        decided_at: datetime,
+        decided_by_actor_id: str,
+        rationale: str = "",
+        repository_canonical_locator: str | None = None,
+        repository_default_branch: str | None = None,
+    ) -> WorkspaceGenesisProposal: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +326,79 @@ class CollaborationApplicationService:
             repository_binding=repository,
             workspace_statuses=workspace_statuses,
         )
+
+    def propose_workspace_genesis(
+        self,
+        proposal: WorkspaceGenesisProposal,
+        *,
+        discovery_query: WorkspaceDiscoveryQuery | None = None,
+    ) -> WorkspaceGenesisProposal:
+        """Open a reversible genesis proposal for an unbound collaboration location."""
+
+        from holodeck_governance.domain.workspace.genesis import GenesisProposalStatus
+
+        if proposal.status is not GenesisProposalStatus.PROPOSED:
+            raise MalformedCommandError("genesis proposals must be created as proposed")
+
+        query = discovery_query or WorkspaceDiscoveryQuery(
+            tenant_id=proposal.tenant_id,
+            endpoint_id=proposal.endpoint_id,
+            location_kind=proposal.location_kind,
+            external_location_id=proposal.external_location_id,
+            repository_provider=proposal.repository_provider,
+            external_repository_id=proposal.external_repository_id,
+        )
+        discovery = self.discover_workspace(query)
+        if discovery.outcome is not WorkspaceDiscoveryOutcome.UNBOUND:
+            raise MalformedCommandError(
+                "workspace genesis requires an unbound discovery outcome"
+            )
+        if not proposal.discovery_reason_codes:
+            proposal = WorkspaceGenesisProposal(
+                proposal_id=proposal.proposal_id,
+                tenant_id=proposal.tenant_id,
+                endpoint_id=proposal.endpoint_id,
+                location_kind=proposal.location_kind,
+                external_location_id=proposal.external_location_id,
+                location_reference_id=proposal.location_reference_id,
+                proposed_workspace_object_id=proposal.proposed_workspace_object_id,
+                display_name=proposal.display_name,
+                purpose_text=proposal.purpose_text,
+                status=proposal.status,
+                created_at=proposal.created_at,
+                created_by_actor_id=proposal.created_by_actor_id,
+                discovery_reason_codes=discovery.summary_reasons,
+                repository_provider=proposal.repository_provider,
+                external_repository_id=proposal.external_repository_id,
+                repository_reference_id=proposal.repository_reference_id,
+            )
+        self.repository.save_workspace_genesis_proposal(proposal)
+        return proposal
+
+    def decide_workspace_genesis(
+        self,
+        decision: WorkspaceGenesisDecision,
+        *,
+        repository_canonical_locator: str | None = None,
+        repository_default_branch: str | None = None,
+    ) -> WorkspaceGenesisProposal:
+        """Record a human decision; approve creates workspace + active bindings."""
+
+        return self.repository.decide_workspace_genesis_proposal(
+            proposal_id=decision.proposal_id,
+            tenant_id=decision.tenant_id,
+            outcome=decision.outcome,
+            decided_at=decision.decided_at,
+            decided_by_actor_id=decision.decided_by_actor_id,
+            rationale=decision.rationale,
+            repository_canonical_locator=repository_canonical_locator,
+            repository_default_branch=repository_default_branch,
+        )
+
+    def get_workspace_genesis_proposal(
+        self, proposal_id: str
+    ) -> WorkspaceGenesisProposal | None:
+        return self.repository.get_workspace_genesis_proposal(proposal_id)
 
     def record_inbound_receipt(
         self,

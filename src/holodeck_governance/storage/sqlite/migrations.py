@@ -26,6 +26,9 @@ from holodeck_governance.storage.sqlite.migrate_v15 import (
     upgrade_outbound_collaboration_messages,
 )
 from holodeck_governance.storage.sqlite.migrate_v16 import upgrade_workspace_bindings
+from holodeck_governance.storage.sqlite.migrate_v17 import (
+    upgrade_workspace_genesis_proposals,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -342,6 +345,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (14, "accepted_intake_mapping_attribution", upgrade_accepted_intake_mapping_attribution),
     (15, "outbound_collaboration_messages", upgrade_outbound_collaboration_messages),
     (16, "workspace_bindings", upgrade_workspace_bindings),
+    (17, "workspace_genesis_proposals", upgrade_workspace_genesis_proposals),
 ]
 
 
@@ -364,6 +368,11 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 17:
+        conn.execute("DROP TABLE IF EXISTS gov_workspace_genesis_proposals")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 16:
         for table in (
             "gov_collaboration_location_bindings",

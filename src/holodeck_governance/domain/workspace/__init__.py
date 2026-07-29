@@ -17,9 +17,18 @@ from holodeck_governance.domain.workspace.discovery import (
     WorkspaceEligibility,
     evaluate_workspace_discovery,
 )
+from holodeck_governance.domain.workspace.genesis import (
+    GenesisDecisionOutcome,
+    GenesisProposalStatus,
+    WorkspaceGenesisDecision,
+    WorkspaceGenesisProposal,
+    genesis_proposal_open_dedupe_key,
+)
 
 __all__ = [
     "CollaborationLocationBinding",
+    "GenesisDecisionOutcome",
+    "GenesisProposalStatus",
     "RepositoryBinding",
     "WorkspaceBindingStatus",
     "WorkspaceCandidate",
@@ -27,7 +36,10 @@ __all__ = [
     "WorkspaceDiscoveryQuery",
     "WorkspaceDiscoveryResult",
     "WorkspaceEligibility",
+    "WorkspaceGenesisDecision",
+    "WorkspaceGenesisProposal",
     "collaboration_location_binding_dedupe_key",
     "evaluate_workspace_discovery",
+    "genesis_proposal_open_dedupe_key",
     "repository_binding_dedupe_key",
 ]

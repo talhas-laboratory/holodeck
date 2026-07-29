@@ -115,3 +115,16 @@
 - Outcomes are explicit: `selected`, `ambiguous`, `unbound`, or
   `ineligible_only`. Suspended/archived workspaces never silently win.
 - Discovery is pure evaluation over bindings; genesis remains M2-007.
+
+## 2026-07-29 — M2-007 reversible workspace genesis
+
+- Governance migration v17 adds `gov_workspace_genesis_proposals` with a
+  partial unique index for one open (`proposed`) proposal per location
+  natural key and tenant-coupled authority/reference triggers.
+- `propose_workspace_genesis` requires an unbound discovery outcome and
+  records a reversible proposal (no workspace created yet).
+- `decide_workspace_genesis` applies approve / reject / withdraw.
+  Approve alone registers a Workspace, workspace record, and active
+  collaboration-location binding (optional repository binding).
+- Reject and withdraw close the proposal without creating workspace state.
+- Adapter harness and Buzz decision capture remain M2-008 / M2-009.
