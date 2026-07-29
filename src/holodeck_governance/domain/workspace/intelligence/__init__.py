@@ -14,6 +14,11 @@ from holodeck_governance.domain.workspace.intelligence.context import (
     ContextItem,
     ContextModule,
 )
+from holodeck_governance.domain.workspace.intelligence.curation import (
+    TrustPromotion,
+    WorkspaceCurationProposal,
+    validate_curation_proposal,
+)
 from holodeck_governance.domain.workspace.intelligence.discovery import (
     DiscoveredSourceCandidate,
     ObservedSourcePath,
@@ -126,7 +131,9 @@ __all__ = [
     "SourceType",
     "StaleStatus",
     "TrustClass",
+    "TrustPromotion",
     "ValidationStatus",
+    "WorkspaceCurationProposal",
     "WorkspaceDecision",
     "WorkspaceIntelligenceScenarioExpectation",
     "WorkspaceModelRevision",
@@ -140,5 +147,6 @@ __all__ = [
     "readiness_level_index",
     "required_intelligence_scenario_ids",
     "section_certainty_map",
+    "validate_curation_proposal",
     "workspace_source_dedupe_key",
 ]

@@ -12,7 +12,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol, Sequence
 
-from holodeck_governance.domain.errors import MissingAuthorityError
+from holodeck_governance.domain.errors import (
+    CrossTenantAccessError,
+    MalformedCommandError,
+    MissingAuthorityError,
+    NotFoundGovernanceError,
+)
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.workspace.intelligence import (
     INTELLIGENCE_CURATE_PERMISSION,
@@ -21,14 +26,18 @@ from holodeck_governance.domain.workspace.intelligence import (
     Contradiction,
     GapStatus,
     KnowledgeGap,
+    ModelRevisionStatus,
+    ModuleApprovalStatus,
     ObservedSourcePath,
     StaleStatus,
     TrustClass,
+    WorkspaceCurationProposal,
     WorkspaceDecision,
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
     invent_sources_from_observations,
+    validate_curation_proposal,
 )
 
 
@@ -63,6 +72,17 @@ class SourceDiscoveryResult:
     @property
     def skipped_count(self) -> int:
         return len(self.skipped_existing_source_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class CurationActivationResult:
+    """Outcome of activate_curation in one repository transaction."""
+
+    approved_model: WorkspaceModelRevision
+    approved_modules: tuple[ContextModule, ...]
+    promoted_sources: tuple[WorkspaceSource, ...]
+    readiness: WorkspaceReadinessAssessment
+    event_types: tuple[str, ...]
 
 
 class WorkspaceIntelligenceRepositoryPort(Protocol):
@@ -214,6 +234,23 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
         tuple[ContextModule, ...],
         tuple[ContextItem, ...],
         tuple[KnowledgeGap, ...],
+        WorkspaceReadinessAssessment,
+        tuple[str, ...],
+    ]: ...
+
+    def require_workspace_object(
+        self, workspace_object_id: str, *, tenant_id: str
+    ) -> None: ...
+
+    def activate_curation(
+        self,
+        proposal: WorkspaceCurationProposal,
+        *,
+        authorized_human_promotion: bool,
+    ) -> tuple[
+        WorkspaceModelRevision,
+        tuple[ContextModule, ...],
+        tuple[WorkspaceSource, ...],
         WorkspaceReadinessAssessment,
         tuple[str, ...],
     ]: ...
@@ -535,4 +572,104 @@ class WorkspaceIntelligenceApplicationService:
     ) -> WorkspaceReadinessAssessment | None:
         return self.repository.get_latest_readiness(
             workspace_object_id, tenant_id=tenant_id
+        )
+
+    def validate_curation(
+        self,
+        proposal: WorkspaceCurationProposal,
+        *,
+        authorized_human_promotion: bool = False,
+    ) -> None:
+        """Load records and reject structurally or referentially invalid proposals."""
+
+        self.repository.require_workspace_object(
+            proposal.workspace_object_id, tenant_id=proposal.tenant_id
+        )
+        model = self.repository.get_model_revision(proposal.model_revision_id)
+        if model is None:
+            raise NotFoundGovernanceError(
+                f"unknown model revision {proposal.model_revision_id}"
+            )
+        if model.tenant_id != proposal.tenant_id:
+            raise CrossTenantAccessError("model revision tenant mismatch")
+        if model.workspace_object_id != proposal.workspace_object_id:
+            raise MalformedCommandError(
+                "model revision workspace does not match curation proposal"
+            )
+        if model.status is not ModelRevisionStatus.PROPOSED:
+            raise MalformedCommandError(
+                "only proposed model revisions can be activated"
+            )
+
+        current_trust: dict[str, TrustClass] = {}
+        for promotion in proposal.trust_promotions:
+            source = self.repository.get_source(promotion.source_id)
+            if source is None:
+                raise NotFoundGovernanceError(
+                    f"unknown source {promotion.source_id}"
+                )
+            if source.tenant_id != proposal.tenant_id:
+                raise CrossTenantAccessError("source tenant mismatch")
+            if source.workspace_object_id != proposal.workspace_object_id:
+                raise MalformedCommandError(
+                    "source workspace does not match curation proposal"
+                )
+            current_trust[promotion.source_id] = source.trust_class
+
+        for module_id in proposal.module_ids_to_approve:
+            module = self.repository.get_context_module(module_id)
+            if module is None:
+                raise NotFoundGovernanceError(f"unknown context module {module_id}")
+            if module.tenant_id != proposal.tenant_id:
+                raise CrossTenantAccessError("context module tenant mismatch")
+            if module.workspace_object_id != proposal.workspace_object_id:
+                raise MalformedCommandError(
+                    "context module workspace does not match curation proposal"
+                )
+            if module.approval_status is not ModuleApprovalStatus.PROPOSED:
+                raise MalformedCommandError(
+                    "only proposed context modules can be approved"
+                )
+
+        validate_curation_proposal(
+            proposal,
+            authorized_human_promotion=authorized_human_promotion,
+            current_trust_by_source_id=current_trust,
+        )
+
+    def activate_curation(
+        self,
+        proposal: WorkspaceCurationProposal,
+        *,
+        authorized_human_promotion: bool,
+    ) -> CurationActivationResult:
+        """Approve model/modules, apply trust promotions, and store readiness."""
+
+        if not self.repository.actor_has_permission(
+            tenant_id=proposal.tenant_id,
+            actor_id=proposal.actor_id,
+            permission=INTELLIGENCE_CURATE_PERMISSION,
+            at=proposal.at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.intelligence.curate authority"
+            )
+        self.validate_curation(
+            proposal, authorized_human_promotion=authorized_human_promotion
+        )
+        (
+            approved_model,
+            approved_modules,
+            promoted_sources,
+            readiness,
+            event_types,
+        ) = self.repository.activate_curation(
+            proposal, authorized_human_promotion=authorized_human_promotion
+        )
+        return CurationActivationResult(
+            approved_model=approved_model,
+            approved_modules=approved_modules,
+            promoted_sources=promoted_sources,
+            readiness=readiness,
+            event_types=event_types,
         )

@@ -195,3 +195,15 @@
 - Explicit observations are the preferred seam (no binding walk required).
 - Curator approval/activation, freshness APIs, and onboarding E2E remain
   M2-015..017; Buzz remains gated.
+
+## 2026-07-29 — M2-015 workspace curation, approval, and activation
+
+- Domain `curation.py` defines `WorkspaceCurationProposal` /
+  `TrustPromotion` with `validate_curation_proposal` for structural safety.
+- Application `validate_curation` / `activate_curation` orchestrate existing
+  M2-013 ops; repository `activate_curation` owns one transaction.
+- Permission remains `workspace.intelligence.curate` only; no new migration.
+- Silent instruction-authority promotion requires
+  `authorized_human_promotion=True`.
+- Freshness/query APIs and onboarding E2E remain M2-016..017; Buzz remains
+  gated (M2-009).

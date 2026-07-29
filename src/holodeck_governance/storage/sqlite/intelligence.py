@@ -50,6 +50,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     StaleStatus,
     TrustClass,
     ValidationStatus,
+    WorkspaceCurationProposal,
     WorkspaceDecision,
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
@@ -327,46 +328,10 @@ class SqliteWorkspaceIntelligenceRepository:
         )
         previous = self._begin_write()
         try:
-            self._conn.execute(
-                """
-                UPDATE gov_workspace_model_revisions
-                SET status = ?
-                WHERE tenant_id = ? AND workspace_object_id = ?
-                  AND status = ? AND model_revision_id != ?
-                """,
-                (
-                    ModelRevisionStatus.SUPERSEDED.value,
-                    tenant_id,
-                    current.workspace_object_id,
-                    ModelRevisionStatus.APPROVED.value,
-                    model_revision_id,
-                ),
-            )
-            self._conn.execute(
-                """
-                UPDATE gov_workspace_model_revisions
-                SET status = ?, approved_by_actor_id = ?, approved_at = ?
-                WHERE model_revision_id = ? AND status = ?
-                """,
-                (
-                    ModelRevisionStatus.APPROVED.value,
-                    approved_by_actor_id,
-                    approved_at.isoformat(),
-                    model_revision_id,
-                    ModelRevisionStatus.PROPOSED.value,
-                ),
-            )
-            self._append_event(
-                tenant_id=tenant_id,
-                event_type=M2_EVENT_MODEL_APPROVED,
-                actor_id=approved_by_actor_id,
-                workspace_object_id=current.workspace_object_id,
-                causation_id=model_revision_id,
-                at=approved_at,
-                payload={
-                    "model_revision_id": model_revision_id,
-                    "revision": current.revision,
-                },
+            self._apply_model_approval(
+                current,
+                approved_by_actor_id=approved_by_actor_id,
+                approved_at=approved_at,
             )
             self._commit_txn(previous)
         except Exception:
@@ -375,6 +340,149 @@ class SqliteWorkspaceIntelligenceRepository:
         updated = self.get_model_revision(model_revision_id)
         assert updated is not None
         return updated
+
+    def _apply_model_approval(
+        self,
+        current: WorkspaceModelRevision,
+        *,
+        approved_by_actor_id: str,
+        approved_at: datetime,
+    ) -> None:
+        """Approve a proposed model and supersede prior approvals (caller owns txn)."""
+
+        self._conn.execute(
+            """
+            UPDATE gov_workspace_model_revisions
+            SET status = ?
+            WHERE tenant_id = ? AND workspace_object_id = ?
+              AND status = ? AND model_revision_id != ?
+            """,
+            (
+                ModelRevisionStatus.SUPERSEDED.value,
+                current.tenant_id,
+                current.workspace_object_id,
+                ModelRevisionStatus.APPROVED.value,
+                current.model_revision_id,
+            ),
+        )
+        self._conn.execute(
+            """
+            UPDATE gov_workspace_model_revisions
+            SET status = ?, approved_by_actor_id = ?, approved_at = ?
+            WHERE model_revision_id = ? AND status = ?
+            """,
+            (
+                ModelRevisionStatus.APPROVED.value,
+                approved_by_actor_id,
+                approved_at.isoformat(),
+                current.model_revision_id,
+                ModelRevisionStatus.PROPOSED.value,
+            ),
+        )
+        self._append_event(
+            tenant_id=current.tenant_id,
+            event_type=M2_EVENT_MODEL_APPROVED,
+            actor_id=approved_by_actor_id,
+            workspace_object_id=current.workspace_object_id,
+            causation_id=current.model_revision_id,
+            at=approved_at,
+            payload={
+                "model_revision_id": current.model_revision_id,
+                "revision": current.revision,
+            },
+        )
+
+    def _apply_source_trust_update(
+        self,
+        source: WorkspaceSource,
+        *,
+        to_trust: TrustClass,
+        authorized_human_promotion: bool,
+    ) -> WorkspaceSource:
+        """Apply a trust promotion (caller owns txn / authority checks)."""
+
+        assert_trust_promotion_allowed(
+            from_trust=source.trust_class,
+            to_trust=to_trust,
+            authorized_human_promotion=authorized_human_promotion,
+        )
+        instruction_authority = to_trust is TrustClass.INSTRUCTION_AUTHORITY
+        updated = WorkspaceSource(
+            source_id=source.source_id,
+            tenant_id=source.tenant_id,
+            workspace_object_id=source.workspace_object_id,
+            source_type=source.source_type,
+            locator=source.locator,
+            observed_revision=source.observed_revision,
+            trust_class=to_trust,
+            owner_actor_id=source.owner_actor_id,
+            sensitivity=source.sensitivity,
+            refresh_policy=source.refresh_policy,
+            observed_at=source.observed_at,
+            stale_status=source.stale_status,
+            created_at=source.created_at,
+            created_by_actor_id=source.created_by_actor_id,
+            instruction_authority=instruction_authority,
+            content_hash=source.content_hash,
+            provenance_reference_id=source.provenance_reference_id,
+            module_tags=source.module_tags,
+            schema_version=source.schema_version,
+        )
+        self._conn.execute(
+            """
+            UPDATE gov_workspace_sources
+            SET trust_class = ?, instruction_authority = ?
+            WHERE source_id = ?
+            """,
+            (
+                updated.trust_class.value,
+                1 if updated.instruction_authority else 0,
+                source.source_id,
+            ),
+        )
+        return updated
+
+    def _apply_context_module_approval(
+        self,
+        module: ContextModule,
+        *,
+        approved_by_actor_id: str,
+        approved_at: datetime,
+    ) -> ContextModule:
+        """Approve a proposed context module (caller owns txn)."""
+
+        approved = ContextModule(
+            module_id=module.module_id,
+            tenant_id=module.tenant_id,
+            workspace_object_id=module.workspace_object_id,
+            module_key=module.module_key,
+            purpose_text=module.purpose_text,
+            applicability_text=module.applicability_text,
+            approval_status=ModuleApprovalStatus.APPROVED,
+            freshness=module.freshness,
+            created_at=module.created_at,
+            created_by_actor_id=module.created_by_actor_id,
+            revision=module.revision,
+            item_ids=module.item_ids,
+            source_ids=module.source_ids,
+            approved_by_actor_id=approved_by_actor_id,
+            approved_at=approved_at,
+            schema_version=module.schema_version,
+        )
+        self._conn.execute(
+            """
+            UPDATE gov_context_modules
+            SET approval_status = ?, approved_by_actor_id = ?, approved_at = ?
+            WHERE module_id = ?
+            """,
+            (
+                approved.approval_status.value,
+                approved_by_actor_id,
+                approved_at.isoformat(),
+                module.module_id,
+            ),
+        )
+        return approved
 
     # -- sources --------------------------------------------------------------
 
@@ -483,45 +591,10 @@ class SqliteWorkspaceIntelligenceRepository:
         if source.tenant_id != tenant_id:
             raise CrossTenantAccessError("source tenant mismatch")
         self._require_curate(actor_id, tenant_id=tenant_id, at=at)
-        assert_trust_promotion_allowed(
-            from_trust=source.trust_class,
+        updated = self._apply_source_trust_update(
+            source,
             to_trust=to_trust,
             authorized_human_promotion=authorized_human_promotion,
-        )
-        instruction_authority = to_trust is TrustClass.INSTRUCTION_AUTHORITY
-        # Re-validate the whole record through the domain contract.
-        updated = WorkspaceSource(
-            source_id=source.source_id,
-            tenant_id=source.tenant_id,
-            workspace_object_id=source.workspace_object_id,
-            source_type=source.source_type,
-            locator=source.locator,
-            observed_revision=source.observed_revision,
-            trust_class=to_trust,
-            owner_actor_id=source.owner_actor_id,
-            sensitivity=source.sensitivity,
-            refresh_policy=source.refresh_policy,
-            observed_at=source.observed_at,
-            stale_status=source.stale_status,
-            created_at=source.created_at,
-            created_by_actor_id=source.created_by_actor_id,
-            instruction_authority=instruction_authority,
-            content_hash=source.content_hash,
-            provenance_reference_id=source.provenance_reference_id,
-            module_tags=source.module_tags,
-            schema_version=source.schema_version,
-        )
-        self._conn.execute(
-            """
-            UPDATE gov_workspace_sources
-            SET trust_class = ?, instruction_authority = ?
-            WHERE source_id = ?
-            """,
-            (
-                updated.trust_class.value,
-                1 if updated.instruction_authority else 0,
-                source_id,
-            ),
         )
         self._commit_write()
         return updated
@@ -737,36 +810,10 @@ class SqliteWorkspaceIntelligenceRepository:
         self._require_curate(
             approved_by_actor_id, tenant_id=tenant_id, at=approved_at
         )
-        approved = ContextModule(
-            module_id=module.module_id,
-            tenant_id=module.tenant_id,
-            workspace_object_id=module.workspace_object_id,
-            module_key=module.module_key,
-            purpose_text=module.purpose_text,
-            applicability_text=module.applicability_text,
-            approval_status=ModuleApprovalStatus.APPROVED,
-            freshness=module.freshness,
-            created_at=module.created_at,
-            created_by_actor_id=module.created_by_actor_id,
-            revision=module.revision,
-            item_ids=module.item_ids,
-            source_ids=module.source_ids,
+        approved = self._apply_context_module_approval(
+            module,
             approved_by_actor_id=approved_by_actor_id,
             approved_at=approved_at,
-            schema_version=module.schema_version,
-        )
-        self._conn.execute(
-            """
-            UPDATE gov_context_modules
-            SET approval_status = ?, approved_by_actor_id = ?, approved_at = ?
-            WHERE module_id = ?
-            """,
-            (
-                approved.approval_status.value,
-                approved_by_actor_id,
-                approved_at.isoformat(),
-                module_id,
-            ),
         )
         self._commit_write()
         return approved
@@ -1257,6 +1304,149 @@ class SqliteWorkspaceIntelligenceRepository:
             tuple(modules),
             tuple(items),
             tuple(gaps),
+            readiness,
+            tuple(event_types),
+        )
+
+    def activate_curation(
+        self,
+        proposal: WorkspaceCurationProposal,
+        *,
+        authorized_human_promotion: bool,
+    ) -> tuple[
+        WorkspaceModelRevision,
+        tuple[ContextModule, ...],
+        tuple[WorkspaceSource, ...],
+        WorkspaceReadinessAssessment,
+        tuple[str, ...],
+    ]:
+        """Apply trust promotions, approvals, and readiness in one transaction.
+
+        Application validation and curate permission must already have passed.
+        """
+
+        tenant_id = proposal.tenant_id
+        workspace_object_id = proposal.workspace_object_id
+        self.require_workspace_object(workspace_object_id, tenant_id=tenant_id)
+        self._require_curate(proposal.actor_id, tenant_id=tenant_id, at=proposal.at)
+
+        model = self.get_model_revision(proposal.model_revision_id)
+        if model is None:
+            raise NotFoundGovernanceError(
+                f"unknown model revision {proposal.model_revision_id}"
+            )
+        if model.tenant_id != tenant_id:
+            raise CrossTenantAccessError("model revision tenant mismatch")
+        if model.workspace_object_id != workspace_object_id:
+            raise MalformedCommandError(
+                "model revision workspace does not match curation proposal"
+            )
+        if model.status is not ModelRevisionStatus.PROPOSED:
+            raise MalformedCommandError(
+                "only proposed model revisions can be activated"
+            )
+
+        sources_to_promote: list[tuple[WorkspaceSource, TrustClass]] = []
+        for promotion in proposal.trust_promotions:
+            source = self.get_source(promotion.source_id)
+            if source is None:
+                raise NotFoundGovernanceError(f"unknown source {promotion.source_id}")
+            if source.tenant_id != tenant_id:
+                raise CrossTenantAccessError("source tenant mismatch")
+            if source.workspace_object_id != workspace_object_id:
+                raise MalformedCommandError(
+                    "source workspace does not match curation proposal"
+                )
+            sources_to_promote.append((source, promotion.to_trust))
+
+        modules_to_approve: list[ContextModule] = []
+        for module_id in proposal.module_ids_to_approve:
+            module = self.get_context_module(module_id)
+            if module is None:
+                raise NotFoundGovernanceError(f"unknown context module {module_id}")
+            if module.tenant_id != tenant_id:
+                raise CrossTenantAccessError("context module tenant mismatch")
+            if module.workspace_object_id != workspace_object_id:
+                raise MalformedCommandError(
+                    "context module workspace does not match curation proposal"
+                )
+            if module.approval_status is not ModuleApprovalStatus.PROPOSED:
+                raise MalformedCommandError(
+                    "only proposed context modules can be approved"
+                )
+            modules_to_approve.append(module)
+
+        assessment_id = proposal.assessment_id or generate_uuidv7()
+        readiness = WorkspaceReadinessAssessment(
+            assessment_id=assessment_id,
+            tenant_id=tenant_id,
+            workspace_object_id=workspace_object_id,
+            model_revision_id=proposal.model_revision_id,
+            level=proposal.claimed_readiness_level,
+            dimensions_checked=proposal.dimensions_checked,
+            open_gap_ids=proposal.open_gap_ids,
+            policy_basis=proposal.policy_basis,
+            evaluator_summary=proposal.evaluator_summary,
+            assessed_at=proposal.at,
+            assessed_by_actor_id=proposal.actor_id,
+        )
+
+        event_types: list[str] = []
+        previous = self._begin_write()
+        try:
+            promoted_sources: list[WorkspaceSource] = []
+            for source, to_trust in sources_to_promote:
+                promoted_sources.append(
+                    self._apply_source_trust_update(
+                        source,
+                        to_trust=to_trust,
+                        authorized_human_promotion=authorized_human_promotion,
+                    )
+                )
+
+            self._apply_model_approval(
+                model,
+                approved_by_actor_id=proposal.actor_id,
+                approved_at=proposal.at,
+            )
+            event_types.append(M2_EVENT_MODEL_APPROVED)
+
+            approved_modules: list[ContextModule] = []
+            for module in modules_to_approve:
+                approved_modules.append(
+                    self._apply_context_module_approval(
+                        module,
+                        approved_by_actor_id=proposal.actor_id,
+                        approved_at=proposal.at,
+                    )
+                )
+
+            self._insert_readiness(readiness)
+            self._append_event(
+                tenant_id=tenant_id,
+                event_type=M2_EVENT_READINESS_ASSESSED,
+                actor_id=proposal.actor_id,
+                workspace_object_id=workspace_object_id,
+                causation_id=proposal.model_revision_id,
+                at=proposal.at,
+                payload={
+                    "assessment_id": readiness.assessment_id,
+                    "level": readiness.level.value,
+                    "model_revision_id": proposal.model_revision_id,
+                },
+            )
+            event_types.append(M2_EVENT_READINESS_ASSESSED)
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+
+        approved_model = self.get_model_revision(proposal.model_revision_id)
+        assert approved_model is not None
+        return (
+            approved_model,
+            tuple(approved_modules),
+            tuple(promoted_sources),
             readiness,
             tuple(event_types),
         )

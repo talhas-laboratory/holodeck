@@ -16,8 +16,8 @@
 | `M2-012` | done | cursor | Define workspace intelligence records and contracts | M2-000 |
 | `M2-013` | done | cursor | Persist workspace intelligence and expose governed application operations | M2-012 |
 | `M2-014` | done | cursor | Implement repository/source discovery and trust classification | M2-012, M2-013 |
-| `M2-015` | ready | unassigned | Implement workspace curation, approval, activation, and readiness | M2-012–M2-014 |
-| `M2-016` | backlog | unassigned | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
+| `M2-015` | done | cursor | Implement workspace curation, approval, activation, and readiness | M2-012–M2-014 |
+| `M2-016` | ready | unassigned | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
 | `M2-017` | backlog | unassigned | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
 | `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010, M2-017 |
 

@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`  
 Owner: `talha`  
-Status: **in progress — M2-015 curation/approval next; M2-009 Buzz gated**
+Status: **in progress — M2-016 freshness/query next; M2-009 Buzz gated**
 
 ## Boundary
 
@@ -31,8 +31,8 @@ define requirement gates (M4), launch agents (M5), or make completion decisions
 ## Agent start protocol
 
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
-2. `M2-001`–`M2-008`, `M2-010`, and `M2-012`–`M2-014` are done. Prefer
-   **M2-015** curation/approval/activation next. **M2-009** (Buzz
+2. `M2-001`–`M2-008`, `M2-010`, and `M2-012`–`M2-015` are done. Prefer
+   **M2-016** freshness/query APIs next. **M2-009** (Buzz
    adapter) remains gated for live ingress. `M2-011` waits on `M2-017`.
 3. Keep provider SDK types inside adapters; domain records use stable external
    references only.
