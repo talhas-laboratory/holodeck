@@ -38,6 +38,8 @@ from holodeck_governance.domain.workspace.bindings import (
     WorkspaceBindingStatus,
 )
 from holodeck_governance.domain.workspace.genesis import (
+    GENESIS_DECIDE_PERMISSION,
+    GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
     WorkspaceGenesisProposal,
@@ -286,11 +288,30 @@ class SqliteCollaborationRepository:
     ) -> bool:
         """Tenant-scoped role permission check for collaboration.intake."""
 
+        return self.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            permission="collaboration.intake",
+            at=at,
+        )
+
+    def actor_has_permission(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        permission: str,
+        at: datetime,
+    ) -> bool:
+        """Tenant-scoped role permission check for an explicit capability."""
+
         from holodeck_governance.domain.authority.assignments import (
             RoleAssignment,
             assignment_is_active,
         )
 
+        if not permission.strip():
+            raise MalformedCommandError("permission is required")
         rows = self._conn.execute(
             """
             SELECT a.*, p.permissions_json
@@ -326,7 +347,7 @@ class SqliteCollaborationRepository:
             if assignment.jurisdiction_key not in {"tenant", "*"}:
                 continue
             permissions = set(json.loads(str(row["permissions_json"])))
-            if "collaboration.intake" in permissions or "*" in permissions:
+            if permission in permissions or "*" in permissions:
                 return True
         return False
 
@@ -730,7 +751,8 @@ class SqliteCollaborationRepository:
                 "outbox dedup key exists without outbound collaboration message"
             )
 
-        previous = self._begin_write()
+        owns_txn = self._tx_depth == 0
+        previous = self._begin_write() if owns_txn else None
         try:
             existing = self.get_outbound_message_by_idempotency(
                 tenant_id=message.tenant_id,
@@ -738,7 +760,8 @@ class SqliteCollaborationRepository:
             )
             if existing is not None:
                 prior, outbox_item_id = existing
-                self._commit_txn(previous)
+                if owns_txn:
+                    self._commit_txn(previous)
                 return prior, outbox_item_id, False
 
             destination = message.destination
@@ -822,8 +845,107 @@ class SqliteCollaborationRepository:
                     message.schema_version,
                 ),
             )
-            self._commit_txn(previous)
+            if owns_txn:
+                self._commit_txn(previous)
             return message, outbox_item_id, True
+        except Exception:
+            if owns_txn:
+                self._rollback_txn(previous)
+            raise
+
+    def record_accepted_origin_with_outbound(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        outbound: OutboundCollaborationMessage,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> tuple[TaskOrigin, InboundEventReceipt, OutboundCollaborationMessage, str, bool]:
+        """Atomically persist accepted origin + correlated outbound/outbox.
+
+        Returns ``(origin, receipt, outbound, outbox_item_id, created)``.
+        ``created`` is True only when this call inserted the origin. Missing
+        outbound after a prior origin commit is repaired deterministically.
+        """
+
+        self._validate_accepted_origin_inputs(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source_reference,
+            location_reference=location_reference,
+            parent_location_reference=parent_location_reference,
+            endpoint_id=endpoint_id,
+        )
+        if outbound.task_origin_object_id != origin.object_id:
+            raise MalformedCommandError(
+                "outbound.task_origin_object_id must equal origin.object_id"
+            )
+        if outbound.inbound_receipt_id != receipt.receipt_id:
+            raise MalformedCommandError(
+                "outbound.inbound_receipt_id must equal receipt.receipt_id"
+            )
+        if outbound.tenant_id != origin.tenant_id or outbound.provider != origin.provider:
+            raise MalformedCommandError("outbound tenant/provider must match origin")
+
+        existing_origin = self.get_task_origin_by_external(
+            tenant_id=origin.tenant_id,
+            provider=origin.provider,
+            external_event_id=origin.external_event_id,
+        )
+        if existing_origin is not None:
+            found_receipt = self.get_inbound_receipt_by_external(
+                tenant_id=origin.tenant_id,
+                provider=origin.provider,
+                external_event_id=origin.external_event_id,
+            )
+            assert found_receipt is not None
+            message, outbox_item_id, _ = self.enqueue_outbound_message(outbound)
+            return existing_origin, found_receipt, message, outbox_item_id, False
+
+        previous = self._begin_write()
+        try:
+            again = self.get_task_origin_by_external(
+                tenant_id=origin.tenant_id,
+                provider=origin.provider,
+                external_event_id=origin.external_event_id,
+            )
+            if again is not None:
+                found_receipt = self.get_inbound_receipt_by_external(
+                    tenant_id=origin.tenant_id,
+                    provider=origin.provider,
+                    external_event_id=origin.external_event_id,
+                )
+                assert found_receipt is not None
+                message, outbox_item_id, _ = self.enqueue_outbound_message(outbound)
+                self._commit_txn(previous)
+                return again, found_receipt, message, outbox_item_id, False
+
+            self.save_external_reference(source_reference)
+            self.save_external_reference(location_reference)
+            if parent_location_reference is not None:
+                self.save_external_reference(parent_location_reference)
+
+            revisions = SqliteRevisionRepository(self._conn)
+            if revisions.get_object(origin.object_id) is None:
+                revisions.register_object(
+                    GovernanceObject(
+                        object_id=origin.object_id,
+                        tenant_id=origin.tenant_id,
+                        object_type="TaskOrigin",
+                        created_at=origin.created_at,
+                        created_by_actor_id=origin.created_by_actor_id,
+                    )
+                )
+
+            effective_endpoint = endpoint_id or origin.endpoint_id
+            self.save_inbound_receipt(receipt, endpoint_id=effective_endpoint)
+            self._insert_task_origin(origin)
+            message, outbox_item_id, _ = self.enqueue_outbound_message(outbound)
+            self._commit_txn(previous)
+            return origin, receipt, message, outbox_item_id, True
         except Exception:
             self._rollback_txn(previous)
             raise
@@ -1176,6 +1298,15 @@ class SqliteCollaborationRepository:
             )
         if str(actor["tenant_id"]) != proposal.tenant_id:
             raise CrossTenantAccessError("genesis proposal actor tenant mismatch")
+        if not self.actor_has_permission(
+            tenant_id=proposal.tenant_id,
+            actor_id=proposal.created_by_actor_id,
+            permission=GENESIS_PROPOSE_PERMISSION,
+            at=proposal.created_at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.genesis.propose authority"
+            )
         existing_object = self._conn.execute(
             "SELECT object_id FROM gov_objects WHERE object_id = ?",
             (proposal.proposed_workspace_object_id,),
@@ -1264,6 +1395,15 @@ class SqliteCollaborationRepository:
             raise NotFoundGovernanceError(f"unknown actor {decided_by_actor_id}")
         if str(actor["tenant_id"]) != tenant_id:
             raise CrossTenantAccessError("genesis decision actor tenant mismatch")
+        if not self.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=decided_by_actor_id,
+            permission=GENESIS_DECIDE_PERMISSION,
+            at=decided_at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.genesis.decide authority"
+            )
 
         if outcome is GenesisDecisionOutcome.WITHDRAW:
             status = GenesisProposalStatus.WITHDRAWN

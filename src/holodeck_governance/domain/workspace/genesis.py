@@ -25,6 +25,11 @@ class GenesisDecisionOutcome(StrEnum):
     WITHDRAW = "withdraw"
 
 
+# Role-profile permissions required at the genesis application boundary.
+GENESIS_PROPOSE_PERMISSION = "workspace.genesis.propose"
+GENESIS_DECIDE_PERMISSION = "workspace.genesis.decide"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceGenesisProposal:
     """Proposed creation of a Holodeck workspace for an unbound location.

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from holodeck_governance.application.collaboration import CollaborationApplicationService
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
+from holodeck_governance.domain.authority.assignments import RoleAssignment
+from holodeck_governance.domain.authority.roles import RoleProfile
 from holodeck_governance.domain.collaboration import (
     BindingStatus,
     CollaborationEndpoint,
@@ -18,10 +20,14 @@ from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
     IdempotencyConflictError,
     MalformedCommandError,
+    MissingAuthorityError,
 )
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
+from holodeck_governance.domain.registry import GovernanceObject
 from holodeck_governance.domain.workspace import (
+    GENESIS_DECIDE_PERMISSION,
+    GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
     WorkspaceBindingStatus,
@@ -34,13 +40,69 @@ from holodeck_governance.storage.sqlite.migrations import (
     governance_schema_version,
     migrate_governance,
 )
+from holodeck_governance.storage.sqlite.revisions import SqliteRevisionRepository
 from holodeck_governance.storage.sqlite.tenants import ensure_default_local_tenant
 from holodeck_governance.testing import FIXED_CLOCK, FixtureIds
 
 NOW = datetime(2026, 7, 29, 9, 15, tzinfo=UTC)
 
 
-def _service() -> tuple[sqlite3.Connection, CollaborationApplicationService, FixtureIds]:
+def _grant_genesis(
+    conn: sqlite3.Connection,
+    ids: FixtureIds,
+    *,
+    actor_id: str,
+    permissions: tuple[str, ...] = (
+        GENESIS_PROPOSE_PERMISSION,
+        GENESIS_DECIDE_PERMISSION,
+    ),
+) -> None:
+    auth = SqliteAuthorityRepository(conn)
+    revisions = SqliteRevisionRepository(conn)
+    role_object_id = generate_uuidv7()
+    revisions.register_object(
+        GovernanceObject(
+            object_id=role_object_id,
+            tenant_id=ids.tenant_alpha,
+            object_type="RoleProfile",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_role_profile(
+        RoleProfile(
+            role_profile_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            role_object_id=role_object_id,
+            revision=1,
+            name="genesis-admin",
+            permissions=permissions,
+            jurisdiction={"tenant": ids.tenant_alpha},
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_assignment(
+        RoleAssignment(
+            assignment_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            actor_id=actor_id,
+            role_object_id=role_object_id,
+            role_revision=1,
+            workspace_object_id=None,
+            jurisdiction_key="tenant",
+            jurisdiction_value=ids.tenant_alpha,
+            effective_from=NOW - timedelta(hours=1),
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+            effective_until=NOW + timedelta(days=30),
+        )
+    )
+
+
+def _service() -> tuple[
+    sqlite3.Connection, CollaborationApplicationService, FixtureIds, str
+]:
     ids = FixtureIds()
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -58,9 +120,11 @@ def _service() -> tuple[sqlite3.Connection, CollaborationApplicationService, Fix
         (ids.tenant_beta, NOW.isoformat(), ids.system_service),
     )
     auth = SqliteAuthorityRepository(conn)
+    unauthorized_actor_id = generate_uuidv7()
     for actor_id, tenant_id, name, kind in (
         (ids.human_owner, ids.tenant_alpha, "Owner", ActorKind.HUMAN),
         (ids.system_service, ids.tenant_alpha, "System", ActorKind.SERVICE),
+        (unauthorized_actor_id, ids.tenant_alpha, "NoAuth", ActorKind.HUMAN),
         (ids.human_reviewer, ids.tenant_beta, "Beta", ActorKind.HUMAN),
     ):
         auth.save_actor(
@@ -73,10 +137,11 @@ def _service() -> tuple[sqlite3.Connection, CollaborationApplicationService, Fix
                 created_by_actor_id=ids.system_service,
             )
         )
+    _grant_genesis(conn, ids, actor_id=ids.human_owner)
     service = CollaborationApplicationService(
         repository=SqliteCollaborationRepository(conn)
     )
-    return conn, service, ids
+    return conn, service, ids, unauthorized_actor_id
 
 
 def _endpoint(ids: FixtureIds) -> CollaborationEndpoint:
@@ -114,6 +179,7 @@ def _open_proposal(
     *,
     endpoint: CollaborationEndpoint,
     external_location_id: str = "channel-new",
+    created_by_actor_id: str | None = None,
 ) -> WorkspaceGenesisProposal:
     location = _ref(
         ids,
@@ -134,7 +200,7 @@ def _open_proposal(
         purpose_text="Govern work requested from this channel",
         status=GenesisProposalStatus.PROPOSED,
         created_at=NOW,
-        created_by_actor_id=ids.human_owner,
+        created_by_actor_id=created_by_actor_id or ids.human_owner,
     )
     return service.propose_workspace_genesis(proposal)
 
@@ -142,7 +208,7 @@ def _open_proposal(
 def test_migrate_v17_creates_genesis_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 17
+    assert governance_schema_version(conn) == 18
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -151,7 +217,7 @@ def test_migrate_v17_creates_genesis_table() -> None:
 
 
 def test_propose_and_approve_creates_workspace_and_binding() -> None:
-    conn, service, ids = _service()
+    conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     proposal = _open_proposal(service, ids, endpoint=endpoint)
@@ -188,8 +254,64 @@ def test_propose_and_approve_creates_workspace_and_binding() -> None:
     assert binding.status is WorkspaceBindingStatus.ACTIVE
 
 
+def test_same_tenant_actor_without_genesis_decide_cannot_approve() -> None:
+    _conn, service, ids, unauthorized = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    proposal = _open_proposal(
+        service, ids, endpoint=endpoint, external_location_id="channel-noauth"
+    )
+    with pytest.raises(MissingAuthorityError):
+        service.decide_workspace_genesis(
+            WorkspaceGenesisDecision(
+                proposal_id=proposal.proposal_id,
+                tenant_id=ids.tenant_alpha,
+                outcome=GenesisDecisionOutcome.APPROVE,
+                decided_at=NOW,
+                decided_by_actor_id=unauthorized,
+            )
+        )
+    assert _conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
+    assert (
+        _conn.execute(
+            "SELECT COUNT(*) FROM gov_collaboration_location_bindings"
+        ).fetchone()[0]
+        == 0
+    )
+
+
+def test_same_tenant_actor_without_genesis_propose_cannot_propose() -> None:
+    _conn, service, ids, unauthorized = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    location = _ref(
+        ids,
+        object_type="conversation_channel",
+        external_object_id="channel-propose-denied",
+        locator="memory://channel-propose-denied",
+    )
+    service.save_external_reference(location)
+    with pytest.raises(MissingAuthorityError):
+        service.propose_workspace_genesis(
+            WorkspaceGenesisProposal(
+                proposal_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                endpoint_id=endpoint.endpoint_id,
+                location_kind=LocationKind.CHANNEL,
+                external_location_id="channel-propose-denied",
+                location_reference_id=location.reference_id,
+                proposed_workspace_object_id=generate_uuidv7(),
+                display_name="Denied",
+                purpose_text="Should fail",
+                status=GenesisProposalStatus.PROPOSED,
+                created_at=NOW,
+                created_by_actor_id=unauthorized,
+            )
+        )
+
+
 def test_reject_and_withdraw_create_no_workspace() -> None:
-    conn, service, ids = _service()
+    conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     rejected = _open_proposal(
@@ -227,7 +349,7 @@ def test_reject_and_withdraw_create_no_workspace() -> None:
 
 
 def test_duplicate_open_proposal_rejected() -> None:
-    _conn, service, ids = _service()
+    _conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     first = _open_proposal(
@@ -253,7 +375,7 @@ def test_duplicate_open_proposal_rejected() -> None:
 
 
 def test_cannot_propose_when_binding_already_exists() -> None:
-    _conn, service, ids = _service()
+    _conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     # First approve a workspace for the location.
@@ -289,7 +411,7 @@ def test_cannot_propose_when_binding_already_exists() -> None:
 
 
 def test_cannot_decide_closed_proposal() -> None:
-    _conn, service, ids = _service()
+    _conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     proposal = _open_proposal(
@@ -317,7 +439,7 @@ def test_cannot_decide_closed_proposal() -> None:
 
 
 def test_cross_tenant_genesis_proposal_rejected() -> None:
-    _conn, service, ids = _service()
+    _conn, service, ids, _unauthorized = _service()
     endpoint = _endpoint(ids)
     service.save_endpoint(endpoint)
     location = _ref(
@@ -344,3 +466,23 @@ def test_cross_tenant_genesis_proposal_rejected() -> None:
                 created_by_actor_id=ids.human_reviewer,
             )
         )
+
+
+def test_cross_tenant_genesis_decision_rejected() -> None:
+    _conn, service, ids, _unauthorized = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    proposal = _open_proposal(
+        service, ids, endpoint=endpoint, external_location_id="channel-xdecide"
+    )
+    with pytest.raises(CrossTenantAccessError):
+        service.decide_workspace_genesis(
+            WorkspaceGenesisDecision(
+                proposal_id=proposal.proposal_id,
+                tenant_id=ids.tenant_alpha,
+                outcome=GenesisDecisionOutcome.APPROVE,
+                decided_at=NOW,
+                decided_by_actor_id=ids.human_reviewer,
+            )
+        )
+    assert _conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0

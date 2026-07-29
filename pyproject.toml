@@ -32,11 +32,11 @@ Source = "https://github.com/talhas-laboratory/holodeck"
 Issues = "https://github.com/talhas-laboratory/holodeck/issues"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.6"]
-dev = ["build>=1", "mcp>=1.6", "pytest>=8"]
+mcp = ["mcp>=1.6,<2"]
+dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8"]
 
 [dependency-groups]
-dev = ["build>=1", "mcp>=1.6", "pytest>=8"]
+dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8"]
 
 [tool.uv]
 default-groups = ["dev"]

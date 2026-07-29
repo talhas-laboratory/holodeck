@@ -271,8 +271,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.6" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.6" },
+    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.6,<2" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.6,<2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
 ]
 provides-extras = ["mcp", "dev"]
@@ -280,7 +280,7 @@ provides-extras = ["mcp", "dev"]
 [package.metadata.requires-dev]
 dev = [
     { name = "build", specifier = ">=1" },
-    { name = "mcp", specifier = ">=1.6" },
+    { name = "mcp", specifier = ">=1.6,<2" },
     { name = "pytest", specifier = ">=8" },
 ]
 

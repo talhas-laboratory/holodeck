@@ -18,6 +18,8 @@ from holodeck_governance.domain.workspace.discovery import (
     evaluate_workspace_discovery,
 )
 from holodeck_governance.domain.workspace.genesis import (
+    GENESIS_DECIDE_PERMISSION,
+    GENESIS_PROPOSE_PERMISSION,
     GenesisDecisionOutcome,
     GenesisProposalStatus,
     WorkspaceGenesisDecision,
@@ -52,6 +54,8 @@ __all__ = [
     "Contradiction",
     "GenesisDecisionOutcome",
     "GenesisProposalStatus",
+    "GENESIS_DECIDE_PERMISSION",
+    "GENESIS_PROPOSE_PERMISSION",
     "IntentSeed",
     "KnowledgeGap",
     "M2_INTELLIGENCE_COMMAND_TYPES",

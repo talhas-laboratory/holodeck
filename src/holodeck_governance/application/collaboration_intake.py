@@ -51,7 +51,8 @@ class CollaborationIntakeOrchestrator:
     """Wire adapter normalize/verify to Holodeck receipt/origin/outbox/publish.
 
     Holodeck remains the system of record. Adapter publish acknowledgements are
-    delivery metadata only.
+    delivery metadata only. Accepted origin and correlated outbound/outbox are
+    committed atomically; retries repair a missing outbound if needed.
     """
 
     adapter: CollaborationAdapter
@@ -79,17 +80,7 @@ class CollaborationIntakeOrchestrator:
             external_event_id=event.external_event_id,
         )
         if existing is not None:
-            origin = None
-            if existing.task_origin_object_id is not None:
-                origin = self.collaboration.get_task_origin(existing.task_origin_object_id)
-            return IntakeHandleResult(
-                processing_outcome=ProcessingOutcome.DUPLICATE_REPLAY,
-                verification_result=existing.verification_result,
-                receipt=existing,
-                origin=origin,
-                created=False,
-                reason_codes=("reason.duplicate_replay",),
-            )
+            return self._replay_or_repair_accepted(existing=existing, event=event)
 
         intake = parse_intake_command(event.body_text)
         mapping = self.collaboration.resolve_actor_mapping(
@@ -186,6 +177,58 @@ class CollaborationIntakeOrchestrator:
             endpoint_id=endpoint_id,
             subject_text=intake.subject_text or "",
             at=now,
+        )
+
+    def _replay_or_repair_accepted(
+        self,
+        *,
+        existing: InboundEventReceipt,
+        event: NormalizedInboundEvent,
+    ) -> IntakeHandleResult:
+        origin = None
+        if existing.task_origin_object_id is not None:
+            origin = self.collaboration.get_task_origin(existing.task_origin_object_id)
+
+        outbound_message = None
+        outbound_ack = None
+        outbox_item_id = None
+        if (
+            existing.processing_outcome is ProcessingOutcome.ACCEPTED_ORIGIN
+            and origin is not None
+        ):
+            command_id = existing.command_id or self.id_factory()
+            message = OutboundCollaborationMessage(
+                message_id=self.id_factory(),
+                tenant_id=event.tenant_id,
+                provider=event.provider,
+                destination=event.location,
+                body_text=f"accepted: {origin.subject_text}",
+                task_origin_object_id=origin.object_id,
+                inbound_receipt_id=existing.receipt_id,
+                command_id=command_id,
+                idempotency_key=outbound_idempotency_key(
+                    tenant_id=event.tenant_id,
+                    provider=event.provider,
+                    task_origin_object_id=origin.object_id,
+                    status_kind="accepted",
+                ),
+                created_at=self.clock(),
+            )
+            enqueued = self.collaboration.enqueue_outbound_status(message)
+            outbound_message = enqueued.message
+            outbox_item_id = enqueued.outbox_item_id
+            outbound_ack = self.adapter.publish_outbound(enqueued.message)
+
+        return IntakeHandleResult(
+            processing_outcome=ProcessingOutcome.DUPLICATE_REPLAY,
+            verification_result=existing.verification_result,
+            receipt=existing,
+            origin=origin,
+            outbound_message=outbound_message,
+            outbound_ack=outbound_ack,
+            outbox_item_id=outbox_item_id,
+            created=False,
+            reason_codes=("reason.duplicate_replay",),
         )
 
     def _record_non_origin(
@@ -286,51 +329,49 @@ class CollaborationIntakeOrchestrator:
                 else event.location.parent_external_location.reference_id
             ),
         )
-        accepted = self.collaboration.accept_task_origin(
-            origin=origin,
-            receipt=receipt,
-            source_reference=event.source_reference,
-            location_reference=event.location.external_location,
-            parent_location_reference=event.location.parent_external_location,
-            endpoint_id=endpoint_id,
-        )
-        if not accepted.created:
-            return IntakeHandleResult(
-                processing_outcome=ProcessingOutcome.DUPLICATE_REPLAY,
-                verification_result=accepted.receipt.verification_result,
-                receipt=accepted.receipt,
-                origin=accepted.origin,
-                created=False,
-                reason_codes=("reason.duplicate_replay",),
-            )
-
         message = OutboundCollaborationMessage(
             message_id=self.id_factory(),
             tenant_id=event.tenant_id,
             provider=event.provider,
             destination=event.location,
             body_text=f"accepted: {subject_text}",
-            task_origin_object_id=accepted.origin.object_id,
-            inbound_receipt_id=accepted.receipt.receipt_id,
+            task_origin_object_id=origin_id,
+            inbound_receipt_id=receipt_id,
             command_id=command_id,
             idempotency_key=outbound_idempotency_key(
                 tenant_id=event.tenant_id,
                 provider=event.provider,
-                task_origin_object_id=accepted.origin.object_id,
+                task_origin_object_id=origin_id,
                 status_kind="accepted",
             ),
             created_at=at,
         )
-        enqueued = self.collaboration.enqueue_outbound_status(message)
-        ack = self.adapter.publish_outbound(enqueued.message)
+        accepted = self.collaboration.accept_task_origin_with_outbound(
+            origin=origin,
+            receipt=receipt,
+            source_reference=event.source_reference,
+            location_reference=event.location.external_location,
+            parent_location_reference=event.location.parent_external_location,
+            endpoint_id=endpoint_id,
+            outbound=message,
+        )
+        ack = self.adapter.publish_outbound(accepted.message)
         return IntakeHandleResult(
-            processing_outcome=ProcessingOutcome.ACCEPTED_ORIGIN,
+            processing_outcome=(
+                ProcessingOutcome.ACCEPTED_ORIGIN
+                if accepted.created
+                else ProcessingOutcome.DUPLICATE_REPLAY
+            ),
             verification_result=VerificationResult.VERIFIED,
             receipt=accepted.receipt,
             origin=accepted.origin,
-            outbound_message=enqueued.message,
+            outbound_message=accepted.message,
             outbound_ack=ack,
-            outbox_item_id=enqueued.outbox_item_id,
-            created=True,
-            reason_codes=accepted.receipt.reason_codes,
+            outbox_item_id=accepted.outbox_item_id,
+            created=accepted.created,
+            reason_codes=(
+                accepted.receipt.reason_codes
+                if accepted.created
+                else ("reason.duplicate_replay",)
+            ),
         )

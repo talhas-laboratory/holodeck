@@ -134,7 +134,7 @@ def _ref(
 def test_migrate_v16_creates_workspace_binding_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 17
+    assert governance_schema_version(conn) == 18
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -310,6 +310,190 @@ def test_duplicate_repository_binding_natural_key_rejected() -> None:
                 default_branch="main",
                 status=WorkspaceBindingStatus.ACTIVE,
                 external_reference_id=repo_ref.reference_id,
+                created_at=NOW,
+                created_by_actor_id=ids.system_service,
+            )
+        )
+
+
+def test_retire_then_rebind_repository_to_new_workspace() -> None:
+    conn, service, ids = _service()
+    workspace_alpha_2 = generate_uuidv7()
+    SqliteRevisionRepository(conn).register_object(
+        GovernanceObject(
+            object_id=workspace_alpha_2,
+            tenant_id=ids.tenant_alpha,
+            object_type="Workspace",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    repo_ref = _ref(
+        ids,
+        object_type="repository",
+        external_object_id="org/rebind",
+        locator="https://example.test/org/rebind",
+    )
+    service.save_external_reference(repo_ref)
+    old = RepositoryBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        provider="git",
+        external_repository_id="org/rebind",
+        canonical_locator=repo_ref.locator,
+        default_branch="main",
+        status=WorkspaceBindingStatus.ACTIVE,
+        external_reference_id=repo_ref.reference_id,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_repository_binding(old)
+    service.set_repository_binding_status(
+        old.binding_id,
+        tenant_id=ids.tenant_alpha,
+        status=WorkspaceBindingStatus.RETIRED,
+    )
+    replacement = RepositoryBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=workspace_alpha_2,
+        provider="git",
+        external_repository_id="org/rebind",
+        canonical_locator=repo_ref.locator,
+        default_branch="main",
+        status=WorkspaceBindingStatus.ACTIVE,
+        external_reference_id=repo_ref.reference_id,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_repository_binding(replacement)
+    resolved = service.resolve_workspace_by_repository(
+        tenant_id=ids.tenant_alpha,
+        provider="git",
+        external_repository_id="org/rebind",
+    )
+    assert resolved is not None
+    assert resolved.binding_id == replacement.binding_id
+    assert resolved.workspace_object_id == workspace_alpha_2
+    assert (
+        conn.execute("SELECT COUNT(*) FROM gov_repository_bindings").fetchone()[0] == 2
+    )
+
+
+def test_retire_then_rebind_collaboration_location() -> None:
+    conn, service, ids = _service()
+    workspace_alpha_2 = generate_uuidv7()
+    SqliteRevisionRepository(conn).register_object(
+        GovernanceObject(
+            object_id=workspace_alpha_2,
+            tenant_id=ids.tenant_alpha,
+            object_type="Workspace",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    location = _ref(
+        ids,
+        object_type="conversation_channel",
+        external_object_id="channel-rebind",
+        locator="memory://channels/rebind",
+    )
+    service.save_external_reference(location)
+    old = CollaborationLocationBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        endpoint_id=endpoint.endpoint_id,
+        location_kind=LocationKind.CHANNEL,
+        external_location_id="channel-rebind",
+        location_reference_id=location.reference_id,
+        status=WorkspaceBindingStatus.ACTIVE,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_collaboration_location_binding(old)
+    service.set_collaboration_location_binding_status(
+        old.binding_id,
+        tenant_id=ids.tenant_alpha,
+        status=WorkspaceBindingStatus.RETIRED,
+    )
+    assert (
+        service.resolve_workspace_by_collaboration_location(
+            tenant_id=ids.tenant_alpha,
+            endpoint_id=endpoint.endpoint_id,
+            location_kind=LocationKind.CHANNEL,
+            external_location_id="channel-rebind",
+        )
+        is None
+    )
+    replacement = CollaborationLocationBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=workspace_alpha_2,
+        endpoint_id=endpoint.endpoint_id,
+        location_kind=LocationKind.CHANNEL,
+        external_location_id="channel-rebind",
+        location_reference_id=location.reference_id,
+        status=WorkspaceBindingStatus.ACTIVE,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_collaboration_location_binding(replacement)
+    resolved = service.resolve_workspace_by_collaboration_location(
+        tenant_id=ids.tenant_alpha,
+        endpoint_id=endpoint.endpoint_id,
+        location_kind=LocationKind.CHANNEL,
+        external_location_id="channel-rebind",
+    )
+    assert resolved is not None
+    assert resolved.binding_id == replacement.binding_id
+    assert resolved.workspace_object_id == workspace_alpha_2
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_collaboration_location_bindings"
+        ).fetchone()[0]
+        == 2
+    )
+
+
+def test_two_active_collaboration_location_bindings_rejected() -> None:
+    _conn, service, ids = _service()
+    endpoint = _endpoint(ids)
+    service.save_endpoint(endpoint)
+    location = _ref(
+        ids,
+        object_type="conversation_channel",
+        external_object_id="channel-two-active",
+        locator="memory://channels/two-active",
+    )
+    service.save_external_reference(location)
+    first = CollaborationLocationBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        endpoint_id=endpoint.endpoint_id,
+        location_kind=LocationKind.CHANNEL,
+        external_location_id="channel-two-active",
+        location_reference_id=location.reference_id,
+        status=WorkspaceBindingStatus.ACTIVE,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    service.save_collaboration_location_binding(first)
+    with pytest.raises(RevisionImmutableError):
+        service.save_collaboration_location_binding(
+            CollaborationLocationBinding(
+                binding_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                endpoint_id=endpoint.endpoint_id,
+                location_kind=LocationKind.CHANNEL,
+                external_location_id="channel-two-active",
+                location_reference_id=location.reference_id,
+                status=WorkspaceBindingStatus.ACTIVE,
                 created_at=NOW,
                 created_by_actor_id=ids.system_service,
             )

@@ -55,6 +55,15 @@ class CollaborationRepositoryPort(Protocol):
         self, *, tenant_id: str, actor_id: str, at: datetime
     ) -> bool: ...
 
+    def actor_has_permission(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        permission: str,
+        at: datetime,
+    ) -> bool: ...
+
     def save_inbound_receipt(
         self,
         receipt: InboundEventReceipt,
@@ -82,6 +91,24 @@ class CollaborationRepositoryPort(Protocol):
     def enqueue_outbound_message(
         self, message: OutboundCollaborationMessage
     ) -> tuple[OutboundCollaborationMessage, str, bool]: ...
+
+    def get_outbound_message_by_idempotency(
+        self, *, tenant_id: str, idempotency_key: str
+    ) -> tuple[OutboundCollaborationMessage, str] | None: ...
+
+    def record_accepted_origin_with_outbound(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        outbound: OutboundCollaborationMessage,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> tuple[
+        TaskOrigin, InboundEventReceipt, OutboundCollaborationMessage, str, bool
+    ]: ...
 
     def get_outbound_message(
         self, message_id: str
@@ -176,6 +203,16 @@ class EnqueueOutboundResult:
 
 
 @dataclass(frozen=True, slots=True)
+class AcceptOriginWithOutboundResult:
+    origin: TaskOrigin
+    receipt: InboundEventReceipt
+    message: OutboundCollaborationMessage
+    outbox_item_id: str
+    processing_outcome: ProcessingOutcome
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
 class CollaborationApplicationService:
     """Adapter-facing collaboration binding/receipt/origin/outbound seam.
 
@@ -226,6 +263,21 @@ class CollaborationApplicationService:
     ) -> bool:
         return self.repository.actor_may_intake(
             tenant_id=tenant_id, actor_id=actor_id, at=at
+        )
+
+    def actor_has_permission(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        permission: str,
+        at: datetime,
+    ) -> bool:
+        return self.repository.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            permission=permission,
+            at=at,
         )
 
     def save_repository_binding(self, binding: RepositoryBinding) -> RepositoryBinding:
@@ -488,6 +540,47 @@ class CollaborationApplicationService:
             created=created,
         )
 
+    def accept_task_origin_with_outbound(
+        self,
+        *,
+        origin: TaskOrigin,
+        receipt: InboundEventReceipt,
+        source_reference: ExternalReference,
+        location_reference: ExternalReference,
+        outbound: OutboundCollaborationMessage,
+        parent_location_reference: ExternalReference | None = None,
+        endpoint_id: str | None = None,
+    ) -> AcceptOriginWithOutboundResult:
+        """Atomically record accepted origin and correlated outbound/outbox."""
+
+        (
+            stored_origin,
+            stored_receipt,
+            stored_message,
+            outbox_item_id,
+            created,
+        ) = self.repository.record_accepted_origin_with_outbound(
+            origin=origin,
+            receipt=receipt,
+            source_reference=source_reference,
+            location_reference=location_reference,
+            outbound=outbound,
+            parent_location_reference=parent_location_reference,
+            endpoint_id=endpoint_id,
+        )
+        return AcceptOriginWithOutboundResult(
+            origin=stored_origin,
+            receipt=stored_receipt,
+            message=stored_message,
+            outbox_item_id=outbox_item_id,
+            processing_outcome=(
+                stored_receipt.processing_outcome
+                if created
+                else ProcessingOutcome.DUPLICATE_REPLAY
+            ),
+            created=created,
+        )
+
     def get_task_origin(self, object_id: str) -> TaskOrigin | None:
         return self.repository.get_task_origin(object_id)
 
@@ -509,3 +602,10 @@ class CollaborationApplicationService:
         self, message_id: str
     ) -> OutboundCollaborationMessage | None:
         return self.repository.get_outbound_message(message_id)
+
+    def get_outbound_message_by_idempotency(
+        self, *, tenant_id: str, idempotency_key: str
+    ) -> tuple[OutboundCollaborationMessage, str] | None:
+        return self.repository.get_outbound_message_by_idempotency(
+            tenant_id=tenant_id, idempotency_key=idempotency_key
+        )

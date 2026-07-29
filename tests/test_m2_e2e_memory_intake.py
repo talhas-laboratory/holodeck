@@ -22,7 +22,10 @@ from holodeck_governance.domain.collaboration import (
     BindingStatus,
     CollaborationEndpoint,
     ExternalActorMapping,
+    InboundEventReceipt,
+    LocationKind,
     ProcessingOutcome,
+    TaskOrigin,
     VerificationResult,
 )
 from holodeck_governance.domain.ids import generate_uuidv7
@@ -263,6 +266,9 @@ def _counts(conn: sqlite3.Connection) -> dict[str, int]:
                 "SELECT COUNT(*) FROM gov_outbound_collaboration_messages"
             ).fetchone()[0]
         ),
+        "outbox": int(
+            conn.execute("SELECT COUNT(*) FROM gov_outbox_items").fetchone()[0]
+        ),
         "missions": int(
             conn.execute(
                 "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Mission'"
@@ -286,6 +292,7 @@ def test_cis001_auth_failure_creates_no_governed_state() -> None:
         "receipts": 0,
         "origins": 0,
         "outbound": 0,
+        "outbox": 0,
         "missions": 0,
         "runs": 0,
     }
@@ -385,12 +392,119 @@ def test_cis007_and_cis008_happy_path_correlates_status_without_mission() -> Non
         "receipts": 1,
         "origins": 1,
         "outbound": 1,
+        "outbox": 1,
         "missions": 0,
         "runs": 0,
     }
     # Re-publish same semantic status through adapter remains idempotent.
     again = world.adapter.publish_outbound(result.outbound_message)
     assert again == result.outbound_ack
+    assert len(world.adapter.published_messages) == 1
+
+
+def test_crash_between_origin_and_outbox_is_repaired_on_retry() -> None:
+    """Origin commit without outbound; retry completes exactly-once outbox work."""
+
+    world = _world()
+    payload = _payload(world, external_event_id="evt-crash-gap")
+    mapping = world.service.resolve_actor_mapping(
+        tenant_id=world.ids.tenant_alpha,
+        provider=MEMORY_PROVIDER,
+        external_actor_id=EXT_OWNER,
+    )
+    assert mapping is not None
+
+    source = ExternalReference(
+        reference_id=generate_uuidv7(),
+        tenant_id=world.ids.tenant_alpha,
+        provider=MEMORY_PROVIDER,
+        object_type="collaboration_event",
+        external_object_id="evt-crash-gap",
+        locator="memory://events/evt-crash-gap",
+        observed_at=NOW,
+        created_at=NOW,
+        created_by_actor_id=world.ids.system_service,
+    )
+    location = ExternalReference(
+        reference_id=generate_uuidv7(),
+        tenant_id=world.ids.tenant_alpha,
+        provider=MEMORY_PROVIDER,
+        object_type="conversation_channel",
+        external_object_id="channel-main",
+        locator="memory://channels/main",
+        observed_at=NOW,
+        created_at=NOW,
+        created_by_actor_id=world.ids.system_service,
+    )
+    origin_id = generate_uuidv7()
+    receipt_id = generate_uuidv7()
+    # Simulate crash after origin+receipt commit, before outbound/outbox.
+    crashed = world.service.accept_task_origin(
+        origin=TaskOrigin(
+            object_id=origin_id,
+            tenant_id=world.ids.tenant_alpha,
+            actor_id=world.ids.human_owner,
+            inbound_receipt_id=receipt_id,
+            source_reference_id=source.reference_id,
+            provider=MEMORY_PROVIDER,
+            external_event_id="evt-crash-gap",
+            subject_text="prove e2e intake",
+            body_text=str(payload["body_text"]),
+            location_kind=LocationKind.CHANNEL,
+            location_reference_id=location.reference_id,
+            created_at=NOW,
+            created_by_actor_id=world.ids.system_service,
+            mapping_id=mapping.mapping_id,
+            endpoint_id=world.endpoint.endpoint_id,
+        ),
+        receipt=InboundEventReceipt(
+            receipt_id=receipt_id,
+            tenant_id=world.ids.tenant_alpha,
+            provider=MEMORY_PROVIDER,
+            external_event_id="evt-crash-gap",
+            inbound_event_id=generate_uuidv7(),
+            signed_source_reference_id=source.reference_id,
+            verification_result=VerificationResult.VERIFIED,
+            processing_outcome=ProcessingOutcome.ACCEPTED_ORIGIN,
+            reason_codes=("reason.accepted_origin",),
+            checkpoint_token=generate_uuidv7(),
+            created_at=NOW,
+            command_id=generate_uuidv7(),
+            task_origin_object_id=origin_id,
+            mapping_id=mapping.mapping_id,
+            external_actor_id=mapping.external_actor_id,
+        ),
+        source_reference=source,
+        location_reference=location,
+        endpoint_id=world.endpoint.endpoint_id,
+    )
+    assert crashed.created is True
+    assert _counts(world.conn)["origins"] == 1
+    assert _counts(world.conn)["outbound"] == 0
+    assert _counts(world.conn)["outbox"] == 0
+
+    repaired = world.orchestrator.handle_inbound(payload)
+    assert repaired.processing_outcome is ProcessingOutcome.DUPLICATE_REPLAY
+    assert repaired.created is False
+    assert repaired.origin is not None
+    assert repaired.origin.object_id == origin_id
+    assert repaired.outbound_message is not None
+    assert repaired.outbox_item_id is not None
+    assert repaired.outbound_ack is not None
+
+    counts = _counts(world.conn)
+    assert counts["receipts"] == 1
+    assert counts["origins"] == 1
+    assert counts["outbound"] == 1
+    assert counts["outbox"] == 1
+    assert len(world.adapter.published_messages) == 1
+
+    again = world.orchestrator.handle_inbound(payload)
+    assert again.processing_outcome is ProcessingOutcome.DUPLICATE_REPLAY
+    assert _counts(world.conn)["receipts"] == 1
+    assert _counts(world.conn)["origins"] == 1
+    assert _counts(world.conn)["outbound"] == 1
+    assert _counts(world.conn)["outbox"] == 1
     assert len(world.adapter.published_messages) == 1
 
 

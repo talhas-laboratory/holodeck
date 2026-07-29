@@ -29,6 +29,9 @@ from holodeck_governance.storage.sqlite.migrate_v16 import upgrade_workspace_bin
 from holodeck_governance.storage.sqlite.migrate_v17 import (
     upgrade_workspace_genesis_proposals,
 )
+from holodeck_governance.storage.sqlite.migrate_v18 import (
+    upgrade_workspace_binding_active_uniques,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -346,6 +349,7 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (15, "outbound_collaboration_messages", upgrade_outbound_collaboration_messages),
     (16, "workspace_bindings", upgrade_workspace_bindings),
     (17, "workspace_genesis_proposals", upgrade_workspace_genesis_proposals),
+    (18, "workspace_binding_active_uniques", upgrade_workspace_binding_active_uniques),
 ]
 
 
@@ -368,6 +372,20 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 18:
+        for table in (
+            "gov_collaboration_location_bindings",
+            "gov_repository_bindings",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        from holodeck_governance.storage.sqlite.migrate_v16 import (
+            upgrade_workspace_bindings as rebuild_v16_bindings,
+        )
+
+        rebuild_v16_bindings(conn)
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 17:
         conn.execute("DROP TABLE IF EXISTS gov_workspace_genesis_proposals")
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
