@@ -11,6 +11,41 @@ Decision
 The workspace curator builds a persistent context architecture at onboarding and refresh. It does not merely generate a one-time system prompt.
 ```
 
+### 3.0.1 Persistent factual repository representation
+
+For each active repository binding, workspace intelligence may maintain an
+immutable factual graph scoped to one exact repository revision. Its purpose is
+to preserve mechanically evidenced entities and relations for later bounded
+retrieval; it is not a permanent semantic interpretation of the codebase.
+
+The initial factual profile includes files, modules, classes, functions,
+methods, tests, manifests, configuration, migrations, schemas, API entry
+points, and evidence-backed relations such as containment, definitions,
+imports, calls, inheritance, reads/writes, tests, configuration, and
+migrations.
+
+Every fact must expose:
+
+- tenant, workspace, repository binding, and immutable repository revision;
+- exact source and source-observation identity;
+- repository-relative location and source span where applicable;
+- extractor identity, version, schema, configuration, and observation method;
+- explicit coverage limitations and diagnostics.
+
+Extractor output is untrusted observation data and is normalized through a
+provider-neutral adapter. Provider schemas and graph databases do not become
+the Holodeck domain model. Failed or partial extraction cannot silently replace
+the active complete snapshot. Prior snapshots remain queryable.
+
+Bounded queries must specify entity/relation kinds, direction, depth, result
+limits, and visited-node limits, and must return provenance, coverage,
+truncation, and omission reasons. Failure to find a relation does not establish
+that no dependency or risk exists.
+
+Component purpose, lifecycle status, product/security meaning, task relevance,
+and cross-dimensional implications are not facts in this graph. M3 may propose
+them as task-local, evidence-linked hypotheses.
+
 ### 3.1 Workspace model
 
 | Area | Required content |

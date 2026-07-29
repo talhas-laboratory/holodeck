@@ -24,6 +24,33 @@ A curator proposes semantic context. The compiler owns mandatory inputs, precede
 | 7 | Curator-selected and untrusted references | Informative data isolated from instruction layers. |
 | 8 | Prior work history and generated summaries | Supplementary, labelled, and source-linked. |
 
+The repository-state input may include bounded factual paths from M2's active
+or explicitly selected historical code-graph snapshot. The compiler must retain
+the snapshot revision, source observations, extractor coverage, selection path,
+and query omissions. It must not serialize an unrestricted graph neighborhood
+into the packet.
+
+### 5.1.1 Task intake and factual context planning
+
+Before implementation context is compiled, the request is represented by a
+typed task contract with one of three phase-readiness states:
+
+- `READY`: enough reliable information exists for mission compilation;
+- `DISCOVERY_READY`: enough exists for bounded investigation, but not
+  implementation;
+- `BLOCKED`: safe investigation cannot begin without clarification or
+  authority.
+
+The compiler resolves task concepts to candidate factual entities, preserves
+ambiguity, and executes a bounded query plan. Empty results and missing graph
+edges remain unresolved.
+
+Task-local interpretive probes may propose hypotheses over factual and approved
+workspace evidence. Probe results are `activated`, `cleared`, `unresolved`, or
+`conflicted`. `Cleared` requires an explicit bounded evidence argument; absence
+of evidence is never sufficient. Hypotheses remain generated interpretations
+unless separately promoted through governed workspace curation.
+
 ### 5.2 Mandatory baseline context
 
 - Workspace identity and approved instruction revision.
@@ -83,6 +110,10 @@ ContextPacket
 - Large sources SHOULD be provided as source-linked sections or retrieval handles rather than always embedded in full.
 - Critical requirements and binding instructions MUST never be summarized away solely to save tokens.
 - The worker MAY request context expansion using a structured request; the active packet remains immutable and the expansion becomes a linked packet revision or supplemental packet.
+- The compiler SHOULD prefer exact source spans and short evidence paths over
+  repository overviews or large graph serializations.
+- Every factual selection MUST retain the graph path or deterministic sentinel
+  that made it relevant, when applicable.
 ### 5.6 Context expansion protocol
 
 ```text

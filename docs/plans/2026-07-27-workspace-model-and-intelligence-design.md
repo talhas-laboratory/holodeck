@@ -1,6 +1,7 @@
 # Workspace model and intelligence design
 
-**Status:** Proposed — requires approval before M2 implementation
+**Status:** Approved and progressively implemented; extended by
+`2026-07-29-persistent-codebase-factual-graph-design.md`
 **Milestones:** M2 workspace intelligence and genesis; M3 context compilation
 
 ## Decision

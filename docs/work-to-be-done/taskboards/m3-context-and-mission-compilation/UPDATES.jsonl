@@ -1,0 +1,1 @@
+{"timestamp":"2026-07-29T00:00:00+00:00","actor":"codex","event":"board_created","tasks":["M3-000","M3-001","M3-002","M3-003","M3-004","M3-005","M3-006","M3-007","M3-008","M3-009"],"reason":"Plan the bounded context and mission compiler that consumes M2 factual workspace intelligence without moving interpretation into the factual graph.","blocked_on":"M2-011"}
