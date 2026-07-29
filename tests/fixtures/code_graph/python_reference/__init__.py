@@ -15,7 +15,10 @@ def iter_tree_files(tree_root: Path) -> tuple[Path, ...]:
     files = [
         path
         for path in sorted(tree_root.rglob("*"))
-        if path.is_file() and path.name != ".DS_Store"
+        if path.is_file()
+        and path.name != ".DS_Store"
+        and "__pycache__" not in path.parts
+        and path.suffix not in {".pyc", ".pyo"}
     ]
     return tuple(files)
 

@@ -387,3 +387,18 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
 - The Python reference fixture ships two content-hashed trees and typed golden
   facts covering every initial relation kind. `Greeter.invoke`'s dynamic call is
   an `unresolved_dynamic_call` diagnostic, never a fabricated `CALLS` edge.
+
+## 2026-07-29 — M2-020 extractor port and provider selection
+
+- Application port `RepositoryExtractor` accepts only immutable revisions and
+  explicit limits; results carry provider identity/version/schema, coverage,
+  candidates, and diagnostics. Provider SDKs stay in adapters.
+- **Selected M2 provider:** Python standard-library AST (`python_stdlib_ast`).
+  Full golden candidate emission is M2-022; M2-020 ships an honest partial
+  adapter plus a fake golden conformance adapter.
+- **GitNexus:** research-only under current
+  [PolyForm Noncommercial License 1.0.0](https://github.com/nxpatterns/gitnexus/blob/main/LICENSE).
+  No GitNexus code/DB/generated content in production dependencies.
+- **Tree-sitter:** deferred preferred multi-language adapter. **Joern:** later
+  deep-analysis research adapter only.
+- Assessment artifact: `artifacts/m2-code-graph-provider-assessment.md`.

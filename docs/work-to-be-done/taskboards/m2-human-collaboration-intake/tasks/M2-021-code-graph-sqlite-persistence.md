@@ -1,6 +1,6 @@
 # M2-021 — Persist immutable code-graph snapshots in SQLite
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
 **Depends on:** M2-019
 
