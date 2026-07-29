@@ -186,7 +186,7 @@ def test_adapters_package_exists_outside_domain() -> None:
     assert not (DOMAIN_COLLAB / "memory.py").exists()
 
 
-def test_memory_adapter_fetch_thread_context_stub() -> None:
+def test_memory_adapter_fetch_thread_context_empty_by_default() -> None:
     adapter = _adapter()
     assert adapter.fetch_thread_context(
         tenant_id=TENANT,

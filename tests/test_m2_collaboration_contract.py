@@ -317,6 +317,16 @@ def test_collaboration_adapter_protocol_shape() -> None:
         def publish_outbound(self, message):  # type: ignore[no-untyped-def]
             return {"ack": "local", "idempotency_key": message.idempotency_key}
 
+        def fetch_thread_context(  # type: ignore[no-untyped-def]
+            self,
+            *,
+            tenant_id,
+            location_kind,
+            external_location_id,
+            anchor_external_event_id=None,
+        ):
+            return ()
+
     adapter: CollaborationAdapter = MemoryAdapter()
     event = adapter.normalize_inbound({"text": "@holodeck work: demo"})
     assert event.provider == "memory"
@@ -324,6 +334,12 @@ def test_collaboration_adapter_protocol_shape() -> None:
         adapter.verify_and_map_actor(event).verification_result
         is VerificationResult.VERIFIED
     )
+    assert adapter.fetch_thread_context(
+        tenant_id=TENANT,
+        location_kind="thread",
+        external_location_id="thread-1",
+        anchor_external_event_id="evt-1",
+    ) == ()
     assert "ack" in adapter.publish_outbound(
         OutboundCollaborationMessage(
             message_id=MESSAGE,

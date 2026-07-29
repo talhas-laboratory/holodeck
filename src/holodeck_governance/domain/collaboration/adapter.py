@@ -64,9 +64,12 @@ class CollaborationAdapter(Protocol):
         tenant_id: str,
         location_kind: str,
         external_location_id: str,
+        anchor_external_event_id: str | None = None,
     ) -> tuple[ConversationContextManifestEntry, ...]:
-        """Optional thread context for origin manifests (M2-018).
+        """Optional preceding thread context for origin manifests (M2-018).
 
-        Stub-friendly: may return an empty tuple when the provider has no
-        durable thread history available.
+        Returns opaque message/attachment/omission entries for reconstitution.
+        May return an empty tuple when the provider has no durable history.
+        Partial retrieval should record omission entries rather than raising
+        when the adapter can still produce a useful partial manifest.
         """

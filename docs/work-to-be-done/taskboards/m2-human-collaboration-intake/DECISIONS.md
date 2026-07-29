@@ -296,3 +296,20 @@ Follow-up acceptance findings against the prior blocker fix:
 
 M2-018 remains **ready** (minimal conversation_context_manifest stub only;
 rich Buzz-backed capture workflow not implemented in this change).
+
+## 2026-07-29 — M2-018 conversation context capture
+
+Finish the M2-018 capture workflow (beyond the v21 stub):
+
+1. **Enriched manifest entries** — `relation` (`anchor` / `preceding` /
+   `attachment` / `thread_boundary` / `parent_location` / `omission`),
+   deterministic `sequence`, optional `note`; `kind` may be `omission`.
+2. **Domain merge helper** — `build_conversation_context_manifest` produces a
+   stable ordered, deduped tuple from thread fetch + location boundary +
+   anchor + event attachments.
+3. **Intake wiring** — accepted origins call adapter `fetch_thread_context`
+   fail-open (fetch failures become omission entries) and persist the manifest
+   atomically with origin/outbox. Replay returns the stored origin manifest.
+4. **Memory harness** — `seed_thread_context` / `mark_thread_context_unavailable`
+   support ordered preceding history and partial-retrieval tests. Buzz live
+   history remains M2-009.

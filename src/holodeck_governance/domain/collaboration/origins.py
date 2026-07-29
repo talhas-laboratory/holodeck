@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping
 
+from holodeck_governance.domain.collaboration.inbound import AttachmentRef
 from holodeck_governance.domain.collaboration.types import (
     AdapterMetadata,
     LocationKind,
@@ -13,6 +14,18 @@ from holodeck_governance.domain.collaboration.types import (
 from holodeck_governance.domain.errors import MalformedCommandError
 from holodeck_governance.domain.ids import require_opaque_id
 from holodeck_governance.domain.records._common import require_utc
+
+_MANIFEST_KINDS = frozenset({"message", "attachment", "omission"})
+_MANIFEST_RELATIONS = frozenset(
+    {
+        "anchor",
+        "preceding",
+        "attachment",
+        "thread_boundary",
+        "omission",
+        "parent_location",
+    }
+)
 
 
 def _freeze_metadata(metadata: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -23,19 +36,33 @@ def _freeze_metadata(metadata: Mapping[str, str] | None) -> Mapping[str, str]:
 
 @dataclass(frozen=True, slots=True)
 class ConversationContextManifestEntry:
-    """Opaque message or attachment reference preserved from intake context."""
+    """Opaque message, attachment, or omission reference from intake context.
+
+    Entries are reconstitution pointers into the collaboration provider — not
+    Holodeck workspace ids and not mission authority.
+    """
 
     kind: str
     external_id: str
     locator: str = ""
+    relation: str = "preceding"
+    sequence: int = 0
+    note: str = ""
 
     def __post_init__(self) -> None:
-        if self.kind not in {"message", "attachment"}:
+        if self.kind not in _MANIFEST_KINDS:
             raise MalformedCommandError(
-                "conversation context entry kind must be message or attachment"
+                "conversation context entry kind must be message, "
+                "attachment, or omission"
+            )
+        if self.relation not in _MANIFEST_RELATIONS:
+            raise MalformedCommandError(
+                "conversation context entry relation is invalid"
             )
         if not self.external_id.strip():
             raise MalformedCommandError("external_id is required")
+        if self.sequence < 0:
+            raise MalformedCommandError("sequence must be >= 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +131,134 @@ def task_origin_dedupe_key(origin: TaskOrigin) -> tuple[str, str, str]:
     return (origin.tenant_id, origin.provider, origin.external_event_id)
 
 
+def build_conversation_context_manifest(
+    *,
+    anchor_external_event_id: str,
+    anchor_locator: str,
+    location_external_id: str,
+    location_locator: str,
+    location_kind: str,
+    thread_entries: tuple[ConversationContextManifestEntry, ...] = (),
+    attachments: tuple[AttachmentRef, ...] = (),
+    parent_location_external_id: str | None = None,
+    parent_location_locator: str = "",
+) -> tuple[ConversationContextManifestEntry, ...]:
+    """Merge thread fetch, location boundary, anchor, and attachments.
+
+    Deterministic order: thread_boundary → parent_location → preceding (by
+    sequence) → anchor → attachments → omissions. Dedupes by (kind, external_id).
+    """
+
+    if not anchor_external_event_id.strip():
+        raise MalformedCommandError("anchor_external_event_id is required")
+    if not location_external_id.strip():
+        raise MalformedCommandError("location_external_id is required")
+    if not location_kind.strip():
+        raise MalformedCommandError("location_kind is required")
+
+    ordered: list[ConversationContextManifestEntry] = [
+        ConversationContextManifestEntry(
+            kind="message",
+            external_id=location_external_id,
+            locator=location_locator,
+            relation="thread_boundary",
+            sequence=0,
+            note=location_kind,
+        )
+    ]
+    if parent_location_external_id is not None and parent_location_external_id.strip():
+        ordered.append(
+            ConversationContextManifestEntry(
+                kind="message",
+                external_id=parent_location_external_id,
+                locator=parent_location_locator,
+                relation="parent_location",
+                sequence=0,
+            )
+        )
+
+    preceding = sorted(
+        (
+            entry
+            for entry in thread_entries
+            if not (
+                entry.kind == "message"
+                and entry.external_id == anchor_external_event_id
+            )
+            and entry.relation != "thread_boundary"
+            and entry.relation != "parent_location"
+            and entry.relation != "anchor"
+        ),
+        key=lambda entry: (entry.sequence, entry.kind, entry.external_id),
+    )
+    ordered.extend(
+        ConversationContextManifestEntry(
+            kind=entry.kind,
+            external_id=entry.external_id,
+            locator=entry.locator,
+            relation=(
+                entry.relation
+                if entry.relation in {"preceding", "attachment", "omission"}
+                else "preceding"
+            ),
+            sequence=entry.sequence,
+            note=entry.note,
+        )
+        for entry in preceding
+    )
+    ordered.append(
+        ConversationContextManifestEntry(
+            kind="message",
+            external_id=anchor_external_event_id,
+            locator=anchor_locator,
+            relation="anchor",
+            sequence=0,
+        )
+    )
+    for attachment in attachments:
+        ordered.append(
+            ConversationContextManifestEntry(
+                kind="attachment",
+                external_id=attachment.external_attachment.external_object_id,
+                locator=attachment.external_attachment.locator,
+                relation="attachment",
+                sequence=0,
+            )
+        )
+
+    deduped: list[ConversationContextManifestEntry] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in ordered:
+        key = (entry.kind, entry.external_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+
+    return tuple(
+        ConversationContextManifestEntry(
+            kind=entry.kind,
+            external_id=entry.external_id,
+            locator=entry.locator,
+            relation=entry.relation,
+            sequence=index,
+            note=entry.note,
+        )
+        for index, entry in enumerate(deduped)
+    )
+
+
 def conversation_context_manifest_to_jsonable(
     manifest: tuple[ConversationContextManifestEntry, ...],
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
     return [
         {
             "kind": entry.kind,
             "external_id": entry.external_id,
             "locator": entry.locator,
+            "relation": entry.relation,
+            "sequence": entry.sequence,
+            "note": entry.note,
         }
         for entry in manifest
     ]
@@ -130,11 +277,31 @@ def conversation_context_manifest_from_jsonable(
             raise MalformedCommandError(
                 "conversation_context_manifest entries must be objects"
             )
+        sequence_raw = item.get("sequence", 0)
+        try:
+            sequence = int(sequence_raw)
+        except (TypeError, ValueError) as exc:
+            raise MalformedCommandError(
+                "conversation_context_manifest sequence must be an int"
+            ) from exc
+        kind = str(item.get("kind", ""))
+        relation = str(item.get("relation") or _default_relation(kind))
         entries.append(
             ConversationContextManifestEntry(
-                kind=str(item.get("kind", "")),
+                kind=kind,
                 external_id=str(item.get("external_id", "")),
                 locator=str(item.get("locator", "")),
+                relation=relation,
+                sequence=sequence,
+                note=str(item.get("note", "")),
             )
         )
     return tuple(entries)
+
+
+def _default_relation(kind: str) -> str:
+    if kind == "attachment":
+        return "attachment"
+    if kind == "omission":
+        return "omission"
+    return "preceding"

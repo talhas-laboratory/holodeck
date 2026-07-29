@@ -67,6 +67,12 @@ class InMemoryCollaborationAdapter:
     _acks_by_idempotency_key: MutableMapping[str, dict[str, str]] = field(
         default_factory=dict
     )
+    _thread_history: MutableMapping[
+        tuple[str, str, str], tuple[ConversationContextManifestEntry, ...]
+    ] = field(default_factory=dict)
+    _thread_fetch_errors: MutableMapping[tuple[str, str, str], str] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         require_opaque_id(self.created_by_actor_id, "created_by_actor_id")
@@ -363,21 +369,88 @@ class InMemoryCollaborationAdapter:
         self._acks_by_idempotency_key[message.idempotency_key] = ack
         return dict(ack)
 
-    def fetch_thread_context(
+    def seed_thread_context(
         self,
         *,
         tenant_id: str,
         location_kind: str,
         external_location_id: str,
-    ) -> tuple[ConversationContextManifestEntry, ...]:
-        """Memory harness stub: no durable thread history by default."""
+        entries: tuple[ConversationContextManifestEntry, ...] | list[
+            ConversationContextManifestEntry
+        ],
+    ) -> None:
+        """Register ordered preceding thread history for harness tests."""
 
         require_opaque_id(tenant_id, "tenant_id")
         if not location_kind.strip():
             raise MalformedCommandError("location_kind is required")
         if not external_location_id.strip():
             raise MalformedCommandError("external_location_id is required")
-        return ()
+        key = (tenant_id, location_kind, external_location_id)
+        normalized = tuple(
+            ConversationContextManifestEntry(
+                kind=entry.kind,
+                external_id=entry.external_id,
+                locator=entry.locator,
+                relation=entry.relation,
+                sequence=entry.sequence,
+                note=entry.note,
+            )
+            for entry in entries
+        )
+        self._thread_history[key] = tuple(
+            sorted(normalized, key=lambda item: (item.sequence, item.kind, item.external_id))
+        )
+
+    def mark_thread_context_unavailable(
+        self,
+        *,
+        tenant_id: str,
+        location_kind: str,
+        external_location_id: str,
+        reason: str = "thread_history_unavailable",
+    ) -> None:
+        """Force fetch_thread_context to raise for fail-open intake tests."""
+
+        require_opaque_id(tenant_id, "tenant_id")
+        if not location_kind.strip():
+            raise MalformedCommandError("location_kind is required")
+        if not external_location_id.strip():
+            raise MalformedCommandError("external_location_id is required")
+        if not reason.strip():
+            raise MalformedCommandError("reason is required")
+        self._thread_fetch_errors[(tenant_id, location_kind, external_location_id)] = (
+            reason
+        )
+
+    def fetch_thread_context(
+        self,
+        *,
+        tenant_id: str,
+        location_kind: str,
+        external_location_id: str,
+        anchor_external_event_id: str | None = None,
+    ) -> tuple[ConversationContextManifestEntry, ...]:
+        """Return seeded preceding history, or empty when none is configured."""
+
+        require_opaque_id(tenant_id, "tenant_id")
+        if not location_kind.strip():
+            raise MalformedCommandError("location_kind is required")
+        if not external_location_id.strip():
+            raise MalformedCommandError("external_location_id is required")
+        key = (tenant_id, location_kind, external_location_id)
+        error = self._thread_fetch_errors.get(key)
+        if error is not None:
+            raise RuntimeError(error)
+        entries = self._thread_history.get(key, ())
+        if anchor_external_event_id is None or not str(anchor_external_event_id).strip():
+            return entries
+        anchor = str(anchor_external_event_id)
+        return tuple(
+            entry
+            for entry in entries
+            if not (entry.kind == "message" and entry.external_id == anchor)
+        )
 
 
 def _require_str(payload: Mapping[str, Any], key: str) -> str:

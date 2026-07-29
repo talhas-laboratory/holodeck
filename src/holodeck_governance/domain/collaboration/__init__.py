@@ -30,6 +30,7 @@ from holodeck_governance.domain.collaboration.intake import (
 from holodeck_governance.domain.collaboration.origins import (
     ConversationContextManifestEntry,
     TaskOrigin,
+    build_conversation_context_manifest,
     task_origin_dedupe_key,
 )
 from holodeck_governance.domain.collaboration.outbound import (
@@ -89,6 +90,7 @@ __all__ = [
     "VerificationResult",
     "VerifiedActorIdentity",
     "actor_mapping_dedupe_key",
+    "build_conversation_context_manifest",
     "endpoint_dedupe_key",
     "inbound_receipt_dedupe_key",
     "outbound_idempotency_key",

@@ -13,7 +13,11 @@ from holodeck_governance.domain.collaboration.adapter import (
 )
 from holodeck_governance.domain.collaboration.inbound import NormalizedInboundEvent
 from holodeck_governance.domain.collaboration.intake import parse_intake_command
-from holodeck_governance.domain.collaboration.origins import TaskOrigin
+from holodeck_governance.domain.collaboration.origins import (
+    ConversationContextManifestEntry,
+    TaskOrigin,
+    build_conversation_context_manifest,
+)
 from holodeck_governance.domain.collaboration.outbound import (
     OutboundCollaborationMessage,
     outbound_idempotency_key,
@@ -276,6 +280,44 @@ class CollaborationIntakeOrchestrator:
             reason_codes=stored.receipt.reason_codes,
         )
 
+    def _capture_conversation_context(
+        self, event: NormalizedInboundEvent
+    ) -> tuple[ConversationContextManifestEntry, ...]:
+        """Fetch and merge thread context; never block acceptance on gaps."""
+
+        location = event.location.external_location
+        parent = event.location.parent_external_location
+        try:
+            thread_entries = self.adapter.fetch_thread_context(
+                tenant_id=event.tenant_id,
+                location_kind=event.location.location_kind.value,
+                external_location_id=location.external_object_id,
+                anchor_external_event_id=event.external_event_id,
+            )
+        except Exception:
+            thread_entries = (
+                ConversationContextManifestEntry(
+                    kind="omission",
+                    external_id="thread_context_fetch_failed",
+                    locator="",
+                    relation="omission",
+                    note="thread_context_unavailable",
+                ),
+            )
+        return build_conversation_context_manifest(
+            anchor_external_event_id=event.external_event_id,
+            anchor_locator=event.source_reference.locator,
+            location_external_id=location.external_object_id,
+            location_locator=location.locator,
+            location_kind=event.location.location_kind.value,
+            thread_entries=tuple(thread_entries),
+            attachments=event.attachments,
+            parent_location_external_id=(
+                None if parent is None else parent.external_object_id
+            ),
+            parent_location_locator="" if parent is None else parent.locator,
+        )
+
     def _accept_and_publish(
         self,
         *,
@@ -290,6 +332,7 @@ class CollaborationIntakeOrchestrator:
         origin_id = self.id_factory()
         receipt_id = self.id_factory()
         command_id = self.id_factory()
+        conversation_context_manifest = self._capture_conversation_context(event)
         receipt = InboundEventReceipt(
             receipt_id=receipt_id,
             tenant_id=event.tenant_id,
@@ -328,6 +371,7 @@ class CollaborationIntakeOrchestrator:
                 if event.location.parent_external_location is None
                 else event.location.parent_external_location.reference_id
             ),
+            conversation_context_manifest=conversation_context_manifest,
         )
         message = OutboundCollaborationMessage(
             message_id=self.id_factory(),

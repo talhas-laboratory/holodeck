@@ -558,11 +558,15 @@ def test_task_origin_persists_conversation_context_manifest() -> None:
                 kind="message",
                 external_id="msg-1",
                 locator="memory://thread/msg-1",
+                relation="preceding",
+                sequence=0,
             ),
             ConversationContextManifestEntry(
                 kind="attachment",
                 external_id="att-1",
                 locator="memory://thread/att-1",
+                relation="attachment",
+                sequence=1,
             ),
         ),
     )
@@ -579,4 +583,6 @@ def test_task_origin_persists_conversation_context_manifest() -> None:
     assert stored is not None
     assert len(stored.conversation_context_manifest) == 2
     assert stored.conversation_context_manifest[0].kind == "message"
+    assert stored.conversation_context_manifest[0].relation == "preceding"
     assert stored.conversation_context_manifest[1].external_id == "att-1"
+    assert stored.conversation_context_manifest[1].relation == "attachment"

@@ -1,7 +1,7 @@
 # M2-018 — Conversation context preservation
 
-**Status:** ready
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-003, M2-008
 
 ## Outcome
@@ -13,10 +13,15 @@ collaboration thread as the Holodeck system of record.
 ## In scope
 
 - Optional `conversation_context_manifest` on `TaskOrigin` (tuple of message /
-  attachment refs) persisted as JSON.
-- `CollaborationAdapter.fetch_thread_context` protocol method + memory adapter
-  stub returning empty/fixture context.
-- Tests for persistence round-trip and adapter stub.
+  attachment / omission refs) persisted as JSON.
+- Enriched manifest entries: `relation` (anchor, preceding, attachment,
+  thread_boundary, parent_location, omission), deterministic `sequence`, and
+  optional `note`.
+- Domain `build_conversation_context_manifest` merge helper.
+- `CollaborationAdapter.fetch_thread_context` + memory adapter seeded history /
+  partial-omission / fail-open harness behavior.
+- Intake wiring: fetch thread context, merge event attachments, persist with
+  origin commit; missing context does not block acceptance.
 
 ## Non-goals
 
@@ -28,34 +33,40 @@ collaboration thread as the Holodeck system of record.
 - Manifest refs are opaque external references / adapter ids, not Holodeck
   workspace ids.
 - Missing context must not block intake acceptance.
+- Replay returns the persisted origin manifest (not a re-fetch).
 
 ## Acceptance criteria
 
 - Origins can persist and reload a conversation context manifest.
-- Memory adapter exposes `fetch_thread_context` returning a stable empty or
-  fixture payload.
+- Memory adapter exposes `fetch_thread_context` returning empty, seeded
+  preceding history, or partial omission entries.
+- Intake stores boundary + preceding + anchor + attachments (+ omissions).
 - Application remains free of provider SDK types.
 
 ## Verification
 
 ```text
-uv run --extra dev pytest -q tests/test_m2_task_origins.py
+uv run --extra dev pytest -q tests/test_m2_conversation_context.py
 uv run --extra dev pytest -q
+# -> 400 passed
 ```
 
 ## Evidence and handoff
 
-Minimal domain+persistence stub landed with acceptance-blocker fixes:
+Full capture workflow landed on `cursor/m2-018-conversation-context-preservation-2175`:
 
-- `ConversationContextManifestEntry` + optional
-  `TaskOrigin.conversation_context_manifest` persisted as JSON (migration v21
-  column).
-- `CollaborationAdapter.fetch_thread_context` + memory adapter empty stub.
-- Tests: origin round-trip + memory stub.
+- Enriched `ConversationContextManifestEntry` + `build_conversation_context_manifest`.
+- Intake `_capture_conversation_context` calls `fetch_thread_context` fail-open
+  and commits the manifest with `accept_task_origin_with_outbound`.
+- Memory harness: `seed_thread_context`, `mark_thread_context_unavailable`,
+  ordered preceding fetch excluding anchor.
+- Tests: domain ordering/JSON, adapter seed/partial, intake E2E with
+  attachments, empty/fail-open, replay preservation
+  (`tests/test_m2_conversation_context.py`).
 
-Full Buzz-backed fetch remains M2-009. Leave status **ready** until a fuller
-intake wiring slice lands.
+Full Buzz-backed fetch remains M2-009.
 
 ## Residual risks
 
 - Provider thread APIs vary; keep the port intentionally thin.
+- Buzz live history retrieval still gated on M2-009.
