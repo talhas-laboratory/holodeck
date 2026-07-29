@@ -1,14 +1,14 @@
 # M2-019 — Define factual code-graph contracts and golden fixture
 
-**Status:** ready
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-016, approved persistent-codebase factual-graph design
-**Target baseline:** cumulative M2 review PR #5 at `23a69594878a8f6609d4a3b1d239bf1d10c0de52`
+**Target baseline:** cumulative M2 review PR #5 at `e852d65`
 
 ## Objective
 
 Define the provider-neutral domain vocabulary, invariants, deterministic
-identity rules, error reasons, and golden Python fixture that every extractor,
+identity keys, error reasons, and golden Python fixture that every extractor,
 store, ingestion service, and query implementation must satisfy.
 
 ## Required reading
@@ -41,10 +41,10 @@ store, ingestion service, and query implementation must satisfy.
 
 ## Implementation notes
 
-- Place the domain under
-  `holodeck_governance.domain.workspace.intelligence.code_graph`.
-- Prefer small modules (`types`, `entities`, `relations`, `snapshots`,
-  `extractors`) over one large file.
+- Domain lives under
+  `holodeck_governance.domain.workspace.intelligence.code_graph`
+  (`types`, `paths`, `spans`, `entities`, `relations`, `snapshots`,
+  `extractors`).
 - Every fact references a registered source and immutable source observation.
 - Direct facts have no artificial confidence. `tool_inferred` facts require a
   bounded confidence value and explicit diagnostic/limitation.
@@ -67,19 +67,35 @@ store, ingestion service, and query implementation must satisfy.
 
 ## Verification
 
-Run:
-
 ```bash
-uv run pytest -q tests/test_m2_code_graph_contract.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_code_graph_contract.py
+uv run --extra dev pytest -q
 ```
 
-Record exact results, changed files, fixture revision hashes, and residual
-risks before moving to done.
+Results: `27 passed`; full suite `430 passed in 40.75s`.
 
-## Expected artifacts
+Fixture revision hashes (content identity):
 
-- Domain code-graph package.
-- `tests/fixtures/code_graph/python_reference/` with deterministic revisions.
-- `tests/test_m2_code_graph_contract.py`.
-- Contract notes in the task packet if implementation discovers an ambiguity.
+- `rev_a`: `fixture:c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb`
+- `rev_b`: `fixture:9714592f9bbc4b5c5a7b2548d52d57e88d5af1d43e6e27ac0a9864e0a3ec021e`
+- changed paths: `sample_app/service.py`, `tests/test_api.py`,
+  `tests/test_service.py`
+
+## Evidence and handoff
+
+Landed on `cursor/m2-019-factual-code-graph-contracts-2175`:
+
+- Domain package with closed entity/relation catalogs and `CodeGraphReason`
+  stable errors.
+- Two-revision fixture trees + `revisions.json` + typed golden facts covering
+  all initial relation kinds; `Greeter.invoke` dynamic call recorded as
+  `unresolved_dynamic_call` diagnostic only.
+- `tests/test_m2_code_graph_contract.py` + fixture collect-ignore so realistic
+  fixture `test_*.py` files are not collected as Holodeck tests.
+
+## Residual risks
+
+- Extractor port/provider assessment remains M2-020.
+- Persistence and ingestion remain M2-021+.
+- Fixture `tests/` files are ignored by Holodeck pytest collection via
+  `tests/conftest.py` / `norecursedirs`.

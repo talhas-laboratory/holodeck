@@ -1,0 +1,27 @@
+{
+  "revisions": {
+    "rev_a": {
+      "repository_revision": "fixture:9dccf7d19e8584f8deb538de4ab4ba2c2ca8bcf3503f88c95b929c55e21fa9f6",
+      "tree": "trees/rev_a",
+      "tree_sha256": "9dccf7d19e8584f8deb538de4ab4ba2c2ca8bcf3503f88c95b929c55e21fa9f6"
+    },
+    "rev_b": {
+      "changed_paths_from_rev_a": [
+        "sample_app/service.py",
+        "tests/__pycache__/test_api.cpython-312-pytest-9.1.1.pyc",
+        "tests/__pycache__/test_service.cpython-312-pytest-9.1.1.pyc",
+        "tests/test_api.py",
+        "tests/test_service.py"
+      ],
+      "repository_revision": "fixture:dffdc1a186060db45409204c55bac0c3f91dd8f9e6bd2d939a8b932051528752",
+      "tree": "trees/rev_b",
+      "tree_sha256": "dffdc1a186060db45409204c55bac0c3f91dd8f9e6bd2d939a8b932051528752"
+    }
+  },
+  "schema_version": "m2.code_graph_fixture_revisions.v1",
+  "unresolved_dynamic_call": {
+    "diagnostic_code": "unresolved_dynamic_call",
+    "path": "sample_app/service.py",
+    "symbol": "Greeter.invoke"
+  }
+}

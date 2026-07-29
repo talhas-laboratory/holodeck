@@ -372,3 +372,18 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
 - Assured-readiness bypass is rejected by the shared evidence-derived readiness
   gate; GOVERNED activation still requires HUMAN trust + readiness decisions
   and zero open gaps.
+
+## 2026-07-29 — M2-019 factual code-graph contracts
+
+- Domain package
+  `holodeck_governance.domain.workspace.intelligence.code_graph` owns closed,
+  versioned entity/relation catalogs, deterministic keys, spans, snapshots,
+  extraction runs, and stable `CodeGraphReason` errors. No storage or provider
+  imports.
+- Repository revisions must be content identities (`[0-9a-f]{7,64}` or
+  `fixture:<hash>`); branch/ref names are rejected.
+- Direct/static facts carry no artificial confidence; `tool_inferred` relations
+  require confidence in `(0, 1]` plus an explicit diagnostic.
+- The Python reference fixture ships two content-hashed trees and typed golden
+  facts covering every initial relation kind. `Greeter.invoke`'s dynamic call is
+  an `unresolved_dynamic_call` diagnostic, never a fabricated `CALLS` edge.

@@ -1,6 +1,6 @@
 # M2-020 — Establish extractor port and provider assessment
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
 **Depends on:** M2-019
 
