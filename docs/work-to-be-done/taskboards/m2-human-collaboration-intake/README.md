@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`  
 Owner: `talha`  
-Status: **in progress — M2-008 in-memory adapter harness**
+Status: **in progress — M2-010 E2E (memory harness); M2-009 Buzz gated**
 
 ## Boundary
 
@@ -31,8 +31,9 @@ define requirement gates (M4), launch agents (M5), or make completion decisions
 ## Agent start protocol
 
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
-2. `M2-001`–`M2-007` are done; implement `M2-008` next for a provider-neutral
-   in-memory adapter test harness. Do not build Buzz ingress yet.
+2. `M2-001`–`M2-008` are done. Prefer **M2-010** end-to-end against the
+   in-memory harness next. **M2-009** (Buzz adapter) remains gated for live
+   ingress under the guarded M1 start decision.
 3. Keep provider SDK types inside adapters; domain records use stable external
    references only.
 4. Preserve M1 command, tenant, provenance, and outbox guarantees.

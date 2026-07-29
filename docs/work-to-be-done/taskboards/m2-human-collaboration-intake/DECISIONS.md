@@ -128,3 +128,16 @@
   collaboration-location binding (optional repository binding).
 - Reject and withdraw close the proposal without creating workspace state.
 - Adapter harness and Buzz decision capture remain M2-008 / M2-009.
+
+## 2026-07-29 — M2-008 in-memory collaboration adapter harness
+
+- `InMemoryCollaborationAdapter` implements `CollaborationAdapter` under
+  `holodeck_governance.adapters` (outside domain).
+- Provider label is `memory`. Unsigned/invalid signatures and unknown actors
+  raise adapter-local `CollaborationAdapterAuthError` (CIS-001 refusal; no
+  Holodeck receipt).
+- Outbound publish lands in a local mailbox; republish by `idempotency_key`
+  returns the prior ack without duplicating the semantic message.
+- Domain forbidden-import prefixes now include `holodeck_governance.adapters`.
+- Live Buzz ingress (M2-009) remains gated; E2E CIS persistence may proceed
+  against this harness as M2-010.
