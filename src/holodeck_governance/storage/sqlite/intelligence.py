@@ -548,6 +548,88 @@ class SqliteWorkspaceIntelligenceRepository:
         )
         self._commit_write()
 
+    def ensure_repository_file_source_observation(
+        self,
+        *,
+        source_id: str,
+        observation_id: str,
+        tenant_id: str,
+        workspace_object_id: str,
+        locator: str,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> None:
+        """Ensure a REPOSITORY_FILE source observation exists for fact FKs.
+
+        Registers the source when missing. When the locator is already bound to
+        a different ``source_id``, raises ``IdempotencyConflictError``. When the
+        source exists, inserts the observation if absent, otherwise verifies the
+        observation belongs to the same source/tenant/workspace.
+        """
+
+        existing = self.get_source_by_locator(
+            tenant_id=tenant_id,
+            workspace_object_id=workspace_object_id,
+            locator=locator,
+        )
+        if existing is None:
+            self.register_source(
+                WorkspaceSource(
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                    source_type=SourceType.REPOSITORY_FILE,
+                    locator=locator,
+                    observed_revision=observed_revision,
+                    trust_class=TrustClass.ORDINARY_REFERENCE,
+                    owner_actor_id=actor_id,
+                    sensitivity="public",
+                    refresh_policy="on_revision_change",
+                    observed_at=at,
+                    stale_status=StaleStatus.FRESH,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
+                    current_observation_id=observation_id,
+                )
+            )
+            return
+
+        if existing.source_id != source_id:
+            raise IdempotencyConflictError(
+                f"source locator {locator!r} is already registered under a "
+                "different source_id"
+            )
+
+        observation = self.get_source_observation(observation_id)
+        if observation is None:
+            self._insert_source_observation_and_point(
+                source_id=source_id,
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+                observed_revision=observed_revision,
+                content_hash=None,
+                observed_at=at,
+                created_at=at,
+                created_by_actor_id=actor_id,
+                observation_id=observation_id,
+            )
+            self._commit_write()
+            return
+
+        if observation.source_id != source_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} does not belong to source {source_id}"
+            )
+        if observation.tenant_id != tenant_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} tenant does not match request"
+            )
+        if observation.workspace_object_id != workspace_object_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} workspace does not match request"
+            )
+
     def _insert_source(self, source: WorkspaceSource) -> None:
         _insert_immutable(
             self._conn,

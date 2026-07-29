@@ -19,6 +19,7 @@ from holodeck_governance.application.repository_extractor import (
 )
 from holodeck_governance.domain.commands.receipt import CommandReceipt
 from holodeck_governance.domain.errors import (
+    ContentionError,
     CrossTenantAccessError,
     IdempotencyConflictError,
     MalformedCommandError,
@@ -36,10 +37,6 @@ from holodeck_governance.domain.workspace.intelligence import (
     M2_EVENT_CODE_GRAPH_BUILD_PARTIAL,
     M2_EVENT_CODE_GRAPH_BUILD_REQUESTED,
     M2_EVENT_CODE_GRAPH_SNAPSHOT_ACTIVATED,
-    SourceType,
-    StaleStatus,
-    TrustClass,
-    WorkspaceSource,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph import (
     CodeEntityFact,
@@ -62,6 +59,9 @@ M2_CODE_GRAPH_EVENT_SCHEMA_VERSION = "m2.workspace.code_graph.event.v1"
 _RECEIPT_SNAPSHOT_PREFIX = "snapshot:"
 _RECEIPT_RUN_PREFIX = "run:"
 _RECEIPT_STATUS_PREFIX = "status:"
+_PARTIAL_POLICY_NOTE = (
+    "partial coverage requires explicit allow_partial_activation"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +80,7 @@ class GraphBuildRequest:
     base_snapshot_id: str | None = None
     path_includes: tuple[str, ...] = ()
     path_excludes: tuple[str, ...] = ()
+    allow_partial_activation: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -148,39 +149,52 @@ class IntelligenceSourcePort(Protocol):
         self, workspace_object_id: str, *, tenant_id: str
     ) -> None: ...
 
-    def get_source_by_locator(
+    def ensure_repository_file_source_observation(
         self,
         *,
+        source_id: str,
+        observation_id: str,
         tenant_id: str,
         workspace_object_id: str,
         locator: str,
-    ) -> WorkspaceSource | None: ...
-
-    def register_source(self, source: WorkspaceSource) -> None: ...
-
-    def get_source_observation(self, observation_id: str): ...
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> None: ...
 
 
 class CodeGraphStorePort(Protocol):
-    def save_building_snapshot(self, snapshot: RepositoryGraphSnapshot) -> None: ...
-
-    def save_extraction_run(self, run: RepositoryExtractionRun) -> None: ...
-
-    def insert_entity_fact(self, entity: CodeEntityFact) -> None: ...
-
-    def insert_relation_fact(self, relation: CodeRelationFact) -> None: ...
-
-    def add_snapshot_entity_memberships(
-        self, *, snapshot_id: str, tenant_id: str, entity_fact_ids: tuple[str, ...]
-    ) -> None: ...
-
-    def add_snapshot_relation_memberships(
-        self, *, snapshot_id: str, tenant_id: str, relation_fact_ids: tuple[str, ...]
+    def persist_building_graph(
+        self,
+        *,
+        snapshot: RepositoryGraphSnapshot,
+        run: RepositoryExtractionRun,
+        entities: tuple[CodeEntityFact, ...],
+        relations: tuple[CodeRelationFact, ...],
     ) -> None: ...
 
     def activate_snapshot(
-        self, snapshot_id: str, *, tenant_id: str, activated_at: datetime
+        self,
+        snapshot_id: str,
+        *,
+        tenant_id: str,
+        activated_at: datetime,
+        allow_partial_activation: bool = False,
     ) -> RepositoryGraphSnapshot: ...
+
+    def claim_build_idempotency(
+        self,
+        *,
+        tenant_id: str,
+        idempotency_key: str,
+        semantic_hash: str,
+        command_id: str,
+        created_at: datetime,
+    ) -> None: ...
+
+    def release_build_idempotency_claim(
+        self, *, tenant_id: str, idempotency_key: str
+    ) -> None: ...
 
     def mark_snapshot_failed(
         self, snapshot_id: str, *, tenant_id: str, coverage_notes: tuple[str, ...]
@@ -319,6 +333,34 @@ class CodeGraphIngestionService:
         )
 
         command_id = generate_uuidv7()
+        self._graphs.claim_build_idempotency(
+            tenant_id=request.tenant_id,
+            idempotency_key=request.idempotency_key,
+            semantic_hash=fingerprint,
+            command_id=command_id,
+            created_at=request.at,
+        )
+        try:
+            return self._build_graph_claimed(
+                request=request,
+                binding=binding,
+                command_id=command_id,
+                fingerprint=fingerprint,
+            )
+        finally:
+            self._graphs.release_build_idempotency_claim(
+                tenant_id=request.tenant_id,
+                idempotency_key=request.idempotency_key,
+            )
+
+    def _build_graph_claimed(
+        self,
+        *,
+        request: GraphBuildRequest,
+        binding: RepositoryBinding,
+        command_id: str,
+        fingerprint: str,
+    ) -> GraphBuildResult:
         snapshot_id = generate_uuidv7()
         extraction_run_id = generate_uuidv7()
         event_types: list[str] = []
@@ -524,27 +566,92 @@ class CodeGraphIngestionService:
             assert_snapshot_counts_match(
                 snapshot, entities=entities, relations=relations
             )
-            self._graphs.save_building_snapshot(snapshot)
-            self._graphs.save_extraction_run(run)
-            for entity in entities:
-                self._graphs.insert_entity_fact(entity)
-            for relation in relations:
-                self._graphs.insert_relation_fact(relation)
-            self._graphs.add_snapshot_entity_memberships(
-                snapshot_id=snapshot_id,
-                tenant_id=request.tenant_id,
-                entity_fact_ids=tuple(e.entity_fact_id for e in entities),
-            )
-            self._graphs.add_snapshot_relation_memberships(
-                snapshot_id=snapshot_id,
-                tenant_id=request.tenant_id,
-                relation_fact_ids=tuple(r.relation_fact_id for r in relations),
+            if (
+                coverage.status is CoverageStatus.PARTIAL
+                and not request.allow_partial_activation
+            ):
+                self._graphs.persist_building_graph(
+                    snapshot=snapshot,
+                    run=run,
+                    entities=entities,
+                    relations=relations,
+                )
+                policy_notes = coverage.notes + (_PARTIAL_POLICY_NOTE,)
+                self._graphs.mark_snapshot_failed(
+                    snapshot_id,
+                    tenant_id=request.tenant_id,
+                    coverage_notes=policy_notes,
+                )
+                event_types.append(
+                    self._append_event(
+                        tenant_id=request.tenant_id,
+                        event_type=M2_EVENT_CODE_GRAPH_BUILD_PARTIAL,
+                        actor_id=request.actor_id,
+                        workspace_object_id=request.workspace_object_id,
+                        causation_id=command_id,
+                        at=request.at,
+                        payload={
+                            "snapshot_id": snapshot_id,
+                            "extraction_run_id": extraction_run_id,
+                            "entity_count": len(entities),
+                            "relation_count": len(relations),
+                            "coverage_status": coverage.status.value,
+                        },
+                    )
+                )
+                event_types.append(
+                    self._append_event(
+                        tenant_id=request.tenant_id,
+                        event_type=M2_EVENT_CODE_GRAPH_BUILD_FAILED,
+                        actor_id=request.actor_id,
+                        workspace_object_id=request.workspace_object_id,
+                        causation_id=command_id,
+                        at=request.at,
+                        payload={
+                            "snapshot_id": snapshot_id,
+                            "reason": _PARTIAL_POLICY_NOTE,
+                            "phase": "partial_policy",
+                        },
+                    )
+                )
+                self._commit()
+                result = GraphBuildResult(
+                    snapshot_id=snapshot_id,
+                    extraction_run_id=extraction_run_id,
+                    status=SnapshotStatus.FAILED,
+                    coverage_status=CoverageStatus.PARTIAL,
+                    entity_count=len(entities),
+                    relation_count=len(relations),
+                    actual_revision=extraction.actual_revision,
+                    event_types=tuple(event_types),
+                    replayed=False,
+                    coverage_notes=policy_notes,
+                    diagnostics=tuple(d.code for d in extraction.diagnostics),
+                )
+                self._save_receipt(
+                    request=request,
+                    command_id=command_id,
+                    fingerprint=fingerprint,
+                    result=result,
+                    outcome="rejected",
+                    error_code=CodeGraphReason.PARTIAL_COVERAGE.value,
+                )
+                return result
+
+            self._graphs.persist_building_graph(
+                snapshot=snapshot,
+                run=run,
+                entities=entities,
+                relations=relations,
             )
             activated = self._graphs.activate_snapshot(
                 snapshot_id,
                 tenant_id=request.tenant_id,
                 activated_at=request.at,
+                allow_partial_activation=request.allow_partial_activation,
             )
+        except ContentionError:
+            raise
         except Exception as exc:
             try:
                 self._graphs.mark_snapshot_failed(
@@ -662,7 +769,7 @@ class CodeGraphIngestionService:
         entities: tuple[CodeEntityFact, ...],
         relations: tuple[CodeRelationFact, ...],
     ) -> None:
-        """Register missing file sources so fact FKs resolve before insert."""
+        """Ensure file sources and observations so fact FKs resolve before insert."""
 
         seen: set[tuple[str, str, str]] = set()
         for entity in entities:
@@ -688,14 +795,6 @@ class CodeGraphIngestionService:
             )
             if key in seen:
                 continue
-            if (
-                self._intelligence.get_source_observation(
-                    relation.evidence_observation_id
-                )
-                is not None
-            ):
-                seen.add(key)
-                continue
             locator = next(
                 (
                     e.repository_relative_path
@@ -720,41 +819,15 @@ class CodeGraphIngestionService:
         source_id: str,
         observation_id: str,
     ) -> None:
-        existing = self._intelligence.get_source_by_locator(
+        self._intelligence.ensure_repository_file_source_observation(
+            source_id=source_id,
+            observation_id=observation_id,
             tenant_id=request.tenant_id,
             workspace_object_id=request.workspace_object_id,
             locator=locator,
-        )
-        if existing is not None:
-            if existing.source_id != source_id:
-                raise IdempotencyConflictError(
-                    f"source locator {locator!r} is already registered under a "
-                    "different source_id"
-                )
-            obs = self._intelligence.get_source_observation(observation_id)
-            if obs is None:
-                raise NotFoundGovernanceError(
-                    f"source observation {observation_id} missing for locator {locator}"
-                )
-            return
-        self._intelligence.register_source(
-            WorkspaceSource(
-                source_id=source_id,
-                tenant_id=request.tenant_id,
-                workspace_object_id=request.workspace_object_id,
-                source_type=SourceType.REPOSITORY_FILE,
-                locator=locator,
-                observed_revision=request.requested_revision,
-                trust_class=TrustClass.ORDINARY_REFERENCE,
-                owner_actor_id=request.actor_id,
-                sensitivity="public",
-                refresh_policy="on_revision_change",
-                observed_at=request.at,
-                stale_status=StaleStatus.FRESH,
-                created_at=request.at,
-                created_by_actor_id=request.actor_id,
-                current_observation_id=observation_id,
-            )
+            observed_revision=request.requested_revision,
+            actor_id=request.actor_id,
+            at=request.at,
         )
 
     def _require_active_binding(
