@@ -32,6 +32,11 @@ from holodeck_governance.domain.errors import (
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
 from holodeck_governance.domain.registry import GovernanceObject
+from holodeck_governance.domain.workspace.bindings import (
+    CollaborationLocationBinding,
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 from holodeck_governance.storage.sqlite.graph_seed import persist_external_reference
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
 from holodeck_governance.storage.sqlite.repos import (
@@ -857,6 +862,222 @@ class SqliteCollaborationRepository:
         if destination.endpoint_id is not None:
             self.require_endpoint(destination.endpoint_id, tenant_id=message.tenant_id)
 
+    def require_workspace_object(self, workspace_object_id: str, *, tenant_id: str) -> None:
+        row = self._conn.execute(
+            """
+            SELECT object_id, tenant_id, object_type FROM gov_objects
+            WHERE object_id = ?
+            """,
+            (workspace_object_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundGovernanceError(f"unknown workspace {workspace_object_id}")
+        if str(row["tenant_id"]) != tenant_id:
+            raise CrossTenantAccessError("workspace tenant mismatch")
+        if str(row["object_type"]) != "Workspace":
+            raise MalformedCommandError(
+                f"object {workspace_object_id} is not a Workspace"
+            )
+
+    def save_repository_binding(self, binding: RepositoryBinding) -> None:
+        self.require_workspace_object(
+            binding.workspace_object_id, tenant_id=binding.tenant_id
+        )
+        ref = self.get_external_reference(binding.external_reference_id)
+        if ref is None:
+            raise NotFoundGovernanceError(
+                f"unknown external reference {binding.external_reference_id}"
+            )
+        if ref.tenant_id != binding.tenant_id:
+            raise CrossTenantAccessError("repository binding reference tenant mismatch")
+        actor = self._conn.execute(
+            "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
+            (binding.created_by_actor_id,),
+        ).fetchone()
+        if actor is None:
+            raise NotFoundGovernanceError(
+                f"unknown actor {binding.created_by_actor_id}"
+            )
+        if str(actor["tenant_id"]) != binding.tenant_id:
+            raise CrossTenantAccessError("repository binding actor tenant mismatch")
+        _insert_immutable(
+            self._conn,
+            """
+            INSERT INTO gov_repository_bindings(
+                binding_id, tenant_id, workspace_object_id, provider,
+                external_repository_id, canonical_locator, default_branch, status,
+                external_reference_id, created_at, created_by_actor_id, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                binding.binding_id,
+                binding.tenant_id,
+                binding.workspace_object_id,
+                binding.provider,
+                binding.external_repository_id,
+                binding.canonical_locator,
+                binding.default_branch,
+                binding.status.value,
+                binding.external_reference_id,
+                binding.created_at.isoformat(),
+                binding.created_by_actor_id,
+                binding.schema_version,
+            ),
+        )
+        self._commit_write()
+
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_repository_bindings WHERE binding_id = ?",
+            (binding_id,),
+        ).fetchone()
+        return None if row is None else self._repository_binding_from_row(row)
+
+    def resolve_active_repository_binding(
+        self, *, tenant_id: str, provider: str, external_repository_id: str
+    ) -> RepositoryBinding | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_repository_bindings
+            WHERE tenant_id = ?
+              AND provider = ?
+              AND external_repository_id = ?
+              AND status = ?
+            """,
+            (
+                tenant_id,
+                provider,
+                external_repository_id,
+                WorkspaceBindingStatus.ACTIVE.value,
+            ),
+        ).fetchone()
+        return None if row is None else self._repository_binding_from_row(row)
+
+    def set_repository_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> RepositoryBinding:
+        binding = self.get_repository_binding(binding_id)
+        if binding is None:
+            raise NotFoundGovernanceError(f"unknown repository binding {binding_id}")
+        if binding.tenant_id != tenant_id:
+            raise CrossTenantAccessError("repository binding tenant mismatch")
+        self._conn.execute(
+            "UPDATE gov_repository_bindings SET status = ? WHERE binding_id = ?",
+            (status.value, binding_id),
+        )
+        self._commit_write()
+        updated = self.get_repository_binding(binding_id)
+        assert updated is not None
+        return updated
+
+    def save_collaboration_location_binding(
+        self, binding: CollaborationLocationBinding
+    ) -> None:
+        self.require_workspace_object(
+            binding.workspace_object_id, tenant_id=binding.tenant_id
+        )
+        self.require_endpoint(binding.endpoint_id, tenant_id=binding.tenant_id)
+        ref = self.get_external_reference(binding.location_reference_id)
+        if ref is None:
+            raise NotFoundGovernanceError(
+                f"unknown location reference {binding.location_reference_id}"
+            )
+        if ref.tenant_id != binding.tenant_id:
+            raise CrossTenantAccessError("location binding reference tenant mismatch")
+        actor = self._conn.execute(
+            "SELECT tenant_id FROM gov_actors WHERE actor_id = ?",
+            (binding.created_by_actor_id,),
+        ).fetchone()
+        if actor is None:
+            raise NotFoundGovernanceError(
+                f"unknown actor {binding.created_by_actor_id}"
+            )
+        if str(actor["tenant_id"]) != binding.tenant_id:
+            raise CrossTenantAccessError("location binding actor tenant mismatch")
+        _insert_immutable(
+            self._conn,
+            """
+            INSERT INTO gov_collaboration_location_bindings(
+                binding_id, tenant_id, workspace_object_id, endpoint_id, location_kind,
+                external_location_id, location_reference_id, intake_policy_id, status,
+                created_at, created_by_actor_id, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                binding.binding_id,
+                binding.tenant_id,
+                binding.workspace_object_id,
+                binding.endpoint_id,
+                binding.location_kind.value,
+                binding.external_location_id,
+                binding.location_reference_id,
+                binding.intake_policy_id,
+                binding.status.value,
+                binding.created_at.isoformat(),
+                binding.created_by_actor_id,
+                binding.schema_version,
+            ),
+        )
+        self._commit_write()
+
+    def get_collaboration_location_binding(
+        self, binding_id: str
+    ) -> CollaborationLocationBinding | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_collaboration_location_bindings WHERE binding_id = ?",
+            (binding_id,),
+        ).fetchone()
+        return None if row is None else self._location_binding_from_row(row)
+
+    def resolve_active_collaboration_location_binding(
+        self,
+        *,
+        tenant_id: str,
+        endpoint_id: str,
+        location_kind: LocationKind,
+        external_location_id: str,
+    ) -> CollaborationLocationBinding | None:
+        row = self._conn.execute(
+            """
+            SELECT * FROM gov_collaboration_location_bindings
+            WHERE tenant_id = ?
+              AND endpoint_id = ?
+              AND location_kind = ?
+              AND external_location_id = ?
+              AND status = ?
+            """,
+            (
+                tenant_id,
+                endpoint_id,
+                location_kind.value,
+                external_location_id,
+                WorkspaceBindingStatus.ACTIVE.value,
+            ),
+        ).fetchone()
+        return None if row is None else self._location_binding_from_row(row)
+
+    def set_collaboration_location_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> CollaborationLocationBinding:
+        binding = self.get_collaboration_location_binding(binding_id)
+        if binding is None:
+            raise NotFoundGovernanceError(
+                f"unknown collaboration location binding {binding_id}"
+            )
+        if binding.tenant_id != tenant_id:
+            raise CrossTenantAccessError("location binding tenant mismatch")
+        self._conn.execute(
+            """
+            UPDATE gov_collaboration_location_bindings
+            SET status = ? WHERE binding_id = ?
+            """,
+            (status.value, binding_id),
+        )
+        self._commit_write()
+        updated = self.get_collaboration_location_binding(binding_id)
+        assert updated is not None
+        return updated
+
     def _insert_task_origin(self, origin: TaskOrigin) -> None:
         _insert_immutable(
             self._conn,
@@ -1021,5 +1242,40 @@ class SqliteCollaborationRepository:
             created_by_actor_id=str(row["created_by_actor_id"]),
             subject_object_id=None if subject is None else str(subject),
             content_hash=None if content_hash is None else str(content_hash),
+            schema_version=str(row["schema_version"]),
+        )
+
+    @staticmethod
+    def _repository_binding_from_row(row: sqlite3.Row) -> RepositoryBinding:
+        return RepositoryBinding(
+            binding_id=str(row["binding_id"]),
+            tenant_id=str(row["tenant_id"]),
+            workspace_object_id=str(row["workspace_object_id"]),
+            provider=str(row["provider"]),
+            external_repository_id=str(row["external_repository_id"]),
+            canonical_locator=str(row["canonical_locator"]),
+            default_branch=str(row["default_branch"]),
+            status=WorkspaceBindingStatus(str(row["status"])),
+            external_reference_id=str(row["external_reference_id"]),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            schema_version=str(row["schema_version"]),
+        )
+
+    @staticmethod
+    def _location_binding_from_row(row: sqlite3.Row) -> CollaborationLocationBinding:
+        policy = row["intake_policy_id"]
+        return CollaborationLocationBinding(
+            binding_id=str(row["binding_id"]),
+            tenant_id=str(row["tenant_id"]),
+            workspace_object_id=str(row["workspace_object_id"]),
+            endpoint_id=str(row["endpoint_id"]),
+            location_kind=LocationKind(str(row["location_kind"])),
+            external_location_id=str(row["external_location_id"]),
+            location_reference_id=str(row["location_reference_id"]),
+            status=WorkspaceBindingStatus(str(row["status"])),
+            created_at=datetime.fromisoformat(str(row["created_at"])),
+            created_by_actor_id=str(row["created_by_actor_id"]),
+            intake_policy_id=None if policy is None else str(policy),
             schema_version=str(row["schema_version"]),
         )

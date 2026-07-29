@@ -12,9 +12,14 @@ from holodeck_governance.domain.collaboration.bindings import (
 from holodeck_governance.domain.collaboration.origins import TaskOrigin
 from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
 from holodeck_governance.domain.collaboration.receipts import InboundEventReceipt
-from holodeck_governance.domain.collaboration.types import ProcessingOutcome
+from holodeck_governance.domain.collaboration.types import LocationKind, ProcessingOutcome
 from holodeck_governance.domain.errors import CrossTenantAccessError, MalformedCommandError
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
+from holodeck_governance.domain.workspace.bindings import (
+    CollaborationLocationBinding,
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 
 
 class CollaborationRepositoryPort(Protocol):
@@ -66,6 +71,39 @@ class CollaborationRepositoryPort(Protocol):
         self, message_id: str
     ) -> OutboundCollaborationMessage | None: ...
 
+    def save_repository_binding(self, binding: RepositoryBinding) -> None: ...
+
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None: ...
+
+    def resolve_active_repository_binding(
+        self, *, tenant_id: str, provider: str, external_repository_id: str
+    ) -> RepositoryBinding | None: ...
+
+    def set_repository_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> RepositoryBinding: ...
+
+    def save_collaboration_location_binding(
+        self, binding: CollaborationLocationBinding
+    ) -> None: ...
+
+    def get_collaboration_location_binding(
+        self, binding_id: str
+    ) -> CollaborationLocationBinding | None: ...
+
+    def resolve_active_collaboration_location_binding(
+        self,
+        *,
+        tenant_id: str,
+        endpoint_id: str,
+        location_kind: LocationKind,
+        external_location_id: str,
+    ) -> CollaborationLocationBinding | None: ...
+
+    def set_collaboration_location_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> CollaborationLocationBinding: ...
+
 
 @dataclass(frozen=True, slots=True)
 class RecordReceiptResult:
@@ -97,6 +135,8 @@ class CollaborationApplicationService:
     typed ``collaboration.*.record`` command handlers exist. Never mutates
     task/run lifecycle state and never creates missions or approvals. Outbound
     enqueue creates durable outbox obligations only; adapter publish is separate.
+    Workspace bindings enable deterministic intake lookup without treating
+    channels or repositories as workspaces.
     """
 
     repository: CollaborationRepositoryPort
@@ -122,6 +162,66 @@ class CollaborationApplicationService:
             tenant_id=tenant_id,
             provider=provider,
             external_actor_id=external_actor_id,
+        )
+
+    def save_repository_binding(self, binding: RepositoryBinding) -> RepositoryBinding:
+        self.repository.save_repository_binding(binding)
+        return binding
+
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None:
+        return self.repository.get_repository_binding(binding_id)
+
+    def resolve_workspace_by_repository(
+        self, *, tenant_id: str, provider: str, external_repository_id: str
+    ) -> RepositoryBinding | None:
+        """Deterministic intake lookup: active repository→workspace binding."""
+
+        return self.repository.resolve_active_repository_binding(
+            tenant_id=tenant_id,
+            provider=provider,
+            external_repository_id=external_repository_id,
+        )
+
+    def set_repository_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> RepositoryBinding:
+        return self.repository.set_repository_binding_status(
+            binding_id, tenant_id=tenant_id, status=status
+        )
+
+    def save_collaboration_location_binding(
+        self, binding: CollaborationLocationBinding
+    ) -> CollaborationLocationBinding:
+        self.repository.save_collaboration_location_binding(binding)
+        return binding
+
+    def get_collaboration_location_binding(
+        self, binding_id: str
+    ) -> CollaborationLocationBinding | None:
+        return self.repository.get_collaboration_location_binding(binding_id)
+
+    def resolve_workspace_by_collaboration_location(
+        self,
+        *,
+        tenant_id: str,
+        endpoint_id: str,
+        location_kind: LocationKind,
+        external_location_id: str,
+    ) -> CollaborationLocationBinding | None:
+        """Deterministic intake lookup: active location→workspace binding."""
+
+        return self.repository.resolve_active_collaboration_location_binding(
+            tenant_id=tenant_id,
+            endpoint_id=endpoint_id,
+            location_kind=location_kind,
+            external_location_id=external_location_id,
+        )
+
+    def set_collaboration_location_binding_status(
+        self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
+    ) -> CollaborationLocationBinding:
+        return self.repository.set_collaboration_location_binding_status(
+            binding_id, tenant_id=tenant_id, status=status
         )
 
     def record_inbound_receipt(

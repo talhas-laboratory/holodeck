@@ -95,3 +95,14 @@
   `governance.outbox.enqueued`, and creates a durable outbox item keyed by the
   semantic idempotency key.
 - Adapter `publish_outbound` remains deferred to the harness/Buzz packets.
+
+## 2026-07-29 — M2-005 workspace bindings
+
+- Governance migration v16 adds `gov_repository_bindings` and
+  `gov_collaboration_location_bindings` with tenant-coupled triggers.
+- Bindings carry explicit `proposed|active|retired` status, provenance
+  external references, and creating-actor ownership.
+- Intake lookup resolves only **active** bindings by natural key:
+  `(tenant, provider, external_repository_id)` or
+  `(tenant, endpoint, location_kind, external_location_id)`.
+- Channels/repos remain external; they never become the workspace identity.
