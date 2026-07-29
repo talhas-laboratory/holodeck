@@ -3,7 +3,7 @@
 **Published by:** M2-011  
 **For:** an independent M3 agent starting M3-000  
 **Date:** 2026-07-29  
-**Verified commit:** `PENDING_M2_011_COMMIT`  
+**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`  
 **Companion index:** `artifacts/m2-contracts-index.md`  
 **Companion evidence:** `artifacts/m2-consolidated-acceptance-evidence.md`  
 **Graph handoff (must read):** `artifacts/m2-code-graph-m3-handoff.md`
@@ -252,7 +252,7 @@ patch around it inside M3.
 
 ## 11. Exact verification commit + how to run tests / package
 
-**Commit:** `PENDING_M2_011_COMMIT` (stamped after publish commit).
+**Commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3` (stamped after publish commit).
 
 ```bash
 uv run --extra dev pytest -q

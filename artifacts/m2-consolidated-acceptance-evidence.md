@@ -2,7 +2,7 @@
 
 **Published by:** M2-011  
 **Date:** 2026-07-29  
-**Verified commit:** `PENDING_M2_011_COMMIT`  
+**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`  
 **Governance schema:** **v24+** (fresh `migrate_governance`)
 
 This consolidates M2-017 (workspace onboarding/refresh), M2-010 (E2E intake),

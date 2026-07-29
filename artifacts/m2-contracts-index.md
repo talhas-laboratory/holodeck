@@ -4,7 +4,7 @@
 **For:** M3-000 and later M3 agents  
 **Date:** 2026-07-29  
 **Governance SQLite migrations:** through **v24**  
-**Verified commit:** `PENDING_M2_011_COMMIT`  
+**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`  
 **Package:** `holodeck_governance` (composition in `holodeck_governance.composition`)
 
 This index lists stable M2 capabilities with status, schema/module path,
