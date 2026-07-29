@@ -162,3 +162,23 @@
 - Generated/untrusted content cannot become instruction authority without
   authorized human promotion; readiness cannot exceed evidence.
 - Persistence and application operations remain M2-013.
+
+## 2026-07-29 — M2 release blockers closed
+
+- Accepted origin + outbound/outbox commit atomically; duplicate replay repairs
+  missing outbound.
+- Genesis propose/decide require `workspace.genesis.propose` /
+  `workspace.genesis.decide`.
+- MCP pinned to `>=1.6,<2`; CI covers pip and uv installs.
+- Binding natural keys use active-only partial unique indexes (migration v18).
+
+## 2026-07-29 — M2-013 workspace intelligence persistence
+
+- Governance migration v19 adds intelligence tables with tenant-coupled
+  workspace/actor/reference triggers.
+- `WorkspaceIntelligenceApplicationService` / `open_workspace_intelligence_app`
+  expose onboard, register/promote sources, modules/items, gaps/contradictions,
+  model approve, readiness, and selective stale marking.
+- Mutating ops require `workspace.intelligence.curate`.
+- Discovery jobs, curator product flow, freshness APIs, and onboarding E2E
+  remain M2-014..017; Buzz remains gated.

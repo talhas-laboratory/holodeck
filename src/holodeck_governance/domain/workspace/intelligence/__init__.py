@@ -38,6 +38,7 @@ from holodeck_governance.domain.workspace.intelligence.trust import (
     assert_trust_promotion_allowed,
 )
 from holodeck_governance.domain.workspace.intelligence.types import (
+    INTELLIGENCE_CURATE_PERMISSION,
     M2_COMMAND_CONTEXT_MODULE_APPROVE,
     M2_COMMAND_INTELLIGENCE_ONBOARD,
     M2_COMMAND_INTELLIGENCE_REFRESH,
@@ -75,6 +76,7 @@ from holodeck_governance.domain.workspace.intelligence.types import (
 )
 
 __all__ = [
+    "INTELLIGENCE_CURATE_PERMISSION",
     "M2_COMMAND_CONTEXT_MODULE_APPROVE",
     "M2_COMMAND_INTELLIGENCE_ONBOARD",
     "M2_COMMAND_INTELLIGENCE_REFRESH",

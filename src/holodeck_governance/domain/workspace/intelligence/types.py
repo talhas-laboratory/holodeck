@@ -5,6 +5,9 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Final
 
+# Permission required to curate governed workspace intelligence records.
+INTELLIGENCE_CURATE_PERMISSION: Final = "workspace.intelligence.curate"
+
 # Contractual M2 command types submitted through GovernanceApplicationService.
 M2_COMMAND_INTELLIGENCE_ONBOARD: Final = "workspace.intelligence.onboard"
 M2_COMMAND_INTELLIGENCE_REFRESH: Final = "workspace.intelligence.refresh"

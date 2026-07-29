@@ -14,8 +14,8 @@
 | `M2-009` | blocked | unassigned | Implement the first Buzz adapter behind the neutral collaboration boundary | M2-001–M2-008 |
 | `M2-010` | done | cursor | Prove end-to-end authenticated intake, replay recovery, and correlated status | M2-002–M2-008 |
 | `M2-012` | done | cursor | Define workspace intelligence records and contracts | M2-000 |
-| `M2-013` | ready | unassigned | Persist workspace intelligence and expose governed application operations | M2-012 |
-| `M2-014` | backlog | unassigned | Implement repository/source discovery and trust classification | M2-012, M2-013 |
+| `M2-013` | done | cursor | Persist workspace intelligence and expose governed application operations | M2-012 |
+| `M2-014` | ready | unassigned | Implement repository/source discovery and trust classification | M2-012, M2-013 |
 | `M2-015` | backlog | unassigned | Implement workspace curation, approval, activation, and readiness | M2-012–M2-014 |
 | `M2-016` | backlog | unassigned | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
 | `M2-017` | backlog | unassigned | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
