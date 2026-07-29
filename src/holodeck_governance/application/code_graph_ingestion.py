@@ -28,7 +28,10 @@ from holodeck_governance.domain.errors import (
 )
 from holodeck_governance.domain.ids import generate_uuidv7, require_opaque_id
 from holodeck_governance.domain.revisions import content_hash_for
-from holodeck_governance.domain.workspace import RepositoryBinding, WorkspaceBindingStatus
+from holodeck_governance.domain.workspace import (
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 from holodeck_governance.domain.workspace.intelligence import (
     INTELLIGENCE_CURATE_PERMISSION,
     M2_COMMAND_CODE_GRAPH_BUILD,
@@ -60,8 +63,22 @@ _RECEIPT_SNAPSHOT_PREFIX = "snapshot:"
 _RECEIPT_RUN_PREFIX = "run:"
 _RECEIPT_STATUS_PREFIX = "status:"
 _PARTIAL_POLICY_NOTE = (
-    "partial coverage requires explicit allow_partial_activation"
+    "partial coverage cannot activate until a durable policy-decision seam exists"
 )
+
+
+def _build_claim_lease_seconds(limits: ExtractionLimits) -> int:
+    """Bound an in-progress idempotency claim without leaving crash deadlocks.
+
+    Extraction limits are deliberately explicit.  A caller-provided time limit
+    receives five minutes of persistence/activation allowance; builds without
+    one use the conservative fifteen-minute default until M2 adds a renewable
+    worker lease.
+    """
+
+    if limits.max_seconds is None:
+        return 15 * 60
+    return max(60, limits.max_seconds + 5 * 60)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +97,6 @@ class GraphBuildRequest:
     base_snapshot_id: str | None = None
     path_includes: tuple[str, ...] = ()
     path_excludes: tuple[str, ...] = ()
-    allow_partial_activation: bool = False
 
     def __post_init__(self) -> None:
         for name, value in (
@@ -132,7 +148,8 @@ class GraphStatusView:
 
 
 class CollaborationBindingPort(Protocol):
-    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None: ...
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None:
+        ...
 
 
 class IntelligenceSourcePort(Protocol):
@@ -143,11 +160,13 @@ class IntelligenceSourcePort(Protocol):
         actor_id: str,
         permission: str,
         at: datetime,
-    ) -> bool: ...
+    ) -> bool:
+        ...
 
     def require_workspace_object(
         self, workspace_object_id: str, *, tenant_id: str
-    ) -> None: ...
+    ) -> None:
+        ...
 
     def ensure_repository_file_source_observation(
         self,
@@ -160,7 +179,8 @@ class IntelligenceSourcePort(Protocol):
         observed_revision: str,
         actor_id: str,
         at: datetime,
-    ) -> None: ...
+    ) -> None:
+        ...
 
 
 class CodeGraphStorePort(Protocol):
@@ -171,7 +191,8 @@ class CodeGraphStorePort(Protocol):
         run: RepositoryExtractionRun,
         entities: tuple[CodeEntityFact, ...],
         relations: tuple[CodeRelationFact, ...],
-    ) -> None: ...
+    ) -> None:
+        ...
 
     def activate_snapshot(
         self,
@@ -179,8 +200,8 @@ class CodeGraphStorePort(Protocol):
         *,
         tenant_id: str,
         activated_at: datetime,
-        allow_partial_activation: bool = False,
-    ) -> RepositoryGraphSnapshot: ...
+    ) -> RepositoryGraphSnapshot:
+        ...
 
     def claim_build_idempotency(
         self,
@@ -190,17 +211,22 @@ class CodeGraphStorePort(Protocol):
         semantic_hash: str,
         command_id: str,
         created_at: datetime,
-    ) -> str: ...
+        lease_seconds: int,
+    ) -> str:
+        ...
 
     def release_build_idempotency_claim(
         self, *, tenant_id: str, idempotency_key: str
-    ) -> None: ...
+    ) -> None:
+        ...
 
     def mark_snapshot_failed(
         self, snapshot_id: str, *, tenant_id: str, coverage_notes: tuple[str, ...]
-    ) -> RepositoryGraphSnapshot: ...
+    ) -> RepositoryGraphSnapshot:
+        ...
 
-    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None: ...
+    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None:
+        ...
 
     def get_active_snapshot(
         self,
@@ -208,15 +234,18 @@ class CodeGraphStorePort(Protocol):
         tenant_id: str,
         workspace_object_id: str,
         repository_binding_id: str,
-    ) -> RepositoryGraphSnapshot | None: ...
+    ) -> RepositoryGraphSnapshot | None:
+        ...
 
     def get_extraction_run(
         self, extraction_run_id: str
-    ) -> RepositoryExtractionRun | None: ...
+    ) -> RepositoryExtractionRun | None:
+        ...
 
     def list_snapshot_entities(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> tuple[CodeEntityFact, ...]: ...
+    ) -> tuple[CodeEntityFact, ...]:
+        ...
 
 
 class DomainEventPort(Protocol):
@@ -233,13 +262,15 @@ class DomainEventPort(Protocol):
         payload_schema_version: str,
         occurred_at: str | None = None,
         subject_object_id: str | None = None,
-    ) -> str: ...
+    ) -> str:
+        ...
 
 
 class CommandReceiptPort(Protocol):
     def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
-    ) -> tuple[str, CommandReceipt] | None: ...
+    ) -> tuple[str, CommandReceipt] | None:
+        ...
 
     def save(
         self,
@@ -247,7 +278,8 @@ class CommandReceiptPort(Protocol):
         *,
         idempotency_key: str,
         semantic_hash: str,
-    ) -> None: ...
+    ) -> None:
+        ...
 
 
 class CodeGraphIngestionService:
@@ -339,6 +371,7 @@ class CodeGraphIngestionService:
             semantic_hash=fingerprint,
             command_id=command_id,
             created_at=request.at,
+            lease_seconds=_build_claim_lease_seconds(request.limits),
         )
         if claim == "already_complete":
             existing_after_claim = self._receipts.get_by_idempotency(
@@ -576,10 +609,7 @@ class CodeGraphIngestionService:
             assert_snapshot_counts_match(
                 snapshot, entities=entities, relations=relations
             )
-            if (
-                coverage.status is CoverageStatus.PARTIAL
-                and not request.allow_partial_activation
-            ):
+            if coverage.status is CoverageStatus.PARTIAL:
                 self._graphs.persist_building_graph(
                     snapshot=snapshot,
                     run=run,
@@ -658,7 +688,6 @@ class CodeGraphIngestionService:
                 snapshot_id,
                 tenant_id=request.tenant_id,
                 activated_at=request.at,
-                allow_partial_activation=request.allow_partial_activation,
             )
         except ContentionError:
             raise
@@ -885,7 +914,6 @@ class CodeGraphIngestionService:
                     "max_relations": request.limits.max_relations,
                     "max_seconds": request.limits.max_seconds,
                 },
-                "allow_partial_activation": request.allow_partial_activation,
             }
         )
 

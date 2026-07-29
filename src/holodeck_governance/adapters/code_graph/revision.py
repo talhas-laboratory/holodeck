@@ -16,7 +16,9 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     code_graph_error,
 )
 
-_SKIP_DIR_NAMES = frozenset({".git", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache"})
+_SKIP_DIR_NAMES = frozenset(
+    {".git", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache"}
+)
 
 
 def tree_content_hash(root: Path) -> str:
@@ -39,7 +41,7 @@ def resolve_actual_revision(root: Path, requested: str) -> str:
 
     - ``fixture:<hash>`` requests must match ``fixture:<tree_content_hash>``.
     - Git repositories (regular or worktree) resolve ``HEAD`` through
-      ``git rev-parse --verify HEAD``.
+      ``git rev-parse --verify HEAD`` and must have a clean worktree.
     - Anything else raises ``REVISION_MISMATCH`` — never trust the caller.
     """
 
@@ -66,6 +68,7 @@ def resolve_actual_revision(root: Path, requested: str) -> str:
                 CodeGraphReason.REVISION_MISMATCH,
                 "git HEAD does not match requested_revision",
             )
+        _require_clean_git_worktree(root)
         return actual
 
     raise code_graph_error(
@@ -108,6 +111,49 @@ def _git_rev_parse_head(root: Path) -> str:
             "git rev-parse HEAD returned an empty or short revision",
         )
     return revision
+
+
+def _require_clean_git_worktree(root: Path) -> None:
+    """Reject modified or untracked files before reading a Git checkout.
+
+    The Python extractor reads paths from the worktree.  ``HEAD`` alone is not
+    evidence that those bytes are the requested commit: a dirty checkout can
+    contain modified tracked files or arbitrary untracked files.  M2 therefore
+    requires a clean repository-bound execution workspace until a later
+    adapter reads Git objects directly.
+    """
+
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise code_graph_error(
+            CodeGraphReason.REVISION_MISMATCH,
+            f"unable to verify git worktree cleanliness: {exc}",
+        ) from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise code_graph_error(
+            CodeGraphReason.REVISION_MISMATCH,
+            f"git status failed: {detail or completed.returncode}",
+        )
+    if completed.stdout.strip():
+        raise code_graph_error(
+            CodeGraphReason.REVISION_MISMATCH,
+            "repository worktree is dirty; extraction requires exact committed bytes",
+        )
 
 
 def _iter_hashed_files(root: Path) -> tuple[Path, ...]:

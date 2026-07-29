@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -48,7 +49,9 @@ def _request(**overrides: object) -> ExtractionRequest:
         "workspace_object_id": WORKSPACE,
         "repository_binding_id": BINDING,
         "requested_revision": fixture_revision_id("rev_a"),
-        "limits": ExtractionLimits(max_files=200, max_entities=5000, max_relations=20000),
+        "limits": ExtractionLimits(
+            max_files=200, max_entities=5000, max_relations=20000
+        ),
     }
     payload.update(overrides)
     return ExtractionRequest(**payload)  # type: ignore[arg-type]
@@ -62,7 +65,9 @@ def _entity_identity(entity) -> tuple[str, str, str | None]:
     )
 
 
-def _relation_identity(relation, entities_by_id: dict[str, object]) -> tuple[str, str, str]:
+def _relation_identity(
+    relation, entities_by_id: dict[str, object]
+) -> tuple[str, str, str]:
     source = entities_by_id[relation.source_entity_fact_id]
     target = entities_by_id[relation.target_entity_fact_id]
     return (
@@ -103,7 +108,9 @@ def test_repeated_extraction_is_byte_stable() -> None:
     assert [r.relation_fact_id for r in first.candidate_relations] == [
         r.relation_fact_id for r in second.candidate_relations
     ]
-    assert first.actual_revision == second.actual_revision == fixture_revision_id("rev_a")
+    assert (
+        first.actual_revision == second.actual_revision == fixture_revision_id("rev_a")
+    )
 
 
 def test_unresolved_dynamic_call_is_diagnostic_not_edge() -> None:
@@ -129,7 +136,7 @@ def test_unresolved_dynamic_call_is_diagnostic_not_edge() -> None:
 
 def test_golden_precision_recall_by_relation_kind() -> None:
     result = run_extractor_conformance(PythonStdlibAstExtractor(), _request())
-    extracted_entities = { _entity_identity(e): e for e in result.candidate_entities }
+    extracted_entities = {_entity_identity(e): e for e in result.candidate_entities}
     golden_entities = golden_entities_rev_a()
     golden_relations = golden_relations_rev_a(golden_entities)
 
@@ -163,9 +170,7 @@ def test_golden_precision_recall_by_relation_kind() -> None:
     extracted_rel = {
         _relation_identity_by_qn(r, extracted_by_id) for r in result.candidate_relations
     }
-    golden_rel = {
-        _relation_identity_by_qn(r, golden_by_id) for r in golden_relations
-    }
+    golden_rel = {_relation_identity_by_qn(r, golden_by_id) for r in golden_relations}
     report: dict[str, dict[str, float]] = {}
     for kind in RelationKind:
         g = {item for item in golden_rel if item[0] == kind.value}
@@ -219,8 +224,36 @@ def test_file_limit_and_exclude_paths() -> None:
     )
 
 
+def test_git_checkout_must_be_clean_to_represent_head(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
+        check=True,
+    )
+    (tmp_path / "tracked.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "tracked.py"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "initial"], check=True)
+    revision = subprocess.check_output(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"], text=True
+    ).strip()
+
+    (tmp_path / "tracked.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (tmp_path / "untracked.py").write_text("VALUE = 3\n", encoding="utf-8")
+
+    with pytest.raises(MalformedCommandError, match="worktree is dirty"):
+        PythonStdlibAstExtractor().extract(
+            _request(repository_path=tmp_path, requested_revision=revision)
+        )
+
+
 def test_revision_mismatch_before_extraction() -> None:
-    with pytest.raises(MalformedCommandError, match=CodeGraphReason.REVISION_MISMATCH.value):
+    with pytest.raises(
+        MalformedCommandError, match=CodeGraphReason.REVISION_MISMATCH.value
+    ):
         PythonStdlibAstExtractor().extract(
             _request(requested_revision="fixture:deadbeefdeadbeef")
         )
@@ -246,7 +279,9 @@ def test_malformed_python_file_is_diagnostic(tmp_path: Path) -> None:
 
 def test_plain_directory_rejects_caller_supplied_revision(tmp_path: Path) -> None:
     (tmp_path / "ok.py").write_text("x = 1\n", encoding="utf-8")
-    with pytest.raises(MalformedCommandError, match=CodeGraphReason.REVISION_MISMATCH.value):
+    with pytest.raises(
+        MalformedCommandError, match=CodeGraphReason.REVISION_MISMATCH.value
+    ):
         PythonStdlibAstExtractor().extract(
             ExtractionRequest(
                 repository_path=tmp_path,

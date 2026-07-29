@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Thread
+from typing import Callable
 
 import pytest
 
-from holodeck_governance.application.collaboration import CollaborationApplicationService
+from holodeck_governance.application.collaboration import (
+    CollaborationApplicationService,
+)
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.errors import (
     ContentionError,
@@ -19,7 +22,10 @@ from holodeck_governance.domain.errors import (
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
 from holodeck_governance.domain.registry import GovernanceObject
-from holodeck_governance.domain.workspace import RepositoryBinding, WorkspaceBindingStatus
+from holodeck_governance.domain.workspace import (
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 from holodeck_governance.domain.workspace.intelligence import (
     SourceType,
     StaleStatus,
@@ -43,11 +49,17 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
 )
 from holodeck_governance.storage.sqlite.authority import SqliteAuthorityRepository
 from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
-from holodeck_governance.storage.sqlite.collaboration import SqliteCollaborationRepository
+from holodeck_governance.storage.sqlite.collaboration import (
+    SqliteCollaborationRepository,
+)
 from holodeck_governance.storage.sqlite.intelligence import (
     SqliteWorkspaceIntelligenceRepository,
 )
-from holodeck_governance.storage.sqlite.migrations import migrate_governance
+from holodeck_governance.storage.sqlite.migrations import (
+    GOVERNANCE_MIGRATIONS,
+    migrate_governance,
+    migration_now,
+)
 from holodeck_governance.storage.sqlite.revisions import SqliteRevisionRepository
 from holodeck_governance.storage.sqlite.tenants import ensure_default_local_tenant
 from holodeck_governance.testing import FIXED_CLOCK, FixtureIds
@@ -56,7 +68,36 @@ NOW = datetime(2026, 7, 29, 15, 0, tzinfo=UTC)
 REV = "fixture:c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb"
 
 
-def _world() -> tuple[
+def _migrate_through_v23(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        """
+        CREATE TABLE gov_schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    for version, _name, upgrade in GOVERNANCE_MIGRATIONS:
+        if version > 23:
+            break
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            upgrade(conn)
+            conn.execute(
+                "INSERT INTO gov_schema_migrations(version, applied_at) VALUES (?, ?)",
+                (version, migration_now()),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _world(
+    *, migrate_schema: Callable[[sqlite3.Connection], None] = migrate_governance
+) -> tuple[
     sqlite3.Connection,
     SqliteCodeGraphRepository,
     FixtureIds,
@@ -67,7 +108,7 @@ def _world() -> tuple[
     ids = FixtureIds()
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    migrate_governance(conn)
+    migrate_schema(conn)
     ensure_default_local_tenant(
         conn, tenant_id=ids.tenant_alpha, created_by_actor_id=ids.system_service
     )
@@ -355,13 +396,106 @@ def test_facts_are_immutable_and_memberships_reuse_content() -> None:
     )
     prior = graph.require_snapshot(snap_a.snapshot_id, tenant_id=ids.tenant_alpha)
     assert prior.status is SnapshotStatus.SUPERSEDED
-    assert graph.get_active_snapshot(
+    assert (
+        graph.get_active_snapshot(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+        ).snapshot_id
+        == snap_b.snapshot_id
+    )
+    assert (
+        len(
+            graph.list_snapshot_entities(snap_a.snapshot_id, tenant_id=ids.tenant_alpha)
+        )
+        == 1
+    )
+    assert (
+        len(
+            graph.list_snapshot_entities(snap_b.snapshot_id, tenant_id=ids.tenant_alpha)
+        )
+        == 1
+    )
+
+
+def test_v24_migrates_a_populated_v23_graph_without_fk_violation() -> None:
+    conn, graph, ids, binding_id, source_id, observation_id = _world(
+        migrate_schema=_migrate_through_v23
+    )
+    entity = _entity(
+        ids=ids,
+        binding_id=binding_id,
+        source_id=source_id,
+        observation_id=observation_id,
+        path="sample_app/service.py",
+        kind=EntityKind.MODULE,
+        qn="sample_app.service",
+    )
+    graph.insert_entity_fact(entity)
+    run_id = generate_uuidv7()
+    snapshot = _building_snapshot(
+        ids=ids, binding_id=binding_id, run_id=run_id, entity_count=1
+    )
+    graph.save_building_snapshot(snapshot)
+    graph.save_extraction_run(
+        RepositoryExtractionRun(
+            extraction_run_id=run_id,
+            snapshot_id=snapshot.snapshot_id,
+            provider_key="fake",
+            provider_version="1",
+            provider_schema_version="m2.fake.v1",
+            configuration_hash="cfg",
+            requested_revision=REV,
+            actual_revision=REV,
+            started_at=NOW,
+            completed_at=NOW,
+            status=ExtractionRunStatus.SUCCEEDED,
+            created_by_actor_id=ids.human_owner,
+            limits=ExtractionLimits(max_files=10),
+        )
+    )
+    graph.add_snapshot_entity_memberships(
+        snapshot_id=snapshot.snapshot_id,
         tenant_id=ids.tenant_alpha,
-        workspace_object_id=ids.workspace_alpha_1,
-        repository_binding_id=binding_id,
-    ).snapshot_id == snap_b.snapshot_id
-    assert len(graph.list_snapshot_entities(snap_a.snapshot_id, tenant_id=ids.tenant_alpha)) == 1
-    assert len(graph.list_snapshot_entities(snap_b.snapshot_id, tenant_id=ids.tenant_alpha)) == 1
+        entity_fact_ids=(entity.entity_fact_id,),
+    )
+
+    migrate_governance(conn)
+
+    assert conn.execute("SELECT COUNT(*) FROM gov_code_entity_facts").fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_code_graph_snapshot_entities"
+        ).fetchone()[0]
+        == 1
+    )
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_expired_build_claim_is_reclaimed_after_crash_window() -> None:
+    _conn, graph, ids, _binding_id, _source_id, _observation_id = _world()
+    assert (
+        graph.claim_build_idempotency(
+            tenant_id=ids.tenant_alpha,
+            idempotency_key="interrupted-build",
+            semantic_hash="same-inputs",
+            command_id=generate_uuidv7(),
+            created_at=NOW,
+            lease_seconds=60,
+        )
+        == "claimed"
+    )
+    assert (
+        graph.claim_build_idempotency(
+            tenant_id=ids.tenant_alpha,
+            idempotency_key="interrupted-build",
+            semantic_hash="same-inputs",
+            command_id=generate_uuidv7(),
+            created_at=NOW + timedelta(minutes=2),
+            lease_seconds=60,
+        )
+        == "claimed"
+    )
 
 
 def test_failed_activation_preserves_previous_active() -> None:
@@ -403,7 +537,9 @@ def test_failed_activation_preserves_previous_active() -> None:
         tenant_id=ids.tenant_alpha,
         entity_fact_ids=(entity.entity_fact_id,),
     )
-    graph.activate_snapshot(snap.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW)
+    graph.activate_snapshot(
+        snap.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+    )
 
     bad_run = generate_uuidv7()
     bad = _building_snapshot(ids=ids, binding_id=binding_id, run_id=bad_run)

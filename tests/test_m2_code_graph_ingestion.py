@@ -14,7 +14,9 @@ from holodeck_governance.application.code_graph_ingestion import (
     CodeGraphIngestionService,
     GraphBuildRequest,
 )
-from holodeck_governance.application.collaboration import CollaborationApplicationService
+from holodeck_governance.application.collaboration import (
+    CollaborationApplicationService,
+)
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.authority.assignments import RoleAssignment
 from holodeck_governance.domain.authority.roles import RoleProfile
@@ -26,7 +28,10 @@ from holodeck_governance.domain.errors import (
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.provenance.external_reference import ExternalReference
 from holodeck_governance.domain.registry import GovernanceObject
-from holodeck_governance.domain.workspace import RepositoryBinding, WorkspaceBindingStatus
+from holodeck_governance.domain.workspace import (
+    RepositoryBinding,
+    WorkspaceBindingStatus,
+)
 from holodeck_governance.domain.workspace.intelligence import (
     INTELLIGENCE_CURATE_PERMISSION,
     M2_EVENT_CODE_GRAPH_BUILD_COMPLETED,
@@ -41,7 +46,9 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
 )
 from holodeck_governance.storage.sqlite.authority import SqliteAuthorityRepository
 from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
-from holodeck_governance.storage.sqlite.collaboration import SqliteCollaborationRepository
+from holodeck_governance.storage.sqlite.collaboration import (
+    SqliteCollaborationRepository,
+)
 from holodeck_governance.storage.sqlite.intelligence import (
     SqliteWorkspaceIntelligenceRepository,
 )
@@ -61,12 +68,14 @@ NOW = datetime(2026, 7, 29, 16, 0, tzinfo=UTC)
 REV_A = fixture_revision_id("rev_a")
 
 
-def _service() -> tuple[
-    sqlite3.Connection,
-    CodeGraphIngestionService,
-    FixtureIds,
-    str,
-]:
+def _service() -> (
+    tuple[
+        sqlite3.Connection,
+        CodeGraphIngestionService,
+        FixtureIds,
+        str,
+    ]
+):
     ids = FixtureIds()
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -273,17 +282,13 @@ def test_conflicting_idempotency_key_is_rejected() -> None:
 def test_missing_authority_is_rejected() -> None:
     _conn, service, ids, binding_id = _service()
     with pytest.raises(MissingAuthorityError):
-        service.build_graph(
-            _request(ids, binding_id, actor_id=ids.human_reviewer)
-        )
+        service.build_graph(_request(ids, binding_id, actor_id=ids.human_reviewer))
 
 
 def test_unknown_binding_is_rejected() -> None:
     _conn, service, ids, _binding_id = _service()
     with pytest.raises(NotFoundGovernanceError):
-        service.build_graph(
-            _request(ids, "01900000-0000-7000-8000-00000000dead")
-        )
+        service.build_graph(_request(ids, "01900000-0000-7000-8000-00000000dead"))
 
 
 def test_extraction_failure_emits_failed_event_without_active_snapshot() -> None:
@@ -362,7 +367,7 @@ def test_second_revision_rebuild_succeeds_with_stable_sources() -> None:
     assert all(int(row["sources"]) == 1 for row in locators)
 
 
-def test_partial_build_does_not_activate_without_explicit_policy() -> None:
+def test_partial_build_never_activates_without_a_durable_policy_seam() -> None:
     _conn, service, ids, binding_id = _service()
     rejected = service.build_graph(
         GraphBuildRequest(
@@ -375,7 +380,6 @@ def test_partial_build_does_not_activate_without_explicit_policy() -> None:
             idempotency_key="partial-default",
             limits=ExtractionLimits(max_files=1, max_entities=5000),
             at=NOW,
-            allow_partial_activation=False,
         )
     )
     assert rejected.status is SnapshotStatus.FAILED
@@ -385,27 +389,3 @@ def test_partial_build_does_not_activate_without_explicit_policy() -> None:
         repository_binding_id=binding_id,
     )
     assert status.active_snapshot is None
-
-    allowed = service.build_graph(
-        GraphBuildRequest(
-            tenant_id=ids.tenant_alpha,
-            workspace_object_id=ids.workspace_alpha_1,
-            repository_binding_id=binding_id,
-            repository_path=TREES_ROOT / "rev_a",
-            requested_revision=REV_A,
-            actor_id=ids.human_owner,
-            idempotency_key="partial-allowed",
-            limits=ExtractionLimits(max_files=1, max_entities=5000),
-            at=NOW,
-            allow_partial_activation=True,
-        )
-    )
-    assert allowed.status is SnapshotStatus.ACTIVE
-    status = service.get_status(
-        tenant_id=ids.tenant_alpha,
-        workspace_object_id=ids.workspace_alpha_1,
-        repository_binding_id=binding_id,
-    )
-    assert status.active_snapshot is not None
-    assert status.active_snapshot.snapshot_id == allowed.snapshot_id
-    assert status.active_snapshot.coverage_status.value == "partial"

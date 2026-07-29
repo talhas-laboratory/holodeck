@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from holodeck_governance.domain.errors import (
     ContentionError,
@@ -377,13 +377,14 @@ class SqliteCodeGraphRepository:
         semantic_hash: str,
         command_id: str,
         created_at: datetime,
+        lease_seconds: int,
     ) -> str:
         """Reserve an idempotency key before extraction (concurrency-safe).
 
         Returns ``\"claimed\"`` when this caller owns the key, or
         ``\"already_complete\"`` when a matching receipt already exists.
         Raises ``IdempotencyConflictError`` on fingerprint mismatch and
-        ``ContentionError`` when another build holds the claim.
+        ``ContentionError`` when another non-expired build holds the claim.
         """
 
         previous = self._conn.isolation_level
@@ -424,16 +425,44 @@ class SqliteCodeGraphRepository:
             except sqlite3.IntegrityError as exc:
                 row = self._conn.execute(
                     """
-                    SELECT semantic_hash FROM gov_code_graph_build_claims
+                    SELECT semantic_hash, created_at FROM gov_code_graph_build_claims
                     WHERE tenant_id = ? AND idempotency_key = ?
                     """,
                     (tenant_id, idempotency_key),
                 ).fetchone()
-                self._conn.execute("ROLLBACK")
                 if row is not None and str(row["semantic_hash"]) != semantic_hash:
+                    self._conn.execute("ROLLBACK")
                     raise IdempotencyConflictError(
                         "idempotency key was reused with different graph-build inputs"
                     ) from exc
+                if row is not None:
+                    claimed_at = datetime.fromisoformat(str(row["created_at"]))
+                    if claimed_at <= created_at - timedelta(seconds=lease_seconds):
+                        self._conn.execute(
+                            """
+                            DELETE FROM gov_code_graph_build_claims
+                            WHERE tenant_id = ? AND idempotency_key = ?
+                            """,
+                            (tenant_id, idempotency_key),
+                        )
+                        self._conn.execute(
+                            """
+                            INSERT INTO gov_code_graph_build_claims(
+                                tenant_id, idempotency_key, semantic_hash,
+                                command_id, created_at
+                            ) VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                tenant_id,
+                                idempotency_key,
+                                semantic_hash,
+                                command_id,
+                                created_at.isoformat(),
+                            ),
+                        )
+                        self._conn.execute("COMMIT")
+                        return "claimed"
+                self._conn.execute("ROLLBACK")
                 raise ContentionError(
                     "graph build idempotency key is already claimed"
                 ) from exc
@@ -519,13 +548,11 @@ class SqliteCodeGraphRepository:
         *,
         tenant_id: str,
         activated_at: datetime,
-        allow_partial_activation: bool = False,
     ) -> RepositoryGraphSnapshot:
         """Atomically activate a building snapshot; supersede any prior active.
 
-        Partial coverage activates only when ``allow_partial_activation`` is
-        explicitly true (policy-checked decision). Complete coverage activates
-        normally.
+        Partial coverage never activates in M2.  A future milestone may add a
+        durable, policy-checked exception rather than a caller-controlled flag.
         """
 
         previous = self._conn.isolation_level
@@ -544,13 +571,11 @@ class SqliteCodeGraphRepository:
                     "requested and actual revisions must match before activation",
                 )
             if run.status is ExtractionRunStatus.FAILED:
-                raise MalformedCommandError(
-                    "failed extraction runs cannot activate"
-                )
-            if run.status is ExtractionRunStatus.PARTIAL and not allow_partial_activation:
+                raise MalformedCommandError("failed extraction runs cannot activate")
+            if run.status is ExtractionRunStatus.PARTIAL:
                 raise code_graph_error(
                     CodeGraphReason.PARTIAL_COVERAGE,
-                    "partial extraction requires explicit allow_partial_activation",
+                    "partial extraction runs cannot activate without a policy decision",
                 )
             if run.status not in (
                 ExtractionRunStatus.SUCCEEDED,
@@ -559,13 +584,10 @@ class SqliteCodeGraphRepository:
                 raise MalformedCommandError(
                     "extraction run must succeed or be partial before activation"
                 )
-            if (
-                snapshot.coverage_status is CoverageStatus.PARTIAL
-                and not allow_partial_activation
-            ):
+            if snapshot.coverage_status is CoverageStatus.PARTIAL:
                 raise code_graph_error(
                     CodeGraphReason.PARTIAL_COVERAGE,
-                    "partial snapshot coverage requires explicit allow_partial_activation",
+                    "partial snapshots cannot activate without a policy decision",
                 )
             entities = self.list_snapshot_entities(snapshot_id, tenant_id=tenant_id)
             relations = self.list_snapshot_relations(snapshot_id, tenant_id=tenant_id)

@@ -459,3 +459,18 @@ were corrected. Migration **24** and adapter/store hardening:
    file-backed DB with separate connections (shared-connection CI flake fixed).
 
 M2-024 incremental refresh must not start until this hardening is on the tip.
+
+## 2026-07-29 — Code-graph exactness and recovery follow-up
+
+- The Python AST adapter reads worktree files, so Git-backed extraction now
+  requires a clean worktree in addition to an exact `HEAD` match. A later
+  adapter may instead materialize Git objects directly.
+- Partial snapshots remain persisted as failed evidence but cannot become
+  active in M2. A durable policy-decision record is required before enabling
+  that exception; a caller-controlled boolean is not authorization.
+- In-progress build claims expire after a bounded lease, allowing a retry to
+  recover after a process crash rather than blocking an idempotency key
+  permanently.
+- Migration v24 rebuilds entity, relation, and membership tables in dependency
+  order under normal foreign-key enforcement. The migration is covered against
+  a populated v23 graph, not only an empty database.

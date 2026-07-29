@@ -5,7 +5,9 @@ from __future__ import annotations
 import sqlite3
 
 from holodeck_governance.storage.sqlite.migrate_v8 import install_tenant_object_triggers
-from holodeck_governance.storage.sqlite.migrate_v13 import install_tenant_row_ref_triggers
+from holodeck_governance.storage.sqlite.migrate_v13 import (
+    install_tenant_row_ref_triggers,
+)
 
 CODE_GRAPH_BUILD_CLAIM_TABLES = ("gov_code_graph_build_claims",)
 
@@ -20,26 +22,25 @@ def upgrade_code_graph_foundation_hardening(conn: sqlite3.Connection) -> None:
     - Build claim table supports concurrency-safe idempotency reservation.
     """
 
-    # Table rebuilds rewrite UNIQUE constraints; disable FK checks for the swap.
-    conn.execute("PRAGMA foreign_keys = OFF")
-    try:
-        # Drop triggers that reference entity/relation tables during rebuild.
-        for name in (
-            "gov_code_relation_facts_endpoint_coupling_ins",
-            "gov_code_relation_facts_endpoint_coupling_upd",
-            "gov_code_entity_facts_source_observation_coupling_ins",
-            "gov_code_entity_facts_source_observation_coupling_upd",
-            "gov_code_relation_facts_evidence_observation_coupling_ins",
-            "gov_code_relation_facts_evidence_observation_coupling_upd",
-            "gov_code_graph_snapshot_entities_tenant_coupling_ins",
-            "gov_code_graph_snapshot_entities_tenant_coupling_upd",
-            "gov_code_graph_snapshot_relations_tenant_coupling_ins",
-            "gov_code_graph_snapshot_relations_tenant_coupling_upd",
-        ):
-            conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+    # Rebuild all children first.  SQLite does not permit changing
+    # ``foreign_keys`` inside the migration transaction, so a populated v23
+    # database cannot safely swap a parent table in place.
+    for name in (
+        "gov_code_relation_facts_endpoint_coupling_ins",
+        "gov_code_relation_facts_endpoint_coupling_upd",
+        "gov_code_entity_facts_source_observation_coupling_ins",
+        "gov_code_entity_facts_source_observation_coupling_upd",
+        "gov_code_relation_facts_evidence_observation_coupling_ins",
+        "gov_code_relation_facts_evidence_observation_coupling_upd",
+        "gov_code_graph_snapshot_entities_tenant_coupling_ins",
+        "gov_code_graph_snapshot_entities_tenant_coupling_upd",
+        "gov_code_graph_snapshot_relations_tenant_coupling_ins",
+        "gov_code_graph_snapshot_relations_tenant_coupling_upd",
+    ):
+        conn.execute(f"DROP TRIGGER IF EXISTS {name}")
 
-        conn.execute(
-            """
+    conn.execute(
+        """
             CREATE TABLE gov_code_entity_facts_v24 (
                 entity_fact_id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL REFERENCES gov_tenants(tenant_id),
@@ -69,35 +70,16 @@ def upgrade_code_graph_foundation_hardening(conn: sqlite3.Connection) -> None:
                 )
             )
             """
-        )
-        conn.execute(
-            """
+    )
+    conn.execute(
+        """
             INSERT INTO gov_code_entity_facts_v24
             SELECT * FROM gov_code_entity_facts
             """
-        )
-        conn.execute("DROP TABLE gov_code_entity_facts")
-        conn.execute(
-            "ALTER TABLE gov_code_entity_facts_v24 RENAME TO gov_code_entity_facts"
-        )
-        conn.execute(
-            """
-            CREATE INDEX gov_code_entity_facts_lookup
-            ON gov_code_entity_facts(
-                tenant_id, workspace_object_id, repository_binding_id,
-                entity_kind, repository_relative_path
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX gov_code_entity_facts_source
-            ON gov_code_entity_facts(tenant_id, source_id, source_observation_id)
-            """
-        )
+    )
 
-        conn.execute(
-            """
+    conn.execute(
+        """
             CREATE TABLE gov_code_relation_facts_v24 (
                 relation_fact_id TEXT PRIMARY KEY,
                 tenant_id TEXT NOT NULL REFERENCES gov_tenants(tenant_id),
@@ -130,37 +112,117 @@ def upgrade_code_graph_foundation_hardening(conn: sqlite3.Connection) -> None:
                 )
             )
             """
-        )
-        conn.execute(
-            """
+    )
+    conn.execute(
+        """
             INSERT INTO gov_code_relation_facts_v24
             SELECT * FROM gov_code_relation_facts
             """
-        )
-        conn.execute("DROP TABLE gov_code_relation_facts")
-        conn.execute(
-            "ALTER TABLE gov_code_relation_facts_v24 RENAME TO gov_code_relation_facts"
-        )
-        conn.execute(
-            """
-            CREATE INDEX gov_code_relation_facts_expand
-            ON gov_code_relation_facts(
-                tenant_id, workspace_object_id, repository_binding_id,
-                relation_kind, source_entity_fact_id
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE INDEX gov_code_relation_facts_target
-            ON gov_code_relation_facts(
-                tenant_id, target_entity_fact_id, relation_kind
-            )
-            """
-        )
+    )
 
-        conn.execute(
-            """
+    conn.execute(
+        """
+        CREATE TABLE gov_code_graph_snapshot_entities_v24 (
+            snapshot_id TEXT NOT NULL
+                REFERENCES gov_code_graph_snapshots(snapshot_id),
+            entity_fact_id TEXT NOT NULL
+                REFERENCES gov_code_entity_facts_v24(entity_fact_id),
+            tenant_id TEXT NOT NULL REFERENCES gov_tenants(tenant_id),
+            PRIMARY KEY (snapshot_id, entity_fact_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO gov_code_graph_snapshot_entities_v24
+        SELECT * FROM gov_code_graph_snapshot_entities
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE gov_code_graph_snapshot_relations_v24 (
+            snapshot_id TEXT NOT NULL
+                REFERENCES gov_code_graph_snapshots(snapshot_id),
+            relation_fact_id TEXT NOT NULL
+                REFERENCES gov_code_relation_facts_v24(relation_fact_id),
+            tenant_id TEXT NOT NULL REFERENCES gov_tenants(tenant_id),
+            PRIMARY KEY (snapshot_id, relation_fact_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO gov_code_graph_snapshot_relations_v24
+        SELECT * FROM gov_code_graph_snapshot_relations
+        """
+    )
+
+    # Old membership tables are the FK children of relation/entity facts.
+    conn.execute("DROP TABLE gov_code_graph_snapshot_relations")
+    conn.execute("DROP TABLE gov_code_graph_snapshot_entities")
+    conn.execute("DROP TABLE gov_code_relation_facts")
+    conn.execute("DROP TABLE gov_code_entity_facts")
+    conn.execute(
+        "ALTER TABLE gov_code_entity_facts_v24 RENAME TO gov_code_entity_facts"
+    )
+    conn.execute(
+        "ALTER TABLE gov_code_relation_facts_v24 RENAME TO gov_code_relation_facts"
+    )
+    conn.execute(
+        "ALTER TABLE gov_code_graph_snapshot_entities_v24 "
+        "RENAME TO gov_code_graph_snapshot_entities"
+    )
+    conn.execute(
+        "ALTER TABLE gov_code_graph_snapshot_relations_v24 "
+        "RENAME TO gov_code_graph_snapshot_relations"
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_entity_facts_lookup
+        ON gov_code_entity_facts(
+            tenant_id, workspace_object_id, repository_binding_id,
+            entity_kind, repository_relative_path
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_entity_facts_source
+        ON gov_code_entity_facts(tenant_id, source_id, source_observation_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_relation_facts_expand
+        ON gov_code_relation_facts(
+            tenant_id, workspace_object_id, repository_binding_id,
+            relation_kind, source_entity_fact_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_relation_facts_target
+        ON gov_code_relation_facts(
+            tenant_id, target_entity_fact_id, relation_kind
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_graph_snapshot_entities_fact
+        ON gov_code_graph_snapshot_entities(entity_fact_id, snapshot_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX gov_code_graph_snapshot_relations_fact
+        ON gov_code_graph_snapshot_relations(relation_fact_id, snapshot_id)
+        """
+    )
+
+    conn.execute(
+        """
             CREATE TABLE gov_code_graph_build_claims (
                 tenant_id TEXT NOT NULL REFERENCES gov_tenants(tenant_id),
                 idempotency_key TEXT NOT NULL,
@@ -170,9 +232,7 @@ def upgrade_code_graph_foundation_hardening(conn: sqlite3.Connection) -> None:
                 PRIMARY KEY (tenant_id, idempotency_key)
             )
             """
-        )
-    finally:
-        conn.execute("PRAGMA foreign_keys = ON")
+    )
 
     _install_source_observation_coupling(conn)
     _reinstall_endpoint_coupling(conn)
