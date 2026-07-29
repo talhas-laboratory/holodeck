@@ -1,7 +1,7 @@
 # M2-026 — Factual code-graph acceptance evidence
 
 **Task:** M2-026  
-**Commit:** `15b4849369f3e84ccbb3d19e78db7b06bd0c0dc3`  
+**Commit:** `97fc031c245afb26d1f4472c8dd014abcdca9489`  
 **Date:** 2026-07-29  
 **Metrics:** `artifacts/m2-026-acceptance-metrics.json`
 
