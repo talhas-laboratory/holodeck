@@ -182,3 +182,16 @@
 - Mutating ops require `workspace.intelligence.curate`.
 - Discovery jobs, curator product flow, freshness APIs, and onboarding E2E
   remain M2-014..017; Buzz remains gated.
+
+## 2026-07-29 — M2-014 source discovery and trust classification
+
+- Domain `discovery.py` invents `DiscoveredSourceCandidate` from
+  `ObservedSourcePath` via deterministic path/kind heuristics.
+- Discovery never invents `instruction_authority`, `authoritative_reference`,
+  or `generated_interpretation`.
+- `discover_and_register_sources` requires curate permission, registers via
+  existing `register_source`, and **skips** natural-key conflicts (idempotent
+  rediscovery) rather than failing the batch.
+- Explicit observations are the preferred seam (no binding walk required).
+- Curator approval/activation, freshness APIs, and onboarding E2E remain
+  M2-015..017; Buzz remains gated.

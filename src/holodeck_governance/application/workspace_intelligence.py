@@ -1,4 +1,4 @@
-"""Application seam for governed workspace intelligence operations (M2-013).
+"""Application seam for governed workspace intelligence operations (M2-013+).
 
 Thin adapter over the storage repository. It preserves the M1
 domain/application/storage separation: the domain contracts stay pure, the
@@ -10,19 +10,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, Sequence
 
+from holodeck_governance.domain.errors import MissingAuthorityError
+from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.workspace.intelligence import (
+    INTELLIGENCE_CURATE_PERMISSION,
     ContextItem,
     ContextModule,
     Contradiction,
     GapStatus,
     KnowledgeGap,
+    ObservedSourcePath,
+    StaleStatus,
     TrustClass,
     WorkspaceDecision,
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
+    invent_sources_from_observations,
 )
 
 
@@ -37,6 +43,26 @@ class OnboardedIntelligence:
     gaps: tuple[KnowledgeGap, ...]
     readiness: WorkspaceReadinessAssessment
     event_types: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceDiscoveryResult:
+    """Outcome of discover_and_register_sources.
+
+    Natural-key conflicts (tenant, workspace, locator) skip the existing source
+    rather than failing the batch — rediscovery is idempotent.
+    """
+
+    registered_source_ids: tuple[str, ...]
+    skipped_existing_source_ids: tuple[str, ...]
+
+    @property
+    def registered_count(self) -> int:
+        return len(self.registered_source_ids)
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped_existing_source_ids)
 
 
 class WorkspaceIntelligenceRepositoryPort(Protocol):
@@ -66,6 +92,10 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
     def register_source(self, source: WorkspaceSource) -> None: ...
 
     def get_source(self, source_id: str) -> WorkspaceSource | None: ...
+
+    def get_source_by_locator(
+        self, *, tenant_id: str, workspace_object_id: str, locator: str
+    ) -> WorkspaceSource | None: ...
 
     def list_sources(
         self, workspace_object_id: str, *, tenant_id: str
@@ -271,6 +301,73 @@ class WorkspaceIntelligenceApplicationService:
     def register_source(self, source: WorkspaceSource) -> WorkspaceSource:
         self.repository.register_source(source)
         return source
+
+    def discover_and_register_sources(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        observations: Sequence[ObservedSourcePath],
+        actor_id: str,
+        at: datetime,
+        owner_actor_id: str | None = None,
+    ) -> SourceDiscoveryResult:
+        """Classify observed paths and register invented sources.
+
+        Requires ``workspace.intelligence.curate``. Discovery never sets
+        ``instruction_authority``. When a locator is already registered for the
+        workspace natural key, the existing source is skipped (idempotent
+        rediscovery) instead of failing the whole batch.
+        """
+
+        if not self.repository.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            permission=INTELLIGENCE_CURATE_PERMISSION,
+            at=at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.intelligence.curate authority"
+            )
+
+        owner = owner_actor_id or actor_id
+        candidates = invent_sources_from_observations(tuple(observations))
+        registered: list[str] = []
+        skipped: list[str] = []
+        for candidate in candidates:
+            existing = self.repository.get_source_by_locator(
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+                locator=candidate.locator,
+            )
+            if existing is not None:
+                skipped.append(existing.source_id)
+                continue
+            source = WorkspaceSource(
+                source_id=generate_uuidv7(),
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+                source_type=candidate.source_type,
+                locator=candidate.locator,
+                observed_revision=candidate.observed_revision,
+                trust_class=candidate.trust_class,
+                owner_actor_id=owner,
+                sensitivity=candidate.sensitivity,
+                refresh_policy=candidate.refresh_policy,
+                observed_at=at,
+                stale_status=StaleStatus.FRESH,
+                created_at=at,
+                created_by_actor_id=actor_id,
+                instruction_authority=False,
+                content_hash=candidate.content_hash,
+                module_tags=candidate.module_tags,
+            )
+            self.repository.register_source(source)
+            registered.append(source.source_id)
+        return SourceDiscoveryResult(
+            registered_source_ids=tuple(registered),
+            skipped_existing_source_ids=tuple(skipped),
+        )
 
     def get_source(self, source_id: str) -> WorkspaceSource | None:
         return self.repository.get_source(source_id)

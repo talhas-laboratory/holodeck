@@ -14,6 +14,13 @@ from holodeck_governance.domain.workspace.intelligence.context import (
     ContextItem,
     ContextModule,
 )
+from holodeck_governance.domain.workspace.intelligence.discovery import (
+    DiscoveredSourceCandidate,
+    ObservedSourcePath,
+    classify_observed_path,
+    invent_sources_from_observations,
+    observed_path_for_classification,
+)
 from holodeck_governance.domain.workspace.intelligence.gaps import (
     Contradiction,
     KnowledgeGap,
@@ -106,12 +113,14 @@ __all__ = [
     "Contradiction",
     "ContradictionStatus",
     "DecisionOutcome",
+    "DiscoveredSourceCandidate",
     "GapStatus",
     "IntentSeed",
     "KnowledgeGap",
     "ModelRevisionStatus",
     "ModelSectionState",
     "ModuleApprovalStatus",
+    "ObservedSourcePath",
     "ReadinessLevel",
     "SectionCertainty",
     "SourceType",
@@ -124,6 +133,9 @@ __all__ = [
     "WorkspaceReadinessAssessment",
     "WorkspaceSource",
     "assert_trust_promotion_allowed",
+    "classify_observed_path",
+    "invent_sources_from_observations",
+    "observed_path_for_classification",
     "readiness_at_most",
     "readiness_level_index",
     "required_intelligence_scenario_ids",
