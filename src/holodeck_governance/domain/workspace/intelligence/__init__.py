@@ -42,6 +42,11 @@ from holodeck_governance.domain.workspace.intelligence.readiness import (
     readiness_at_most,
     readiness_level_index,
 )
+from holodeck_governance.domain.workspace.intelligence.refresh import (
+    SourceRefreshObservation,
+    module_ids_depending_on_source,
+    select_preferred_model_revision,
+)
 from holodeck_governance.domain.workspace.intelligence.sources import (
     WorkspaceSource,
     workspace_source_dedupe_key,
@@ -128,6 +133,7 @@ __all__ = [
     "ObservedSourcePath",
     "ReadinessLevel",
     "SectionCertainty",
+    "SourceRefreshObservation",
     "SourceType",
     "StaleStatus",
     "TrustClass",
@@ -142,11 +148,13 @@ __all__ = [
     "assert_trust_promotion_allowed",
     "classify_observed_path",
     "invent_sources_from_observations",
+    "module_ids_depending_on_source",
     "observed_path_for_classification",
     "readiness_at_most",
     "readiness_level_index",
     "required_intelligence_scenario_ids",
     "section_certainty_map",
+    "select_preferred_model_revision",
     "validate_curation_proposal",
     "workspace_source_dedupe_key",
 ]

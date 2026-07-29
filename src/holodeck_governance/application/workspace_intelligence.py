@@ -29,6 +29,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     ModelRevisionStatus,
     ModuleApprovalStatus,
     ObservedSourcePath,
+    SourceRefreshObservation,
     StaleStatus,
     TrustClass,
     WorkspaceCurationProposal,
@@ -37,6 +38,8 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceReadinessAssessment,
     WorkspaceSource,
     invent_sources_from_observations,
+    module_ids_depending_on_source,
+    select_preferred_model_revision,
     validate_curation_proposal,
 )
 
@@ -83,6 +86,28 @@ class CurationActivationResult:
     promoted_sources: tuple[WorkspaceSource, ...]
     readiness: WorkspaceReadinessAssessment
     event_types: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshSourcesResult:
+    """Outcome of refresh_sources with selective stale propagation."""
+
+    refreshed_source_ids: tuple[str, ...]
+    skipped_unchanged: tuple[str, ...]
+    staled_module_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceIntelligenceSnapshot:
+    """Cohesive read-only intelligence view for a workspace."""
+
+    model: WorkspaceModelRevision | None
+    sources: tuple[WorkspaceSource, ...]
+    modules: tuple[ContextModule, ...]
+    open_gaps: tuple[KnowledgeGap, ...]
+    latest_readiness: WorkspaceReadinessAssessment | None
+    stale_source_ids: tuple[str, ...]
+    stale_module_ids: tuple[str, ...]
 
 
 class WorkspaceIntelligenceRepositoryPort(Protocol):
@@ -141,6 +166,18 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
         actor_id: str,
         at: datetime,
     ) -> WorkspaceSource: ...
+
+    def apply_source_refreshes(
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        refreshes: Sequence[
+            tuple[str, str, str | None, tuple[str, ...]]
+        ],
+        actor_id: str,
+        at: datetime,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]: ...
 
     def save_context_item(self, item: ContextItem) -> None: ...
 
@@ -448,6 +485,201 @@ class WorkspaceIntelligenceApplicationService:
             dependent_module_ids=dependent_module_ids,
             actor_id=actor_id,
             at=at,
+        )
+
+    def propagate_source_stale(
+        self,
+        source_id: str,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        at: datetime,
+    ) -> WorkspaceSource:
+        """Mark a source and every module that lists it in ``source_ids`` stale."""
+
+        if not self.repository.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            permission=INTELLIGENCE_CURATE_PERMISSION,
+            at=at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.intelligence.curate authority"
+            )
+        source = self.repository.get_source(source_id)
+        if source is None:
+            raise NotFoundGovernanceError(f"unknown source {source_id}")
+        if source.tenant_id != tenant_id:
+            raise CrossTenantAccessError("source tenant mismatch")
+        modules = self.repository.list_context_modules(
+            source.workspace_object_id, tenant_id=tenant_id
+        )
+        dependent_ids = module_ids_depending_on_source(modules, source_id)
+        return self.repository.mark_source_stale(
+            source_id,
+            tenant_id=tenant_id,
+            dependent_module_ids=dependent_ids,
+            actor_id=actor_id,
+            at=at,
+        )
+
+    def refresh_sources(
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        observations: Sequence[SourceRefreshObservation],
+        actor_id: str,
+        at: datetime,
+    ) -> RefreshSourcesResult:
+        """Update observed revisions and selectively stale dependent modules.
+
+        Unknown ``source_id`` / locator raises ``NotFoundGovernanceError``.
+        Same-revision observations are skipped without side effects.
+        """
+
+        if not self.repository.actor_has_permission(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            permission=INTELLIGENCE_CURATE_PERMISSION,
+            at=at,
+        ):
+            raise MissingAuthorityError(
+                "actor lacks workspace.intelligence.curate authority"
+            )
+        self.repository.require_workspace_object(
+            workspace_object_id, tenant_id=tenant_id
+        )
+        modules = self.repository.list_context_modules(
+            workspace_object_id, tenant_id=tenant_id
+        )
+        refreshed: list[str] = []
+        skipped: list[str] = []
+        refreshes: list[tuple[str, str, str | None, tuple[str, ...]]] = []
+        staled: set[str] = set()
+        for observation in observations:
+            source = self._resolve_refresh_source(
+                observation,
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+            )
+            if source.observed_revision == observation.new_observed_revision:
+                skipped.append(source.source_id)
+                continue
+            dependent_ids = module_ids_depending_on_source(
+                modules, source.source_id
+            )
+            refreshes.append(
+                (
+                    source.source_id,
+                    observation.new_observed_revision,
+                    observation.content_hash,
+                    dependent_ids,
+                )
+            )
+            refreshed.append(source.source_id)
+            staled.update(dependent_ids)
+        if refreshes:
+            _, repo_staled = self.repository.apply_source_refreshes(
+                workspace_object_id,
+                tenant_id=tenant_id,
+                refreshes=refreshes,
+                actor_id=actor_id,
+                at=at,
+            )
+            staled.update(repo_staled)
+        return RefreshSourcesResult(
+            refreshed_source_ids=tuple(refreshed),
+            skipped_unchanged=tuple(skipped),
+            staled_module_ids=tuple(sorted(staled)),
+        )
+
+    def _resolve_refresh_source(
+        self,
+        observation: SourceRefreshObservation,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+    ) -> WorkspaceSource:
+        if observation.source_id is not None:
+            source = self.repository.get_source(observation.source_id)
+            if source is None:
+                raise NotFoundGovernanceError(
+                    f"unknown source {observation.source_id}"
+                )
+            if source.tenant_id != tenant_id:
+                raise CrossTenantAccessError("source tenant mismatch")
+            if source.workspace_object_id != workspace_object_id:
+                raise MalformedCommandError(
+                    "source workspace does not match refresh target"
+                )
+            return source
+        assert observation.locator is not None
+        source = self.repository.get_source_by_locator(
+            tenant_id=tenant_id,
+            workspace_object_id=workspace_object_id,
+            locator=observation.locator,
+        )
+        if source is None:
+            raise NotFoundGovernanceError(
+                f"unknown source locator {observation.locator}"
+            )
+        return source
+
+    def query_workspace_intelligence(
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        model_revision_id: str | None = None,
+    ) -> WorkspaceIntelligenceSnapshot:
+        """Read-only cohesive snapshot; does not require curate permission."""
+
+        self.repository.require_workspace_object(
+            workspace_object_id, tenant_id=tenant_id
+        )
+        revisions = self.repository.list_model_revisions(
+            workspace_object_id, tenant_id=tenant_id
+        )
+        model = select_preferred_model_revision(
+            revisions, model_revision_id=model_revision_id
+        )
+        if model_revision_id is not None and model is None:
+            raise NotFoundGovernanceError(
+                f"unknown model revision {model_revision_id}"
+            )
+        sources = tuple(
+            self.repository.list_sources(workspace_object_id, tenant_id=tenant_id)
+        )
+        modules = tuple(
+            self.repository.list_context_modules(
+                workspace_object_id, tenant_id=tenant_id
+            )
+        )
+        open_gaps = tuple(
+            self.repository.list_knowledge_gaps(
+                workspace_object_id, tenant_id=tenant_id, status=GapStatus.OPEN
+            )
+        )
+        latest_readiness = self.repository.get_latest_readiness(
+            workspace_object_id, tenant_id=tenant_id
+        )
+        return WorkspaceIntelligenceSnapshot(
+            model=model,
+            sources=sources,
+            modules=modules,
+            open_gaps=open_gaps,
+            latest_readiness=latest_readiness,
+            stale_source_ids=tuple(
+                source.source_id
+                for source in sources
+                if source.stale_status is StaleStatus.STALE
+            ),
+            stale_module_ids=tuple(
+                module.module_id
+                for module in modules
+                if module.freshness is StaleStatus.STALE
+            ),
         )
 
     def save_context_item(self, item: ContextItem) -> ContextItem:

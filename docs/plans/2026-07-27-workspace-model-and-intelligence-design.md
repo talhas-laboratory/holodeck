@@ -1,6 +1,6 @@
 # Workspace model and intelligence design
 
-**Status:** Implementation-ready contract (M2-013–M2-015 shipped: persistence, discovery, curation/activation; freshness deferred to M2-016+)
+**Status:** Implementation-ready contract (M2-013–M2-016 shipped: persistence, discovery, curation/activation, freshness/query; onboarding E2E deferred to M2-017)
 **Milestones:** M2 workspace intelligence and genesis; M3 context compilation
 **Companion tasks:** M2-012 contracts; M2-013 persistence; M2-014 discovery/trust; M2-015 curation/activation
 **Contract package:** `holodeck_governance.domain.workspace.intelligence`

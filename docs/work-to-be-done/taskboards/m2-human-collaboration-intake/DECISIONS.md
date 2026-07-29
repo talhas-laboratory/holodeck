@@ -207,3 +207,14 @@
   `authorized_human_promotion=True`.
 - Freshness/query APIs and onboarding E2E remain M2-016..017; Buzz remains
   gated (M2-009).
+
+## 2026-07-29 — M2-016 refresh, stale propagation, and query snapshot
+
+- Domain `refresh.py` adds `SourceRefreshObservation`,
+  `module_ids_depending_on_source`, and `select_preferred_model_revision`.
+- Application `propagate_source_stale` / `refresh_sources` require curate;
+  `query_workspace_intelligence` is read-only without curate.
+- Repository `apply_source_refreshes` updates observed revisions and emits
+  existing source/module stale events in one transaction (no new migration).
+- Same-revision observations are no-ops; unknown sources raise NotFound.
+- Onboarding/refresh E2E remains M2-017; Buzz remains gated (M2-009).

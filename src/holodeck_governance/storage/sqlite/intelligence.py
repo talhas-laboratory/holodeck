@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime
+from typing import Sequence
 
 from holodeck_governance.domain.errors import (
     CrossTenantAccessError,
@@ -616,50 +617,19 @@ class SqliteWorkspaceIntelligenceRepository:
         if source.tenant_id != tenant_id:
             raise CrossTenantAccessError("source tenant mismatch")
         self._require_curate(actor_id, tenant_id=tenant_id, at=at)
-        modules: list[ContextModule] = []
-        for module_id in dependent_module_ids:
-            module = self.get_context_module(module_id)
-            if module is None:
-                raise NotFoundGovernanceError(f"unknown context module {module_id}")
-            if module.tenant_id != tenant_id:
-                raise CrossTenantAccessError("context module tenant mismatch")
-            if module.workspace_object_id != source.workspace_object_id:
-                raise MalformedCommandError(
-                    "dependent module must belong to the source workspace"
-                )
-            modules.append(module)
+        modules = self._load_dependent_modules(
+            dependent_module_ids,
+            tenant_id=tenant_id,
+            workspace_object_id=source.workspace_object_id,
+        )
         previous = self._begin_write()
         try:
-            self._conn.execute(
-                "UPDATE gov_workspace_sources SET stale_status = ? WHERE source_id = ?",
-                (StaleStatus.STALE.value, source_id),
-            )
-            self._append_event(
-                tenant_id=tenant_id,
-                event_type=M2_EVENT_SOURCE_STALE,
+            self._mark_source_and_modules_stale_in_txn(
+                source,
+                modules=modules,
                 actor_id=actor_id,
-                workspace_object_id=source.workspace_object_id,
-                causation_id=source_id,
                 at=at,
-                payload={"source_id": source_id},
             )
-            for module in modules:
-                self._conn.execute(
-                    "UPDATE gov_context_modules SET freshness = ? WHERE module_id = ?",
-                    (StaleStatus.STALE.value, module.module_id),
-                )
-                self._append_event(
-                    tenant_id=tenant_id,
-                    event_type=M2_EVENT_CONTEXT_MODULE_STALE,
-                    actor_id=actor_id,
-                    workspace_object_id=source.workspace_object_id,
-                    causation_id=source_id,
-                    at=at,
-                    payload={
-                        "module_id": module.module_id,
-                        "source_id": source_id,
-                    },
-                )
             self._commit_txn(previous)
         except Exception:
             self._rollback_txn(previous)
@@ -667,6 +637,146 @@ class SqliteWorkspaceIntelligenceRepository:
         refreshed = self.get_source(source_id)
         assert refreshed is not None
         return refreshed
+
+    def apply_source_refreshes(
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        refreshes: Sequence[tuple[str, str, str | None, tuple[str, ...]]],
+        actor_id: str,
+        at: datetime,
+    ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Update observed revisions and stale dependents in one transaction.
+
+        Each refresh tuple is
+        ``(source_id, new_observed_revision, content_hash, dependent_module_ids)``.
+        """
+
+        self.require_workspace_object(workspace_object_id, tenant_id=tenant_id)
+        self._require_curate(actor_id, tenant_id=tenant_id, at=at)
+        prepared: list[
+            tuple[WorkspaceSource, str, str | None, list[ContextModule]]
+        ] = []
+        for source_id, new_revision, content_hash, dependent_module_ids in refreshes:
+            source = self.get_source(source_id)
+            if source is None:
+                raise NotFoundGovernanceError(f"unknown source {source_id}")
+            if source.tenant_id != tenant_id:
+                raise CrossTenantAccessError("source tenant mismatch")
+            if source.workspace_object_id != workspace_object_id:
+                raise MalformedCommandError(
+                    "source workspace does not match refresh target"
+                )
+            modules = self._load_dependent_modules(
+                dependent_module_ids,
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+            )
+            prepared.append((source, new_revision, content_hash, modules))
+
+        refreshed_ids: list[str] = []
+        staled_module_ids: list[str] = []
+        previous = self._begin_write()
+        try:
+            for source, new_revision, content_hash, modules in prepared:
+                self._conn.execute(
+                    """
+                    UPDATE gov_workspace_sources
+                    SET observed_revision = ?,
+                        content_hash = COALESCE(?, content_hash),
+                        observed_at = ?
+                    WHERE source_id = ?
+                    """,
+                    (
+                        new_revision,
+                        content_hash,
+                        at.isoformat(),
+                        source.source_id,
+                    ),
+                )
+                self._mark_source_and_modules_stale_in_txn(
+                    source,
+                    modules=modules,
+                    actor_id=actor_id,
+                    at=at,
+                )
+                refreshed_ids.append(source.source_id)
+                staled_module_ids.extend(module.module_id for module in modules)
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+        # Preserve first-seen order while deduplicating module ids.
+        seen: set[str] = set()
+        unique_staled: list[str] = []
+        for module_id in staled_module_ids:
+            if module_id not in seen:
+                seen.add(module_id)
+                unique_staled.append(module_id)
+        return tuple(refreshed_ids), tuple(unique_staled)
+
+    def _load_dependent_modules(
+        self,
+        dependent_module_ids: tuple[str, ...],
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+    ) -> list[ContextModule]:
+        modules: list[ContextModule] = []
+        for module_id in dependent_module_ids:
+            module = self.get_context_module(module_id)
+            if module is None:
+                raise NotFoundGovernanceError(f"unknown context module {module_id}")
+            if module.tenant_id != tenant_id:
+                raise CrossTenantAccessError("context module tenant mismatch")
+            if module.workspace_object_id != workspace_object_id:
+                raise MalformedCommandError(
+                    "dependent module must belong to the source workspace"
+                )
+            modules.append(module)
+        return modules
+
+    def _mark_source_and_modules_stale_in_txn(
+        self,
+        source: WorkspaceSource,
+        *,
+        modules: list[ContextModule],
+        actor_id: str,
+        at: datetime,
+    ) -> None:
+        """Mark source + listed modules stale and append events (caller owns txn)."""
+
+        self._conn.execute(
+            "UPDATE gov_workspace_sources SET stale_status = ? WHERE source_id = ?",
+            (StaleStatus.STALE.value, source.source_id),
+        )
+        self._append_event(
+            tenant_id=source.tenant_id,
+            event_type=M2_EVENT_SOURCE_STALE,
+            actor_id=actor_id,
+            workspace_object_id=source.workspace_object_id,
+            causation_id=source.source_id,
+            at=at,
+            payload={"source_id": source.source_id},
+        )
+        for module in modules:
+            self._conn.execute(
+                "UPDATE gov_context_modules SET freshness = ? WHERE module_id = ?",
+                (StaleStatus.STALE.value, module.module_id),
+            )
+            self._append_event(
+                tenant_id=source.tenant_id,
+                event_type=M2_EVENT_CONTEXT_MODULE_STALE,
+                actor_id=actor_id,
+                workspace_object_id=source.workspace_object_id,
+                causation_id=source.source_id,
+                at=at,
+                payload={
+                    "module_id": module.module_id,
+                    "source_id": source.source_id,
+                },
+            )
 
     # -- context items --------------------------------------------------------
 
