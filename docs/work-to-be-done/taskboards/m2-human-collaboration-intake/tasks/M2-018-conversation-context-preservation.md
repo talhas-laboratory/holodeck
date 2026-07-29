@@ -47,8 +47,8 @@ collaboration thread as the Holodeck system of record.
 
 ```text
 uv run --extra dev pytest -q tests/test_m2_conversation_context.py
+uv run --extra dev pytest -q tests/test_m2_018_messy_slack_thread_fixture.py
 uv run --extra dev pytest -q
-# -> 400 passed
 ```
 
 ## Evidence and handoff
@@ -63,6 +63,10 @@ Full capture workflow landed on `cursor/m2-018-conversation-context-preservation
 - Tests: domain ordering/JSON, adapter seed/partial, intake E2E with
   attachments, empty/fail-open, replay preservation
   (`tests/test_m2_conversation_context.py`).
+- Slack-shaped messy thread acceptance fixture
+  (`tests/test_m2_018_messy_slack_thread_fixture.py`): noisy channel+thread
+  with truncated history and attachments; asserts full ordered manifest
+  capture, explicitly not semantic selection.
 
 Full Buzz-backed fetch remains M2-009.
 
