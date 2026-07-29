@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`
 Owner: `talha`
-Status: **implementation in cumulative review; M2-023 ready; M2-009 Buzz gated**
+Status: **implementation in cumulative review; M2-024 ready; M2-009 Buzz gated**
 
 ## Boundary
 

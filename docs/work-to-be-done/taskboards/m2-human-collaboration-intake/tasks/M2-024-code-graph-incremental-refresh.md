@@ -1,6 +1,6 @@
 # M2-024 — Implement safe incremental graph refresh and invalidation
 
-**Status:** backlog
+**Status:** ready
 **Owner:** unassigned
 **Depends on:** M2-023
 

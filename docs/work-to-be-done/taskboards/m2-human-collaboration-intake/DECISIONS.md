@@ -423,3 +423,12 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
 - Fixture revision identity remains `fixture:<content_hash>`; requested and
   actual revisions must match before and after extraction.
 - Metrics artifact: `artifacts/m2-022-python-extractor-metrics.json`.
+
+## 2026-07-29 — M2-023 code-graph ingestion and activation
+
+- `CodeGraphIngestionService` orchestrates extract → normalize → ensure sources
+  → persist building snapshot → activate (or fail without replacing active).
+- Mutation requires `workspace.intelligence.curate`; idempotency keys bind
+  tenant/workspace/binding/revision/extractor/config/limits via command receipts.
+- Durable events: build requested/completed/partial/failed and snapshot activated.
+- Application layer depends only on ports (no sqlite/adapter imports).

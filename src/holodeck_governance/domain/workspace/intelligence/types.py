@@ -17,6 +17,7 @@ M2_COMMAND_SOURCE_REGISTER: Final = "workspace.source.register"
 M2_COMMAND_CONTEXT_MODULE_APPROVE: Final = "workspace.context_module.approve"
 M2_COMMAND_KNOWLEDGE_GAP_RESOLVE: Final = "workspace.knowledge_gap.resolve"
 M2_COMMAND_READINESS_ASSESS: Final = "workspace.readiness.assess"
+M2_COMMAND_CODE_GRAPH_BUILD: Final = "workspace.code_graph.build"
 
 M2_INTELLIGENCE_COMMAND_TYPES: Final[frozenset[str]] = frozenset(
     {
@@ -28,6 +29,7 @@ M2_INTELLIGENCE_COMMAND_TYPES: Final[frozenset[str]] = frozenset(
         M2_COMMAND_CONTEXT_MODULE_APPROVE,
         M2_COMMAND_KNOWLEDGE_GAP_RESOLVE,
         M2_COMMAND_READINESS_ASSESS,
+        M2_COMMAND_CODE_GRAPH_BUILD,
     }
 )
 
@@ -41,6 +43,13 @@ M2_EVENT_SOURCE_STALE: Final = "workspace.source.stale"
 M2_EVENT_CONTEXT_MODULE_STALE: Final = "workspace.context_module.stale"
 M2_EVENT_KNOWLEDGE_GAP_CREATED: Final = "workspace.knowledge_gap.created"
 M2_EVENT_READINESS_ASSESSED: Final = "workspace.readiness.assessed"
+M2_EVENT_CODE_GRAPH_BUILD_REQUESTED: Final = "workspace.code_graph.build_requested"
+M2_EVENT_CODE_GRAPH_BUILD_COMPLETED: Final = "workspace.code_graph.build_completed"
+M2_EVENT_CODE_GRAPH_BUILD_PARTIAL: Final = "workspace.code_graph.build_partial"
+M2_EVENT_CODE_GRAPH_BUILD_FAILED: Final = "workspace.code_graph.build_failed"
+M2_EVENT_CODE_GRAPH_SNAPSHOT_ACTIVATED: Final = (
+    "workspace.code_graph.snapshot_activated"
+)
 
 REQUIRED_MODEL_SECTIONS: Final[tuple[str, ...]] = (
     "identity_and_purpose",

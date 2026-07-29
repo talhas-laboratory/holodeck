@@ -18,6 +18,11 @@ from holodeck_governance.storage.sqlite.intelligence import (
     SqliteWorkspaceIntelligenceRepository,
 )
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
+from holodeck_governance.application.code_graph_ingestion import (
+    CodeGraphIngestionService,
+)
+from holodeck_governance.adapters.code_graph.python_ast import PythonStdlibAstExtractor
+from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
 
 
 def open_governance_app(
@@ -54,4 +59,33 @@ def open_workspace_intelligence_app(
     migrate_governance(conn)
     return WorkspaceIntelligenceApplicationService(
         repository=SqliteWorkspaceIntelligenceRepository(conn)
+    )
+
+
+def open_code_graph_ingestion_app(
+    database: str,
+    *,
+    extractor: object | None = None,
+) -> CodeGraphIngestionService:
+    """Open the factual code-graph build/activate seam."""
+
+    from holodeck_governance.storage.sqlite.repos import (
+        SqliteCommandReceiptRepository,
+        SqliteDomainEventRepository,
+    )
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return CodeGraphIngestionService(
+        collaboration=CollaborationApplicationService(
+            repository=SqliteCollaborationRepository(conn)
+        ),
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=SqliteCodeGraphRepository(conn),
+        extractor=extractor or PythonStdlibAstExtractor(),  # type: ignore[arg-type]
+        events=SqliteDomainEventRepository(conn),
+        receipts=SqliteCommandReceiptRepository(conn),
+        commit=conn.commit,
     )
