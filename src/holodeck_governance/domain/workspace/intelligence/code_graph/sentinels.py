@@ -240,8 +240,7 @@ def evaluate_sentinels(
         (
             entity
             for entity in entity_tuple
-            if entity.entity_kind
-            in (EntityKind.SCHEMA_OBJECT, EntityKind.MIGRATION)
+            if entity.entity_kind in (EntityKind.SCHEMA_OBJECT, EntityKind.MIGRATION)
         ),
         key=lambda entity: entity.entity_key,
     )
@@ -329,9 +328,7 @@ def evaluate_sentinels(
                 detail=f"{len(configs)} configuration entit"
                 f"{'y' if len(configs) == 1 else 'ies'} observed",
                 entity_fact_ids=tuple(e.entity_fact_id for e in configs),
-                path_refs=tuple(
-                    sorted({e.repository_relative_path for e in configs})
-                ),
+                path_refs=tuple(sorted({e.repository_relative_path for e in configs})),
                 evidence_notes=("entity_kind=configuration",),
             )
         )
@@ -355,12 +352,57 @@ def evaluate_sentinels(
         if entity is not None and entity not in tests:
             tests.append(entity)
     tests.sort(key=lambda entity: entity.entity_key)
+    evidence_by_id: dict[str, str] = {
+        entity.entity_fact_id: "test_or_tests_relation" for entity in tests
+    }
     if changed:
-        tests = [
-            entity
-            for entity in tests
+        changed_entity_ids = {
+            entity.entity_fact_id
+            for entity in entity_tuple
             if _path_intersects(entity.repository_relative_path, changed)
-        ]
+        }
+        related_via_tests: set[str] = set()
+        for relation in relation_tuple:
+            if relation.relation_kind is not RelationKind.TESTS:
+                continue
+            src = relation.source_entity_fact_id
+            tgt = relation.target_entity_fact_id
+            if src in changed_entity_ids:
+                related_via_tests.add(tgt)
+            if tgt in changed_entity_ids:
+                related_via_tests.add(src)
+
+        selected: list[CodeEntityFact] = []
+        evidence_by_id = {}
+        seen_ids: set[str] = set()
+        for entity in tests:
+            on_changed = entity.entity_fact_id in changed_entity_ids
+            related = entity.entity_fact_id in related_via_tests
+            if not on_changed and not related:
+                continue
+            if entity.entity_fact_id in seen_ids:
+                continue
+            seen_ids.add(entity.entity_fact_id)
+            selected.append(entity)
+            if on_changed and _path_intersects(
+                entity.repository_relative_path, changed
+            ):
+                evidence_by_id[entity.entity_fact_id] = "changed_test"
+            else:
+                evidence_by_id[entity.entity_fact_id] = "related_test"
+        # TESTS neighbors of changed production entities may not already be in
+        # ``tests`` (e.g. linked modules); include them as related_test.
+        for fact_id in sorted(related_via_tests):
+            if fact_id in seen_ids:
+                continue
+            entity = by_id.get(fact_id)
+            if entity is None:
+                continue
+            seen_ids.add(fact_id)
+            selected.append(entity)
+            evidence_by_id[fact_id] = "related_test"
+        selected.sort(key=lambda entity: entity.entity_key)
+        tests = selected
     if tests:
         findings.append(
             SentinelFinding(
@@ -370,10 +412,11 @@ def evaluate_sentinels(
                 detail=f"{len(tests)} test-related entit"
                 f"{'y' if len(tests) == 1 else 'ies'} observed",
                 entity_fact_ids=tuple(e.entity_fact_id for e in tests),
-                path_refs=tuple(
-                    sorted({e.repository_relative_path for e in tests})
+                path_refs=tuple(sorted({e.repository_relative_path for e in tests})),
+                evidence_notes=tuple(
+                    evidence_by_id.get(e.entity_fact_id, "test_or_tests_relation")
+                    for e in tests
                 ),
-                evidence_notes=("entity_kind=test_or_tests_relation",),
             )
         )
 
@@ -456,16 +499,12 @@ def evaluate_sentinels(
         for entity in entity_tuple:
             path_hit = any(
                 entity.repository_relative_path == prefix
-                or entity.repository_relative_path.startswith(
-                    prefix.rstrip("/") + "/"
-                )
+                or entity.repository_relative_path.startswith(prefix.rstrip("/") + "/")
                 for prefix in prefixes
             )
             symbol_hit = False
             if symbols and entity.qualified_name is not None:
-                symbol_hit = any(
-                    symbol in entity.qualified_name for symbol in symbols
-                )
+                symbol_hit = any(symbol in entity.qualified_name for symbol in symbols)
             if path_hit or symbol_hit:
                 sensitive.append(entity)
         sensitive.sort(key=lambda entity: entity.entity_key)
@@ -527,7 +566,9 @@ def evaluate_sentinels(
         findings = _filter_change_mode(findings, changed_paths=changed)
 
     # Stable order by kind then title.
-    findings.sort(key=lambda finding: (finding.kind.value, finding.title, finding.detail))
+    findings.sort(
+        key=lambda finding: (finding.kind.value, finding.title, finding.detail)
+    )
     for finding in findings:
         if finding.status.value == "cleared":  # pragma: no cover - invariant
             raise ValueError("sentinels must never emit cleared")

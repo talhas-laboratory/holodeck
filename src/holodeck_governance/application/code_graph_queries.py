@@ -49,6 +49,10 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.queries import
     sources_for_facts,
     traverse_paths,
 )
+from holodeck_governance.domain.workspace.intelligence.code_graph.readiness import (
+    FactualGraphReadiness,
+    evaluate_factual_graph_readiness,
+)
 from holodeck_governance.domain.workspace.intelligence.code_graph.sentinels import (
     SentinelFinding,
     evaluate_sentinels,
@@ -87,20 +91,17 @@ class SentinelEvaluationResult:
 
 
 class CollaborationBindingPort(Protocol):
-    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None:
-        ...
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None: ...
 
 
 class IntelligenceWorkspacePort(Protocol):
     def require_workspace_object(
         self, workspace_object_id: str, *, tenant_id: str
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class CodeGraphQueryStorePort(Protocol):
-    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None:
-        ...
+    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None: ...
 
     def get_active_snapshot(
         self,
@@ -108,28 +109,30 @@ class CodeGraphQueryStorePort(Protocol):
         tenant_id: str,
         workspace_object_id: str,
         repository_binding_id: str,
-    ) -> RepositoryGraphSnapshot | None:
-        ...
+    ) -> RepositoryGraphSnapshot | None: ...
 
     def get_extraction_run(
         self, extraction_run_id: str
-    ) -> RepositoryExtractionRun | None:
-        ...
+    ) -> RepositoryExtractionRun | None: ...
 
     def list_snapshot_entities(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> tuple[CodeEntityFact, ...]:
-        ...
+    ) -> tuple[CodeEntityFact, ...]: ...
 
     def list_snapshot_relations(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> tuple[CodeRelationFact, ...]:
-        ...
+    ) -> tuple[CodeRelationFact, ...]: ...
 
     def require_snapshot(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> RepositoryGraphSnapshot:
-        ...
+    ) -> RepositoryGraphSnapshot: ...
+
+
+@dataclass(frozen=True, slots=True)
+class GraphReadinessView:
+    readiness: FactualGraphReadiness
+    active_snapshot: RepositoryGraphSnapshot | None
+    active_run: RepositoryExtractionRun | None
 
 
 def _require_budget(budget: QueryBudget | None) -> QueryBudget:
@@ -171,6 +174,34 @@ class CodeGraphQueryService:
         snapshot, _run = self._resolve_snapshot(scope, require_active=False)
         return snapshot
 
+    def get_graph_readiness(
+        self,
+        scope: GraphQueryScope,
+        *,
+        binding_repository_revision: str | None = None,
+    ) -> GraphReadinessView:
+        """Factual graph readiness dimension (not workspace readiness)."""
+
+        self._require_scope_binding(scope)
+        active = self._graphs.get_active_snapshot(
+            tenant_id=scope.tenant_id,
+            workspace_object_id=scope.workspace_object_id,
+            repository_binding_id=scope.repository_binding_id,
+        )
+        run = None
+        if active is not None:
+            run = self._graphs.get_extraction_run(active.extraction_run_id)
+        readiness = evaluate_factual_graph_readiness(
+            active_snapshot=active,
+            active_run=run,
+            binding_repository_revision=binding_repository_revision,
+        )
+        return GraphReadinessView(
+            readiness=readiness,
+            active_snapshot=active,
+            active_run=run,
+        )
+
     def find_entities(
         self,
         scope: GraphQueryScope,
@@ -204,11 +235,10 @@ class CodeGraphQueryService:
         self,
         scope: GraphQueryScope,
         entity_fact_id: str,
-        budget: QueryBudget | None = None,
+        budget: QueryBudget,
     ) -> GetEntityResult:
         require_opaque_id(entity_fact_id, "entity_fact_id")
-        if budget is not None:
-            _require_budget(budget)
+        budget = _require_budget(budget)
         snapshot, run, entities, _relations = self._load_facts(scope)
         found = next(
             (entity for entity in entities if entity.entity_fact_id == entity_fact_id),
@@ -319,7 +349,10 @@ class CodeGraphQueryService:
         scope: GraphQueryScope,
         entity_fact_ids: tuple[str, ...] | list[str] = (),
         relation_fact_ids: tuple[str, ...] | list[str] = (),
+        *,
+        budget: QueryBudget,
     ) -> SourcesForFactsResult:
+        budget = _require_budget(budget)
         snapshot, run, entities, relations = self._load_facts(scope)
         provenance = sources_for_facts(
             entities=entities,
@@ -327,10 +360,14 @@ class CodeGraphQueryService:
             entity_fact_ids=tuple(entity_fact_ids),
             relation_fact_ids=tuple(relation_fact_ids),
         )
+        omissions = QueryOmissions()
+        if len(provenance) > budget.max_results:
+            provenance = provenance[: budget.max_results]
+            omissions = QueryOmissions(reasons=("max_results",))
         return SourcesForFactsResult(
             provenance=provenance,
             coverage=self._coverage(snapshot),
-            omissions=QueryOmissions(),
+            omissions=omissions,
             diagnostics=_diagnostic_summary(run),
         )
 
@@ -339,9 +376,12 @@ class CodeGraphQueryService:
         scope: GraphQueryScope,
         left_snapshot_id: str,
         right_snapshot_id: str,
+        *,
+        budget: QueryBudget,
     ) -> CompareSnapshotsResult:
         require_opaque_id(left_snapshot_id, "left_snapshot_id")
         require_opaque_id(right_snapshot_id, "right_snapshot_id")
+        budget = _require_budget(budget)
         self._require_scope_binding(scope)
         left = self._require_scoped_snapshot(scope, left_snapshot_id)
         right = self._require_scoped_snapshot(scope, right_snapshot_id)
@@ -357,16 +397,15 @@ class CodeGraphQueryService:
         right_relations = self._graphs.list_snapshot_relations(
             right.snapshot_id, tenant_id=scope.tenant_id
         )
-        comparison = compare_snapshots_facts(
+        comparison, omissions = compare_snapshots_facts(
             left_entities,
             left_relations,
             right_entities,
             right_relations,
+            budget=budget,
         )
         # Coverage reflects the right (typically newer) snapshot; notes merge both.
-        notes = tuple(
-            dict.fromkeys((*left.coverage_notes, *right.coverage_notes))
-        )
+        notes = tuple(dict.fromkeys((*left.coverage_notes, *right.coverage_notes)))
         coverage = QueryCoverage(
             coverage_status=right.coverage_status,
             notes=notes,
@@ -388,7 +427,7 @@ class CodeGraphQueryService:
         return CompareSnapshotsResult(
             comparison=comparison,
             coverage=coverage,
-            omissions=QueryOmissions(),
+            omissions=omissions,
             diagnostics=diagnostics,
         )
 
@@ -400,7 +439,9 @@ class CodeGraphQueryService:
         ownership_tags: tuple[str, ...] | list[str] = (),
         sensitive_path_prefixes: tuple[str, ...] | list[str] = (),
         sensitive_symbols: tuple[str, ...] | list[str] = (),
+        budget: QueryBudget,
     ) -> SentinelEvaluationResult:
+        budget = _require_budget(budget)
         snapshot, run, entities, relations = self._load_facts(scope)
         findings = evaluate_sentinels(
             entities=entities,
@@ -411,10 +452,14 @@ class CodeGraphQueryService:
             sensitive_path_prefixes=tuple(sensitive_path_prefixes),
             sensitive_symbols=tuple(sensitive_symbols),
         )
+        omissions = QueryOmissions()
+        if len(findings) > budget.max_results:
+            findings = findings[: budget.max_results]
+            omissions = QueryOmissions(reasons=("max_results",))
         return SentinelEvaluationResult(
             findings=findings,
             coverage=self._coverage(snapshot),
-            omissions=QueryOmissions(),
+            omissions=omissions,
             diagnostics=_diagnostic_summary(run),
         )
 
@@ -501,9 +546,7 @@ class CodeGraphQueryService:
         if snapshot.tenant_id != scope.tenant_id:
             raise CrossTenantAccessError("snapshot tenant mismatch")
         if snapshot.workspace_object_id != scope.workspace_object_id:
-            raise MalformedCommandError(
-                "snapshot does not belong to workspace"
-            )
+            raise MalformedCommandError("snapshot does not belong to workspace")
         if snapshot.repository_binding_id != scope.repository_binding_id:
             raise MalformedCommandError(
                 "snapshot does not belong to repository binding"

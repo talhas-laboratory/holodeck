@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Sequence
 
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.errors import (
@@ -25,6 +25,7 @@ from holodeck_governance.domain.errors import (
 )
 from holodeck_governance.domain.ids import generate_uuidv7
 from holodeck_governance.domain.workspace.intelligence import (
+    AUTHORITY_COVERING_MODULE_KEYS,
     INTELLIGENCE_CURATE_PERMISSION,
     M2_EVENT_CONTEXT_MODULE_STALE,
     M2_EVENT_INTELLIGENCE_ONBOARDING_REQUESTED,
@@ -48,7 +49,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     ModuleApprovalStatus,
     ReadinessLevel,
     SectionCertainty,
-    module_ids_depending_on_source,
+    SourceObservation,
     SourceType,
     StaleStatus,
     TrustClass,
@@ -58,18 +59,18 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceModelRevision,
     WorkspaceReadinessAssessment,
     WorkspaceSource,
-    SourceObservation,
-    assert_trust_promotion_allowed,
     assert_readiness_decision_authorizes,
+    assert_trust_promotion_allowed,
     derive_evidenced_maximum_readiness,
+    module_ids_depending_on_source,
     readiness_at_most,
     readiness_level_index,
-    AUTHORITY_COVERING_MODULE_KEYS,
 )
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
 from holodeck_governance.storage.sqlite.repos import SqliteDomainEventRepository
 
 M2_INTELLIGENCE_EVENT_SCHEMA_VERSION = "m2.workspace.intelligence.event.v1"
+
 
 def _insert_immutable(conn: sqlite3.Connection, sql: str, params: tuple) -> None:
     try:
@@ -194,6 +195,7 @@ class SqliteWorkspaceIntelligenceRepository:
             created_by_actor_id=str(row["created_by_actor_id"]),
             schema_version=str(row["schema_version"]),
         )
+
     def require_workspace_object(
         self, workspace_object_id: str, *, tenant_id: str
     ) -> None:
@@ -220,9 +222,7 @@ class SqliteWorkspaceIntelligenceRepository:
         if str(row["tenant_id"]) != tenant_id:
             raise CrossTenantAccessError("actor tenant mismatch")
 
-    def _require_curate(
-        self, actor_id: str, *, tenant_id: str, at: datetime
-    ) -> None:
+    def _require_curate(self, actor_id: str, *, tenant_id: str, at: datetime) -> None:
         self._require_actor(actor_id, tenant_id=tenant_id)
         if not self.actor_has_permission(
             tenant_id=tenant_id,
@@ -304,7 +304,9 @@ class SqliteWorkspaceIntelligenceRepository:
                 revision.created_at.isoformat(),
                 revision.created_by_actor_id,
                 revision.approved_by_actor_id,
-                None if revision.approved_at is None else revision.approved_at.isoformat(),
+                None
+                if revision.approved_at is None
+                else revision.approved_at.isoformat(),
                 revision.schema_version,
             ),
         )
@@ -341,16 +343,12 @@ class SqliteWorkspaceIntelligenceRepository:
     ) -> WorkspaceModelRevision:
         current = self.get_model_revision(model_revision_id)
         if current is None:
-            raise NotFoundGovernanceError(
-                f"unknown model revision {model_revision_id}"
-            )
+            raise NotFoundGovernanceError(f"unknown model revision {model_revision_id}")
         if current.tenant_id != tenant_id:
             raise CrossTenantAccessError("model revision tenant mismatch")
         if current.status is not ModelRevisionStatus.PROPOSED:
             raise MalformedCommandError("only proposed model revisions can be approved")
-        self._require_curate(
-            approved_by_actor_id, tenant_id=tenant_id, at=approved_at
-        )
+        self._require_curate(approved_by_actor_id, tenant_id=tenant_id, at=approved_at)
         previous = self._begin_write()
         try:
             self._apply_model_approval(
@@ -761,9 +759,7 @@ class SqliteWorkspaceIntelligenceRepository:
         ).fetchall()
         return [self._source_observation_from_row(row) for row in rows]
 
-    def get_source_observation(
-        self, observation_id: str
-    ) -> SourceObservation | None:
+    def get_source_observation(self, observation_id: str) -> SourceObservation | None:
         row = self._conn.execute(
             """
             SELECT * FROM gov_workspace_source_observations
@@ -856,6 +852,87 @@ class SqliteWorkspaceIntelligenceRepository:
             self._mark_source_and_modules_stale_in_txn(
                 source,
                 modules=modules,
+                actor_id=actor_id,
+                at=at,
+            )
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+        refreshed = self.get_source(source_id)
+        assert refreshed is not None
+        return refreshed
+
+    def record_repository_file_removed(
+        self,
+        source_id: str,
+        *,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> WorkspaceSource:
+        """Record a deletion observation and mark the source + dependents stale.
+
+        Inserts an observation with ``content_hash=None`` (deletion marker),
+        points the source current observation, clears content_hash, and marks
+        the source plus modules that depend on it as stale.
+        """
+
+        source = self.get_source(source_id)
+        if source is None:
+            raise NotFoundGovernanceError(f"unknown source {source_id}")
+        modules = self.list_context_modules(
+            source.workspace_object_id, tenant_id=source.tenant_id
+        )
+        dependent_ids = module_ids_depending_on_source(modules, source_id)
+        dependent_modules = self._load_dependent_modules(
+            dependent_ids,
+            tenant_id=source.tenant_id,
+            workspace_object_id=source.workspace_object_id,
+        )
+        previous = self._begin_write()
+        try:
+            observation_id = generate_uuidv7()
+            self._conn.execute(
+                """
+                INSERT INTO gov_workspace_source_observations(
+                    observation_id, source_id, tenant_id, workspace_object_id,
+                    observed_revision, content_hash, observed_at, created_at,
+                    created_by_actor_id, schema_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    source.source_id,
+                    source.tenant_id,
+                    source.workspace_object_id,
+                    observed_revision,
+                    None,
+                    at.isoformat(),
+                    at.isoformat(),
+                    actor_id,
+                    "m2.workspace_source_observation.v1",
+                ),
+            )
+            self._conn.execute(
+                """
+                UPDATE gov_workspace_sources
+                SET current_observation_id = ?,
+                    observed_revision = ?,
+                    content_hash = NULL,
+                    observed_at = ?
+                WHERE source_id = ?
+                """,
+                (
+                    observation_id,
+                    observed_revision,
+                    at.isoformat(),
+                    source.source_id,
+                ),
+            )
+            self._mark_source_and_modules_stale_in_txn(
+                source,
+                modules=dependent_modules,
                 actor_id=actor_id,
                 at=at,
             )
@@ -1070,9 +1147,7 @@ class SqliteWorkspaceIntelligenceRepository:
             at=module.created_at,
         )
         if module.approved_by_actor_id is not None:
-            self._require_actor(
-                module.approved_by_actor_id, tenant_id=module.tenant_id
-            )
+            self._require_actor(module.approved_by_actor_id, tenant_id=module.tenant_id)
         self._require_context_item_ids(
             module.item_ids,
             tenant_id=module.tenant_id,
@@ -1254,12 +1329,8 @@ class SqliteWorkspaceIntelligenceRepository:
         if module.tenant_id != tenant_id:
             raise CrossTenantAccessError("context module tenant mismatch")
         if module.approval_status is not ModuleApprovalStatus.PROPOSED:
-            raise MalformedCommandError(
-                "only proposed context modules can be approved"
-            )
-        self._require_curate(
-            approved_by_actor_id, tenant_id=tenant_id, at=approved_at
-        )
+            raise MalformedCommandError("only proposed context modules can be approved")
+        self._require_curate(approved_by_actor_id, tenant_id=tenant_id, at=approved_at)
         approved = self._apply_context_module_approval(
             module,
             approved_by_actor_id=approved_by_actor_id,
@@ -1271,9 +1342,7 @@ class SqliteWorkspaceIntelligenceRepository:
     # -- knowledge gaps -------------------------------------------------------
 
     def save_knowledge_gap(self, gap: KnowledgeGap) -> None:
-        self.require_workspace_object(
-            gap.workspace_object_id, tenant_id=gap.tenant_id
-        )
+        self.require_workspace_object(gap.workspace_object_id, tenant_id=gap.tenant_id)
         self._require_curate(
             gap.created_by_actor_id, tenant_id=gap.tenant_id, at=gap.created_at
         )
@@ -1318,7 +1387,11 @@ class SqliteWorkspaceIntelligenceRepository:
         return None if row is None else self._knowledge_gap_from_row(row)
 
     def list_knowledge_gaps(
-        self, workspace_object_id: str, *, tenant_id: str, status: GapStatus | None = None
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        status: GapStatus | None = None,
     ) -> list[KnowledgeGap]:
         if status is None:
             rows = self._conn.execute(
@@ -1439,9 +1512,7 @@ class SqliteWorkspaceIntelligenceRepository:
     ) -> Contradiction:
         contradiction = self.get_contradiction(contradiction_id)
         if contradiction is None:
-            raise NotFoundGovernanceError(
-                f"unknown contradiction {contradiction_id}"
-            )
+            raise NotFoundGovernanceError(f"unknown contradiction {contradiction_id}")
         if contradiction.tenant_id != tenant_id:
             raise CrossTenantAccessError("contradiction tenant mismatch")
         self._require_curate(actor_id, tenant_id=tenant_id, at=at)
@@ -1828,9 +1899,7 @@ class SqliteWorkspaceIntelligenceRepository:
                 )
             for item in items:
                 if item.approved_by_actor_id is not None:
-                    self._require_actor(
-                        item.approved_by_actor_id, tenant_id=tenant_id
-                    )
+                    self._require_actor(item.approved_by_actor_id, tenant_id=tenant_id)
                 self._require_external_reference_ids(
                     item.source_reference_ids, tenant_id=tenant_id
                 )
@@ -2112,14 +2181,10 @@ class SqliteWorkspaceIntelligenceRepository:
         provenance = row["provenance_reference_id"]
         keys = row.keys()
         promotion_decision = (
-            row["promotion_decision_id"]
-            if "promotion_decision_id" in keys
-            else None
+            row["promotion_decision_id"] if "promotion_decision_id" in keys else None
         )
         current_observation = (
-            row["current_observation_id"]
-            if "current_observation_id" in keys
-            else None
+            row["current_observation_id"] if "current_observation_id" in keys else None
         )
         return WorkspaceSource(
             source_id=str(row["source_id"]),
@@ -2195,7 +2260,8 @@ class SqliteWorkspaceIntelligenceRepository:
         keys = row.keys()
         observation_ids = (
             _read_list(row["observation_ids_json"])
-            if "observation_ids_json" in keys and row["observation_ids_json"] is not None
+            if "observation_ids_json" in keys
+            and row["observation_ids_json"] is not None
             else ()
         )
         return ContextModule(
@@ -2215,7 +2281,9 @@ class SqliteWorkspaceIntelligenceRepository:
             observation_ids=observation_ids,
             approved_by_actor_id=None if approved_by is None else str(approved_by),
             approved_at=(
-                None if approved_at is None else datetime.fromisoformat(str(approved_at))
+                None
+                if approved_at is None
+                else datetime.fromisoformat(str(approved_at))
             ),
             schema_version=str(row["schema_version"]),
         )

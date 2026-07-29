@@ -548,8 +548,13 @@ class SqliteCodeGraphRepository:
         *,
         tenant_id: str,
         activated_at: datetime,
+        expected_active_snapshot_id: str | None = None,
     ) -> RepositoryGraphSnapshot:
         """Atomically activate a building snapshot; supersede any prior active.
+
+        When ``expected_active_snapshot_id`` is set, activation is a compare-and-
+        set against the binding's current active snapshot (CAS). A mismatch or
+        missing active raises ``ContentionError("base_snapshot_not_current")``.
 
         Partial coverage never activates in M2.  A future milestone may add a
         durable, policy-checked exception rather than a caller-controlled flag.
@@ -595,6 +600,18 @@ class SqliteCodeGraphRepository:
             assert_snapshot_counts_match(
                 snapshot, entities=entities, relations=relations
             )
+
+            if expected_active_snapshot_id is not None:
+                current_active = self.get_active_snapshot(
+                    tenant_id=tenant_id,
+                    workspace_object_id=snapshot.workspace_object_id,
+                    repository_binding_id=snapshot.repository_binding_id,
+                )
+                if (
+                    current_active is None
+                    or current_active.snapshot_id != expected_active_snapshot_id
+                ):
+                    raise ContentionError("base_snapshot_not_current")
 
             self._conn.execute(
                 """
@@ -730,6 +747,45 @@ class SqliteCodeGraphRepository:
             """,
             (snapshot_id, tenant_id),
         ).fetchall()
+        return tuple(self._entity_from_row(row) for row in rows)
+
+    def find_snapshot_entities(
+        self,
+        snapshot_id: str,
+        *,
+        tenant_id: str,
+        entity_kind: str | None = None,
+        repository_relative_path: str | None = None,
+        path_prefix: str | None = None,
+        limit: int | None = None,
+    ) -> tuple[CodeEntityFact, ...]:
+        """Bounded entity lookup using ``gov_code_entity_facts_lookup`` columns."""
+
+        clauses = ["m.snapshot_id = ?", "m.tenant_id = ?"]
+        params: list[object] = [snapshot_id, tenant_id]
+        if entity_kind is not None:
+            clauses.append("f.entity_kind = ?")
+            params.append(entity_kind)
+        if repository_relative_path is not None:
+            clauses.append("f.repository_relative_path = ?")
+            params.append(repository_relative_path)
+        if path_prefix is not None and path_prefix != ".":
+            clauses.append(
+                "(f.repository_relative_path = ? OR f.repository_relative_path LIKE ?)"
+            )
+            params.append(path_prefix)
+            params.append(path_prefix.rstrip("/") + "/%")
+        sql = f"""
+            SELECT f.* FROM gov_code_entity_facts f
+            JOIN gov_code_graph_snapshot_entities m
+              ON m.entity_fact_id = f.entity_fact_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY f.entity_key
+        """
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
         return tuple(self._entity_from_row(row) for row in rows)
 
     def list_snapshot_relations(

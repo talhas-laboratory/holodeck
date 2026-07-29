@@ -35,6 +35,7 @@ from holodeck_governance.domain.workspace.intelligence import (
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph import (
     ExtractionLimits,
+    QueryBudget,
     SentinelKind,
     SentinelStatus,
     evaluate_sentinels,
@@ -57,7 +58,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (  # noqa: E402
+from python_reference import (
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -67,6 +68,7 @@ NOW = datetime(2026, 7, 29, 16, 0, tzinfo=UTC)
 REV_A = fixture_revision_id("rev_a")
 REV_B = fixture_revision_id("rev_b")
 LIMITS = ExtractionLimits(max_files=200, max_entities=5000, max_relations=20000)
+BUDGET = QueryBudget(max_depth=4, max_results=200, max_visited_nodes=500)
 
 
 def _changed_paths_rev_b() -> tuple[str, ...]:
@@ -244,7 +246,7 @@ def test_rev_a_and_rev_b_sentinel_goldens_activate_expected_kinds() -> None:
         ("rev_b", REV_B, "sent-b"),
     ):
         _build(ingestion, ids, binding_id, tree=tree, revision=revision, key=key)
-        result = queries.evaluate_sentinels(_scope(ids, binding_id))
+        result = queries.evaluate_sentinels(_scope(ids, binding_id), budget=BUDGET)
         kinds = {finding.kind for finding in result.findings}
         assert SentinelKind.API_ENTRY in kinds
         assert SentinelKind.SCHEMA_OR_MIGRATION in kinds
@@ -263,7 +265,7 @@ def test_change_sentinels_activate_on_service_and_test_paths() -> None:
     _build(ingestion, ids, binding_id, tree="rev_a", revision=REV_A, key="chg-a")
     changed = _changed_paths_rev_b()
     result = queries.evaluate_sentinels(
-        _scope(ids, binding_id), changed_paths=changed
+        _scope(ids, binding_id), changed_paths=changed, budget=BUDGET
     )
     activated = [
         finding
@@ -276,8 +278,7 @@ def test_change_sentinels_activate_on_service_and_test_paths() -> None:
         path.startswith("tests/") for path in path_refs
     )
     assert any(
-        finding.kind
-        in (SentinelKind.PUBLIC_EXPORT, SentinelKind.TEST_ASSOCIATION)
+        finding.kind in (SentinelKind.PUBLIC_EXPORT, SentinelKind.TEST_ASSOCIATION)
         for finding in activated
     )
 
@@ -288,7 +289,7 @@ def test_sensitive_path_prefix_activates_empty_list_unresolved() -> None:
         ingestion, ids, binding_id, tree="rev_a", revision=REV_A, key="sens-a"
     )
     scope = _scope(ids, binding_id)
-    empty = queries.evaluate_sentinels(scope)
+    empty = queries.evaluate_sentinels(scope, budget=BUDGET)
     sensitive_empty = next(
         finding
         for finding in empty.findings
@@ -298,7 +299,7 @@ def test_sensitive_path_prefix_activates_empty_list_unresolved() -> None:
     assert sensitive_empty.status.value != "cleared"
 
     activated = queries.evaluate_sentinels(
-        scope, sensitive_path_prefixes=("migrations/",)
+        scope, sensitive_path_prefixes=("migrations/",), budget=BUDGET
     )
     sensitive = next(
         finding
@@ -323,7 +324,10 @@ def test_sensitive_path_prefix_activates_empty_list_unresolved() -> None:
         sensitive_path_prefixes=(),
         sensitive_symbols=(),
     )
-    assert all(finding.status is not getattr(SentinelStatus, "CLEARED", None) for finding in raw)
+    assert all(
+        finding.status is not getattr(SentinelStatus, "CLEARED", None)
+        for finding in raw
+    )
     assert all(finding.status.value != "cleared" for finding in raw)
 
 
@@ -336,6 +340,7 @@ def test_sentinels_never_emit_cleared_status() -> None:
         ownership_tags=(),
         sensitive_path_prefixes=(),
         sensitive_symbols=("Greeter.invoke",),
+        budget=BUDGET,
     )
     assert SentinelStatus.__members__.keys() == {"ACTIVATED", "UNRESOLVED"}
     assert all(finding.status.value != "cleared" for finding in result.findings)

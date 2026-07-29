@@ -19,10 +19,12 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.extractors imp
     relation_kinds_covered,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph.incremental import (
+    MAX_INCREMENTAL_IMPACT_DEPTH,
     IncrementalMergeStats,
     IncrementalRefreshPlan,
     NormalizedSnapshotFacts,
     compare_normalized_snapshots,
+    deleted_paths_after_refresh,
     merge_incremental_facts,
     plan_incremental_refresh,
 )
@@ -31,6 +33,7 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.paths import (
     require_immutable_repository_revision,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph.queries import (
+    DEFAULT_TRAVERSAL_RELATION_KINDS,
     ChangeNeighborhoodResult,
     CompareSnapshotsResult,
     EntityHit,
@@ -54,6 +57,10 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.queries import
     neighbors_of,
     sources_for_facts,
     traverse_paths,
+)
+from holodeck_governance.domain.workspace.intelligence.code_graph.readiness import (
+    FactualGraphReadiness,
+    evaluate_factual_graph_readiness,
 )
 from holodeck_governance.domain.workspace.intelligence.code_graph.relations import (
     CodeRelationFact,
@@ -103,12 +110,14 @@ __all__ = [
     "CODE_ENTITY_FACT_SCHEMA_VERSION",
     "CODE_GRAPH_SCHEMA_VERSION",
     "CODE_RELATION_FACT_SCHEMA_VERSION",
+    "DEFAULT_TRAVERSAL_RELATION_KINDS",
     "ENTITY_KEY_SCHEMA_VERSION",
     "ENTITY_KIND_CATALOG_VERSION",
     "EXTRACTION_RUN_SCHEMA_VERSION",
     "GRAPH_SNAPSHOT_SCHEMA_VERSION",
     "INITIAL_ENTITY_KINDS",
     "INITIAL_RELATION_KINDS",
+    "MAX_INCREMENTAL_IMPACT_DEPTH",
     "RELATION_KEY_SCHEMA_VERSION",
     "RELATION_KIND_CATALOG_VERSION",
     "UNRESOLVED_DYNAMIC_CALL",
@@ -123,6 +132,7 @@ __all__ = [
     "ExtractionDiagnostic",
     "ExtractionLimits",
     "ExtractionRunStatus",
+    "FactualGraphReadiness",
     "FindEntitiesResult",
     "GetEntityResult",
     "GraphPath",
@@ -162,6 +172,8 @@ __all__ = [
     "compare_normalized_snapshots",
     "compare_snapshots_facts",
     "coverage_from_snapshot",
+    "deleted_paths_after_refresh",
+    "evaluate_factual_graph_readiness",
     "evaluate_sentinels",
     "filter_entities",
     "merge_incremental_facts",

@@ -45,9 +45,13 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
 
 PYTHON_AST_PROVIDER_KEY = "python_stdlib_ast"
 PYTHON_AST_PROVIDER_SCHEMA = "m2.python_stdlib_ast.v1"
-PYTHON_AST_PROVIDER_VERSION = f"python:{sys.version_info.major}.{sys.version_info.minor}"
+PYTHON_AST_PROVIDER_VERSION = (
+    f"python:{sys.version_info.major}.{sys.version_info.minor}"
+)
 _CREATED_AT = datetime(2026, 7, 29, 14, 0, tzinfo=UTC)
-_SKIP_DIR_NAMES = frozenset({".git", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache"})
+_SKIP_DIR_NAMES = frozenset(
+    {".git", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache"}
+)
 _CONFIG_SUFFIXES = frozenset({".toml", ".yaml", ".yml", ".ini", ".cfg", ".json"})
 _MANIFEST_NAMES = frozenset({"pyproject.toml", "setup.cfg", "setup.py", "Cargo.toml"})
 # Limit/truncation diagnostics make coverage PARTIAL; informational diagnostics
@@ -240,7 +244,14 @@ class PythonStdlibAstExtractor:
             )
             if tree is not None:
                 parsed.append(
-                    (relative, path, tree, source_id, observation_id, hashlib.sha256(path.read_bytes()).hexdigest())
+                    (
+                        relative,
+                        path,
+                        tree,
+                        source_id,
+                        observation_id,
+                        hashlib.sha256(path.read_bytes()).hexdigest(),
+                    )
                 )
             if (
                 request.limits.max_entities is not None
@@ -337,9 +348,7 @@ class PythonStdlibAstExtractor:
         selected: list[Path] = []
         for path in _iter_repo_files(root):
             relative = path.relative_to(root).as_posix()
-            includes = tuple(
-                dict.fromkeys((*request.path_includes, *request.changed_paths))
-            )
+            includes = request.path_includes
             if includes and not any(
                 relative == inc or relative.startswith(inc.rstrip("/") + "/")
                 for inc in includes
@@ -503,7 +512,9 @@ class PythonStdlibAstExtractor:
             path.relative_to(root).as_posix()
             for path in root.rglob("*")
             if path.is_dir()
-            and not any(part in _SKIP_DIR_NAMES for part in path.relative_to(root).parts)
+            and not any(
+                part in _SKIP_DIR_NAMES for part in path.relative_to(root).parts
+            )
         }
         for directory in sorted(dirs):
             d_source, d_obs = self._source_for(
@@ -804,9 +815,9 @@ class PythonStdlibAstExtractor:
                     if base_name is None:
                         continue
                     target_qn = local_imports.get(base_name, f"{module_qn}.{base_name}")
-                    target_key = entities.symbols.get(target_qn) or entities.symbols.get(
-                        base_name
-                    )
+                    target_key = entities.symbols.get(
+                        target_qn
+                    ) or entities.symbols.get(base_name)
                     if target_key:
                         self._add_relation(
                             relations,
@@ -817,7 +828,9 @@ class PythonStdlibAstExtractor:
                             source_id=source_id,
                             observation_id=observation_id,
                             method=ObservationMethod.STATICALLY_RESOLVED,
-                            span=SourceSpan(start_line=node.lineno, end_line=node.lineno),
+                            span=SourceSpan(
+                                start_line=node.lineno, end_line=node.lineno
+                            ),
                         )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 fn_key = entities.symbols.get(f"{module_qn}.{node.name}")
@@ -882,8 +895,10 @@ class PythonStdlibAstExtractor:
             return
         config = entities.entities[config_key]
         for entity in entities.entities.values():
-            if entity.entity_kind is EntityKind.CLASS and entity.qualified_name and entity.qualified_name.endswith(
-                "ItemStore"
+            if (
+                entity.entity_kind is EntityKind.CLASS
+                and entity.qualified_name
+                and entity.qualified_name.endswith("ItemStore")
             ):
                 self._add_relation(
                     relations,
@@ -910,7 +925,9 @@ class PythonStdlibAstExtractor:
         observation_id: str,
     ) -> None:
         qn = f"{module_qn}.{node.name}"
-        span = SourceSpan(start_line=node.lineno, end_line=node.end_lineno or node.lineno)
+        span = SourceSpan(
+            start_line=node.lineno, end_line=node.end_lineno or node.lineno
+        )
         cls = self._add_entity(
             entities,
             request=request,
@@ -974,7 +991,9 @@ class PythonStdlibAstExtractor:
         observation_id: str,
     ) -> None:
         qn = f"{module_qn}.{node.name}"
-        span = SourceSpan(start_line=node.lineno, end_line=node.end_lineno or node.lineno)
+        span = SourceSpan(
+            start_line=node.lineno, end_line=node.end_lineno or node.lineno
+        )
         is_test = relative.startswith("tests/") and node.name.startswith("test_")
         is_api = (relative.endswith("/api.py") or relative == "api.py") and (
             node.name.startswith("handle_") or node.name in {"create_app"}
@@ -1044,7 +1063,9 @@ class PythonStdlibAstExtractor:
             defaults = list(child.args.defaults)
             if not defaults:
                 continue
-            for name, default in zip(positional[-len(defaults) :], defaults, strict=False):
+            for name, default in zip(
+                positional[-len(defaults) :], defaults, strict=False
+            ):
                 if isinstance(default, ast.Constant) and isinstance(default.value, str):
                     if "path" in name or default.value.endswith(".json"):
                         default_path = default.value
@@ -1090,7 +1111,9 @@ class PythonStdlibAstExtractor:
         observation_id: str,
         local_imports: dict[str, str],
     ) -> None:
-        span = SourceSpan(start_line=node.lineno, end_line=node.end_lineno or node.lineno)
+        span = SourceSpan(
+            start_line=node.lineno, end_line=node.end_lineno or node.lineno
+        )
         if isinstance(node, ast.Import):
             for alias in node.names:
                 local_imports[alias.asname or alias.name.split(".")[0]] = alias.name
@@ -1150,7 +1173,9 @@ class PythonStdlibAstExtractor:
             if name is None or not name.endswith("_SCHEMA"):
                 continue
             qn = f"{module_qn}.{name}"
-            span = SourceSpan(start_line=node.lineno, end_line=node.end_lineno or node.lineno)
+            span = SourceSpan(
+                start_line=node.lineno, end_line=node.end_lineno or node.lineno
+            )
             schema = self._add_entity(
                 entities,
                 request=request,
@@ -1245,7 +1270,10 @@ class PythonStdlibAstExtractor:
             if target_qn is None:
                 continue
             # Do not emit CALLS to unresolved dynamic handler names.
-            if target_qn.endswith(".handler") or target_qn.rsplit(".", 1)[-1] == "handler":
+            if (
+                target_qn.endswith(".handler")
+                or target_qn.rsplit(".", 1)[-1] == "handler"
+            ):
                 continue
             target_key = entities.symbols.get(target_qn)
             if target_key is None:
@@ -1448,7 +1476,9 @@ class PythonStdlibAstExtractor:
             return f"{module_qn}.{func.id}"
         if isinstance(func, ast.Attribute):
             # Greeter().greet(...) — constructor receiver is unambiguous.
-            if isinstance(func.value, ast.Call) and isinstance(func.value.func, ast.Name):
+            if isinstance(func.value, ast.Call) and isinstance(
+                func.value.func, ast.Name
+            ):
                 class_ref = local_imports.get(func.value.func.id)
                 if class_ref is None:
                     class_ref = f"{module_qn}.{func.value.func.id}"

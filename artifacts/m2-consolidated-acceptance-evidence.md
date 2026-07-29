@@ -1,8 +1,8 @@
 # M2 consolidated acceptance evidence
 
-**Published by:** M2-011  
-**Date:** 2026-07-29  
-**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`  
+**Published by:** M2-011
+**Date:** 2026-07-29
+**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`
 **Governance schema:** **v24+** (fresh `migrate_governance`)
 
 This consolidates M2-017 (workspace onboarding/refresh), M2-010 (E2E intake),
@@ -46,7 +46,7 @@ Test: `tests/test_m2_017_onboarding_refresh_acceptance.py` → **1 passed**.
 
 ### M2-026 — Factual code-graph acceptance
 
-Test: `tests/test_m2_code_graph_acceptance.py` → **2 passed**.  
+Test: `tests/test_m2_code_graph_acceptance.py` → **2 passed**.
 Detail: `artifacts/m2-code-graph-acceptance-evidence.md` +
 `artifacts/m2-026-acceptance-metrics.json`.
 
@@ -103,7 +103,7 @@ Focused counts:
 | M2-011 smoke | `pytest -q tests/test_m2_011_handoff_artifacts.py` | 3 passed |
 | M2-010 | `pytest -q tests/test_m2_e2e_memory_intake.py` | 7 passed (in suite) |
 | M2-017 | `pytest -q tests/test_m2_017_onboarding_refresh_acceptance.py` | 1 passed (in suite) |
-| M2-026 | `pytest -q tests/test_m2_code_graph_acceptance.py` | 2 passed (in suite) |
+| M2-026 | `pytest -q tests/test_m2_code_graph_acceptance.py tests/test_m2_code_graph_closeout_blockers.py` | acceptance + closeout blockers (timeout/malformed/lease/persist-fail/CAS/impact/deletion/readiness) |
 
 ---
 

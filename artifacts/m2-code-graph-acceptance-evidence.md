@@ -1,8 +1,8 @@
 # M2-026 — Factual code-graph acceptance evidence
 
-**Task:** M2-026  
-**Commit:** `97fc031c245afb26d1f4472c8dd014abcdca9489`  
-**Date:** 2026-07-29  
+**Task:** M2-026
+**Commit:** `97fc031c245afb26d1f4472c8dd014abcdca9489`
+**Date:** 2026-07-29
 **Metrics:** `artifacts/m2-026-acceptance-metrics.json`
 
 ## Scenario steps (pass/fail)
@@ -21,6 +21,14 @@
 | Idempotent replay returns same snapshot | **pass** |
 | Concurrent activation keeps single active | **pass** (`test_m2_026_concurrent_activation_keeps_single_active`) |
 | Domain event payloads free of prompt/interpretation authority strings; build/activate types present | **pass** |
+| Timeout extractor fails closed (no active) | **pass** (`test_m2_026_timeout_extractor_fails_closed`) |
+| Malformed fact extractor fails closed (no active) | **pass** (`test_m2_026_malformed_fact_extractor_fails_closed`) |
+| Build claim held then reclaim after lease expiry | **pass** (`test_m2_026_claim_held_then_reclaim_after_lease`) |
+| Persist then fail before activate retains prior active | **pass** (`test_m2_026_persist_then_fail_before_activate_retains_prior`) |
+| Closeout: `changed_paths` without base rejected; fallback full ≡ standalone | **pass** (`tests/test_m2_code_graph_closeout_blockers.py`) |
+| Closeout: CAS activation (A→B ok; stale A fails; same-base race → one active) | **pass** |
+| Closeout: impact depth >8 → `fallback_full`; deleted source stales dependents | **pass** |
+| Closeout: `FactualGraphReadiness` absent/partial/supported-scope/stale | **pass** |
 
 ## Precision / recall (honest)
 

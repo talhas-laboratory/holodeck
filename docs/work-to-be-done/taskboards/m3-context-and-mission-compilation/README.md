@@ -6,7 +6,7 @@ and the smallest sufficient role-specific context packet.
 
 Board id: `m3-context-and-mission-compilation`
 Owner: `talha`
-Status: **unblocked — M2-011 handoff available; start at M3-000**
+Status: **re-blocked — M2 graph closeout tip pending; M3-000 waits on closeout baseline**
 
 ## Boundary
 
@@ -35,8 +35,9 @@ harness plan as binding authority.
 
 1. Read this board, gates, decisions, recent updates, and the M2 handoff
    (`artifacts/m2-to-m3-handoff.md` checklist §12).
-2. Complete M3-000 before implementation. **blocked_on M2-011 is cleared**;
-   handoff artifacts are published. M3-000 validation work remains.
+2. Complete M3-000 before implementation. Handoff artifacts from M2-011 are
+   published, but **M3-000 is re-blocked** until the M2 graph closeout tip
+   (`cursor/m2-graph-closeout-blockers-2175`) lands. Then validate contracts.
 3. Preserve literal human input separately from generated interpretations.
 4. Treat M2 graph data as factual evidence with explicit coverage, not as a
    complete model of runtime behavior.

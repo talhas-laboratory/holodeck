@@ -530,3 +530,16 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
 - Board artifacts/ indexed and symlinked; smoke test
   `tests/test_m2_011_handoff_artifacts.py` guards required headings.
 
+
+## 2026-07-29 — M2 graph closeout blockers fixed
+
+- Closeout review blockers landed on `cursor/m2-graph-closeout-blockers-2175`:
+  `changed_paths` no longer restrict full extraction (require `base_snapshot_id`);
+  CAS activation via `expected_active_snapshot_id`; impact depth cap →
+  `fallback_full`; deleted-source invalidation; `FactualGraphReadiness`
+  dimension (separate from workspace readiness); required `QueryBudget` on
+  query seams; TEST_ASSOCIATION preserves related tests; M2-026 failure
+  scenarios evidenced.
+- PRs #31 and #33 are superseded by this tip (parent will close via tools).
+- **Do not mark M2-009 done.** M3-000 remains blocked until this tip lands /
+  is accepted as the closeout baseline.

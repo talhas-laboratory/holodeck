@@ -1,9 +1,9 @@
 # M2 → M3 factual code-graph handoff
 
-**Published by:** M2-026  
-**For:** independent M3 agents / M3-000  
-**Date:** 2026-07-29  
-**Acceptance evidence:** `artifacts/m2-code-graph-acceptance-evidence.md`  
+**Published by:** M2-026
+**For:** independent M3 agents / M3-000
+**Date:** 2026-07-29
+**Acceptance evidence:** `artifacts/m2-code-graph-acceptance-evidence.md`
 **Acceptance metrics:** `artifacts/m2-026-acceptance-metrics.json`
 
 This handoff is sufficient for graph contract details. Final M2→M3 publication
@@ -55,12 +55,14 @@ domain boundary — no generic escape hatch.
 | Method | Request / result |
 | --- | --- |
 | `build_graph` | `GraphBuildRequest` → `GraphBuildResult` |
-| `get_status` | tenant/workspace/binding → `GraphStatusView` |
+| `get_status` | tenant/workspace/binding → `GraphStatusView` (includes `factual_graph_readiness`) |
 
 `GraphBuildRequest` fields: `tenant_id`, `workspace_object_id`,
 `repository_binding_id`, `repository_path`, `requested_revision`, `actor_id`,
 `idempotency_key`, `limits` (`ExtractionLimits`), `at`, optional
 `base_snapshot_id`, `path_includes`, `path_excludes`, `changed_paths`.
+**`changed_paths` require `base_snapshot_id`.** Activation is CAS when
+`base_snapshot_id` is set (`expected_active_snapshot_id`).
 
 `GraphBuildResult` fields: `snapshot_id`, `extraction_run_id`, `status`,
 `coverage_status`, `entity_count`, `relation_count`, `actual_revision`,
@@ -73,17 +75,27 @@ counts, `incremental`, `fallback_full`.
 | --- | --- |
 | `get_active_snapshot` | `GraphQueryScope` → `RepositoryGraphSnapshot` |
 | `get_snapshot` | `GraphQueryScope` → `RepositoryGraphSnapshot` |
+| `get_graph_readiness` | scope + optional binding revision → `GraphReadinessView` |
 | `find_entities` | path/kind/qn/`QueryBudget` → `FindEntitiesResult` |
-| `get_entity` | `entity_fact_id` → `GetEntityResult` |
+| `get_entity` | `entity_fact_id` + budget → `GetEntityResult` |
 | `get_neighbors` | id + `TraversalDirection` + budget → `NeighborsResult` |
 | `traverse_paths` | id + direction + budget → `TraversePathsResult` |
 | `get_change_neighborhood` | changed paths + budget → change neighborhood DTO |
-| `get_sources_for_facts` | entity/relation fact ids → `SourcesForFactsResult` |
-| `compare_snapshots` | left/right snapshot ids → compare DTO |
-| `evaluate_sentinels` | optional changed/ownership/sensitive filters → `SentinelEvaluationResult` |
+| `get_sources_for_facts` | entity/relation fact ids + budget → `SourcesForFactsResult` |
+| `compare_snapshots` | left/right snapshot ids + budget → compare DTO |
+| `evaluate_sentinels` | filters + budget → `SentinelEvaluationResult` |
 
 `GraphQueryScope`: `tenant_id`, `workspace_object_id`, `repository_binding_id`,
 optional `snapshot_id`.
+
+All query methods require an explicit `QueryBudget`. Empty relation+entity
+allowlists on traversal use `DEFAULT_TRAVERSAL_RELATION_KINDS`
+(imports/calls/inherits/tests/defines) — never expand all kinds by default.
+
+**Factual graph readiness** (`FactualGraphReadiness`) is a separate dimension
+from workspace readiness: `ABSENT` | `PARTIAL` |
+`COMPLETE_FOR_SUPPORTED_SCOPE` | `STALE` | `UNRESOLVED`. Holodeck never claims
+universal completeness.
 
 M3 must consume these DTOs / domain types. Do **not** import
 `SqliteCodeGraphRepository` or extractor adapters from M3 packet compilers.
@@ -145,7 +157,7 @@ Statuses: **`ACTIVATED`** or **`UNRESOLVED` only**. Sentinels are **never cleare
 | `code_graph.invalid_confidence` | Confidence out of range |
 | `code_graph.invalid_observation_method` | Unknown observation method |
 
-Coverage: `CoverageStatus` = `complete` | `partial` | `unknown`.  
+Coverage: `CoverageStatus` = `complete` | `partial` | `unknown`.
 Diagnostic code for unsupported dynamic calls: `unresolved_dynamic_call`.
 
 ---
@@ -243,6 +255,10 @@ M2 readiness for graph-backed work must reflect:
 - Partial snapshots fail closed (no active replacement).
 - Unsupported dynamic calls are diagnostics, not edges.
 - Incremental refresh requires trusted `changed_paths` or falls back to full.
+- Impact neighborhood depth is capped at `MAX_INCREMENTAL_IMPACT_DEPTH` (8);
+  overflow forces `fallback_full`.
+- Use `FactualGraphReadiness` / `get_graph_readiness` — do **not** lower the
+  general workspace readiness ladder for graph gaps.
 
 ---
 

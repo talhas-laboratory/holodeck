@@ -49,6 +49,7 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     CoverageStatus,
     ExtractionLimits,
     ExtractionRunStatus,
+    FactualGraphReadiness,
     IncrementalMergeStats,
     RepositoryExtractionRun,
     RepositoryGraphSnapshot,
@@ -57,6 +58,8 @@ from holodeck_governance.domain.workspace.intelligence.code_graph import (
     assert_relation_endpoints_resolve,
     assert_snapshot_counts_match,
     code_graph_error,
+    deleted_paths_after_refresh,
+    evaluate_factual_graph_readiness,
     merge_incremental_facts,
     plan_incremental_refresh,
     require_immutable_repository_revision,
@@ -79,6 +82,7 @@ _RECEIPT_STATUS_PREFIX = "status:"
 _PARTIAL_POLICY_NOTE = (
     "partial coverage cannot activate until a durable policy-decision seam exists"
 )
+_BASE_SNAPSHOT_NOT_CURRENT = "base_snapshot_not_current"
 
 
 def _build_claim_lease_seconds(limits: ExtractionLimits) -> int:
@@ -126,6 +130,8 @@ class GraphBuildRequest:
         require_immutable_repository_revision(self.requested_revision)
         if self.base_snapshot_id is not None:
             require_opaque_id(self.base_snapshot_id, "base_snapshot_id")
+        if self.changed_paths and self.base_snapshot_id is None:
+            raise MalformedCommandError("changed_paths require base_snapshot_id")
         if self.at.tzinfo is None:
             raise MalformedCommandError("at must be timezone-aware UTC")
         if not isinstance(self.repository_path, Path):
@@ -177,11 +183,11 @@ class GraphStatusView:
 
     active_snapshot: RepositoryGraphSnapshot | None
     active_run: RepositoryExtractionRun | None
+    factual_graph_readiness: FactualGraphReadiness = FactualGraphReadiness.ABSENT
 
 
 class CollaborationBindingPort(Protocol):
-    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None:
-        ...
+    def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None: ...
 
 
 class IntelligenceSourcePort(Protocol):
@@ -192,13 +198,11 @@ class IntelligenceSourcePort(Protocol):
         actor_id: str,
         permission: str,
         at: datetime,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
     def require_workspace_object(
         self, workspace_object_id: str, *, tenant_id: str
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def ensure_repository_file_source_observation(
         self,
@@ -211,8 +215,24 @@ class IntelligenceSourcePort(Protocol):
         observed_revision: str,
         actor_id: str,
         at: datetime,
-    ) -> None:
-        ...
+    ) -> None: ...
+
+    def get_source_by_locator(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        locator: str,
+    ) -> object | None: ...
+
+    def record_repository_file_removed(
+        self,
+        source_id: str,
+        *,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> object: ...
 
 
 class CodeGraphStorePort(Protocol):
@@ -223,8 +243,7 @@ class CodeGraphStorePort(Protocol):
         run: RepositoryExtractionRun,
         entities: tuple[CodeEntityFact, ...],
         relations: tuple[CodeRelationFact, ...],
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def activate_snapshot(
         self,
@@ -232,8 +251,8 @@ class CodeGraphStorePort(Protocol):
         *,
         tenant_id: str,
         activated_at: datetime,
-    ) -> RepositoryGraphSnapshot:
-        ...
+        expected_active_snapshot_id: str | None = None,
+    ) -> RepositoryGraphSnapshot: ...
 
     def claim_build_idempotency(
         self,
@@ -244,21 +263,17 @@ class CodeGraphStorePort(Protocol):
         command_id: str,
         created_at: datetime,
         lease_seconds: int,
-    ) -> str:
-        ...
+    ) -> str: ...
 
     def release_build_idempotency_claim(
         self, *, tenant_id: str, idempotency_key: str
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def mark_snapshot_failed(
         self, snapshot_id: str, *, tenant_id: str, coverage_notes: tuple[str, ...]
-    ) -> RepositoryGraphSnapshot:
-        ...
+    ) -> RepositoryGraphSnapshot: ...
 
-    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None:
-        ...
+    def get_snapshot(self, snapshot_id: str) -> RepositoryGraphSnapshot | None: ...
 
     def get_active_snapshot(
         self,
@@ -266,28 +281,23 @@ class CodeGraphStorePort(Protocol):
         tenant_id: str,
         workspace_object_id: str,
         repository_binding_id: str,
-    ) -> RepositoryGraphSnapshot | None:
-        ...
+    ) -> RepositoryGraphSnapshot | None: ...
 
     def get_extraction_run(
         self, extraction_run_id: str
-    ) -> RepositoryExtractionRun | None:
-        ...
+    ) -> RepositoryExtractionRun | None: ...
 
     def list_snapshot_entities(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> tuple[CodeEntityFact, ...]:
-        ...
+    ) -> tuple[CodeEntityFact, ...]: ...
 
     def list_snapshot_relations(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> tuple[CodeRelationFact, ...]:
-        ...
+    ) -> tuple[CodeRelationFact, ...]: ...
 
     def require_snapshot(
         self, snapshot_id: str, *, tenant_id: str
-    ) -> RepositoryGraphSnapshot:
-        ...
+    ) -> RepositoryGraphSnapshot: ...
 
 
 class DomainEventPort(Protocol):
@@ -304,15 +314,13 @@ class DomainEventPort(Protocol):
         payload_schema_version: str,
         occurred_at: str | None = None,
         subject_object_id: str | None = None,
-    ) -> str:
-        ...
+    ) -> str: ...
 
 
 class CommandReceiptPort(Protocol):
     def get_by_idempotency(
         self, tenant_id: str, idempotency_key: str
-    ) -> tuple[str, CommandReceipt] | None:
-        ...
+    ) -> tuple[str, CommandReceipt] | None: ...
 
     def save(
         self,
@@ -320,8 +328,7 @@ class CommandReceiptPort(Protocol):
         *,
         idempotency_key: str,
         semantic_hash: str,
-    ) -> None:
-        ...
+    ) -> None: ...
 
 
 class CodeGraphIngestionService:
@@ -372,7 +379,16 @@ class CodeGraphIngestionService:
         run = None
         if active is not None:
             run = self._graphs.get_extraction_run(active.extraction_run_id)
-        return GraphStatusView(active_snapshot=active, active_run=run)
+        readiness = evaluate_factual_graph_readiness(
+            active_snapshot=active,
+            active_run=run,
+            binding_repository_revision=None,
+        )
+        return GraphStatusView(
+            active_snapshot=active,
+            active_run=run,
+            factual_graph_readiness=readiness,
+        )
 
     def build_graph(self, request: GraphBuildRequest) -> GraphBuildResult:
         fingerprint = self._fingerprint(request)
@@ -477,7 +493,7 @@ class CodeGraphIngestionService:
         )
 
         try:
-            extraction, incremental, fallback_full, merge_stats = (
+            extraction, incremental, fallback_full, merge_stats, deleted_paths = (
                 self._extract_for_build(
                     request=request,
                     binding=binding,
@@ -537,6 +553,7 @@ class CodeGraphIngestionService:
             merge_stats=merge_stats,
             incremental=incremental,
             fallback_full=fallback_full,
+            deleted_paths=deleted_paths,
         )
 
     def _extract_for_build(
@@ -544,8 +561,17 @@ class CodeGraphIngestionService:
         *,
         request: GraphBuildRequest,
         binding: RepositoryBinding,
-    ) -> tuple[ExtractionResult, bool, bool, IncrementalMergeStats]:
-        """Extract facts, optionally merging an incremental neighborhood."""
+    ) -> tuple[
+        ExtractionResult,
+        bool,
+        bool,
+        IncrementalMergeStats,
+        tuple[str, ...],
+    ]:
+        """Extract facts, optionally merging an incremental neighborhood.
+
+        Returns ``(extraction, incremental, fallback_full, merge_stats, deleted_paths)``.
+        """
 
         empty_stats = IncrementalMergeStats(
             reused_entities=0,
@@ -579,16 +605,14 @@ class CodeGraphIngestionService:
             )
             if not plan.fallback_full:
                 path_includes = tuple(
-                    sorted(
-                        set(request.path_includes)
-                        | set(plan.reextract_paths)
-                    )
+                    sorted(set(request.path_includes) | set(plan.reextract_paths))
                 )
                 neighborhood = self._extractor.extract(
                     self._extraction_request(
                         request,
                         binding=binding,
                         path_includes=path_includes,
+                        changed_paths=request.changed_paths,
                     )
                 )
                 merged_entities, merged_relations, stats = merge_incremental_facts(
@@ -609,14 +633,25 @@ class CodeGraphIngestionService:
                         relations=merged_relations,
                     )
                 except Exception:
-                    full = self._extractor.extract(
-                        self._extraction_request(
-                            request, binding=binding, path_includes=request.path_includes
-                        )
+                    full = self._with_fallback_notes(
+                        self._extractor.extract(
+                            self._extraction_request(
+                                request,
+                                binding=binding,
+                                path_includes=request.path_includes,
+                            )
+                        ),
+                        notes=plan.notes
+                        + ("incremental merge unsafe; fell back to full extract",),
                     )
-                    return full, True, True, empty_stats
+                    return full, True, True, empty_stats, ()
 
                 coverage = self._coverage_after_merge(neighborhood)
+                if plan.notes:
+                    coverage = ExtractionCoverage(
+                        status=coverage.status,
+                        notes=coverage.notes + plan.notes,
+                    )
                 merged = ExtractionResult(
                     actual_revision=neighborhood.actual_revision,
                     provider=neighborhood.provider,
@@ -625,31 +660,46 @@ class CodeGraphIngestionService:
                     diagnostics=neighborhood.diagnostics,
                     coverage=coverage,
                 )
-                return merged, True, False, stats
-
-            full = self._extractor.extract(
-                self._extraction_request(
-                    request, binding=binding, path_includes=request.path_includes
+                deleted = deleted_paths_after_refresh(
+                    reextract_paths=plan.reextract_paths,
+                    base_entities=base_entities,
+                    merged_entities=merged_entities,
                 )
+                return merged, True, False, stats, deleted
+
+            full = self._with_fallback_notes(
+                self._extractor.extract(
+                    self._extraction_request(
+                        request,
+                        binding=binding,
+                        path_includes=request.path_includes,
+                    )
+                ),
+                notes=plan.notes,
             )
-            return full, True, True, empty_stats
+            return full, True, True, empty_stats, ()
 
         if request.base_snapshot_id is not None and not request.changed_paths:
             # Base without a trusted changed-path set cannot prove a safe
             # neighborhood — fall back to a full extract.
-            full = self._extractor.extract(
-                self._extraction_request(
-                    request, binding=binding, path_includes=request.path_includes
-                )
+            full = self._with_fallback_notes(
+                self._extractor.extract(
+                    self._extraction_request(
+                        request,
+                        binding=binding,
+                        path_includes=request.path_includes,
+                    )
+                ),
+                notes=("empty changed_paths; full extraction required",),
             )
-            return full, True, True, empty_stats
+            return full, True, True, empty_stats, ()
 
         full = self._extractor.extract(
             self._extraction_request(
                 request, binding=binding, path_includes=request.path_includes
             )
         )
-        return full, False, False, empty_stats
+        return full, False, False, empty_stats, ()
 
     def _extraction_request(
         self,
@@ -657,6 +707,7 @@ class CodeGraphIngestionService:
         *,
         binding: RepositoryBinding,
         path_includes: tuple[str, ...],
+        changed_paths: tuple[str, ...] = (),
     ) -> ExtractionRequest:
         return ExtractionRequest(
             repository_path=request.repository_path,
@@ -667,8 +718,29 @@ class CodeGraphIngestionService:
             limits=request.limits,
             path_includes=path_includes,
             path_excludes=request.path_excludes,
-            changed_paths=request.changed_paths,
+            changed_paths=changed_paths,
             base_snapshot_id=request.base_snapshot_id,
+        )
+
+    @staticmethod
+    def _with_fallback_notes(
+        extraction: ExtractionResult,
+        *,
+        notes: tuple[str, ...],
+    ) -> ExtractionResult:
+        if not notes:
+            return extraction
+        merged_notes = tuple(dict.fromkeys((*extraction.coverage.notes, *notes)))
+        return ExtractionResult(
+            actual_revision=extraction.actual_revision,
+            provider=extraction.provider,
+            candidate_entities=extraction.candidate_entities,
+            candidate_relations=extraction.candidate_relations,
+            diagnostics=extraction.diagnostics,
+            coverage=ExtractionCoverage(
+                status=extraction.coverage.status,
+                notes=merged_notes,
+            ),
         )
 
     @staticmethod
@@ -698,6 +770,7 @@ class CodeGraphIngestionService:
         merge_stats: IncrementalMergeStats | None = None,
         incremental: bool = False,
         fallback_full: bool = False,
+        deleted_paths: tuple[str, ...] = (),
     ) -> GraphBuildResult:
         stats = merge_stats or IncrementalMergeStats(
             reused_entities=0,
@@ -899,11 +972,65 @@ class CodeGraphIngestionService:
                 entities=entities,
                 relations=relations,
             )
-            activated = self._graphs.activate_snapshot(
-                snapshot_id,
-                tenant_id=request.tenant_id,
-                activated_at=request.at,
-            )
+            try:
+                activated = self._graphs.activate_snapshot(
+                    snapshot_id,
+                    tenant_id=request.tenant_id,
+                    activated_at=request.at,
+                    expected_active_snapshot_id=request.base_snapshot_id,
+                )
+            except ContentionError as exc:
+                if str(exc) != _BASE_SNAPSHOT_NOT_CURRENT:
+                    raise
+                self._graphs.mark_snapshot_failed(
+                    snapshot_id,
+                    tenant_id=request.tenant_id,
+                    coverage_notes=(_BASE_SNAPSHOT_NOT_CURRENT,),
+                )
+                event_types.append(
+                    self._append_event(
+                        tenant_id=request.tenant_id,
+                        event_type=M2_EVENT_CODE_GRAPH_BUILD_FAILED,
+                        actor_id=request.actor_id,
+                        workspace_object_id=request.workspace_object_id,
+                        causation_id=command_id,
+                        at=request.at,
+                        payload={
+                            "snapshot_id": snapshot_id,
+                            "reason": _BASE_SNAPSHOT_NOT_CURRENT,
+                            "phase": "activate_cas",
+                        },
+                    )
+                )
+                self._commit()
+                result = GraphBuildResult(
+                    snapshot_id=snapshot_id,
+                    extraction_run_id=extraction_run_id,
+                    status=SnapshotStatus.FAILED,
+                    coverage_status=CoverageStatus.PARTIAL,
+                    entity_count=len(entities),
+                    relation_count=len(relations),
+                    actual_revision=extraction.actual_revision,
+                    event_types=tuple(event_types),
+                    replayed=False,
+                    coverage_notes=(_BASE_SNAPSHOT_NOT_CURRENT,),
+                    diagnostics=tuple(d.code for d in extraction.diagnostics),
+                    reused_entity_count=stats.reused_entities,
+                    rebuilt_entity_count=stats.rebuilt_entities,
+                    reused_relation_count=stats.reused_relations,
+                    rebuilt_relation_count=stats.rebuilt_relations,
+                    incremental=incremental,
+                    fallback_full=fallback_full,
+                )
+                self._save_receipt(
+                    request=request,
+                    command_id=command_id,
+                    fingerprint=fingerprint,
+                    result=result,
+                    outcome="rejected",
+                    error_code=CodeGraphReason.MALFORMED_FACT.value,
+                )
+                return result
         except ContentionError:
             raise
         except Exception as exc:
@@ -997,8 +1124,15 @@ class CodeGraphIngestionService:
                 },
             )
         )
+        deletion_notes = self._invalidate_deleted_sources(
+            request=request,
+            deleted_paths=deleted_paths,
+        )
         self._commit()
 
+        coverage_notes = tuple(
+            dict.fromkeys((*activated.coverage_notes, *deletion_notes))
+        )
         result = GraphBuildResult(
             snapshot_id=activated.snapshot_id,
             extraction_run_id=extraction_run_id,
@@ -1009,7 +1143,7 @@ class CodeGraphIngestionService:
             actual_revision=extraction.actual_revision,
             event_types=tuple(event_types),
             replayed=False,
-            coverage_notes=activated.coverage_notes,
+            coverage_notes=coverage_notes,
             diagnostics=tuple(d.code for d in extraction.diagnostics),
             reused_entity_count=stats.reused_entities,
             rebuilt_entity_count=stats.rebuilt_entities,
@@ -1027,6 +1161,35 @@ class CodeGraphIngestionService:
             error_code=None,
         )
         return result
+
+    def _invalidate_deleted_sources(
+        self,
+        *,
+        request: GraphBuildRequest,
+        deleted_paths: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """Record deletion observations for registered sources after activate."""
+
+        notes: list[str] = []
+        for path in deleted_paths:
+            source = self._intelligence.get_source_by_locator(
+                tenant_id=request.tenant_id,
+                workspace_object_id=request.workspace_object_id,
+                locator=path,
+            )
+            if source is None:
+                notes.append(
+                    f"deleted path {path!r} had no registered repository-file source"
+                )
+                continue
+            self._intelligence.record_repository_file_removed(
+                source.source_id,
+                observed_revision=request.requested_revision,
+                actor_id=request.actor_id,
+                at=request.at,
+            )
+            notes.append(f"recorded repository file removal for {path!r}")
+        return tuple(notes)
 
     def _ensure_sources_for_facts(
         self,

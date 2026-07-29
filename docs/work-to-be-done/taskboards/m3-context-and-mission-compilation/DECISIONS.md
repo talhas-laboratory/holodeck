@@ -33,3 +33,10 @@
 - `blocked_on: M2-011` cleared. M3-000 moves to **ready** and must still validate
   contracts and lock benchmark arms A–D before M3-001.
 - Buzz (M2-009) is not required for M3-000.
+
+## 2026-07-29 — M3-000 re-blocked pending M2 graph closeout
+
+- M2-011 handoff artifacts remain published, but review closeout blockers on the
+  factual graph require tip `cursor/m2-graph-closeout-blockers-2175` before
+  M3-000 contract validation proceeds as the accepted baseline.
+- PRs #31 and #33 are superseded by that tip.

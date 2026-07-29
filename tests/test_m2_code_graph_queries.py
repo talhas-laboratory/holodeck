@@ -65,7 +65,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (  # noqa: E402
+from python_reference import (
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -216,7 +216,9 @@ def _harness() -> tuple[
     return conn, ingestion, queries, ids, binding.binding_id, graphs
 
 
-def _scope(ids: FixtureIds, binding_id: str, *, snapshot_id: str | None = None) -> GraphQueryScope:
+def _scope(
+    ids: FixtureIds, binding_id: str, *, snapshot_id: str | None = None
+) -> GraphQueryScope:
     return GraphQueryScope(
         tenant_id=ids.tenant_alpha,
         workspace_object_id=ids.workspace_alpha_1,
@@ -299,9 +301,12 @@ def test_find_entities_by_path_and_kind_returns_greeter_and_api_entries() -> Non
         budget=BUDGET,
     )
     assert api.entities
-    assert all(entity.entity_kind is EntityKind.API_ENTRY_POINT for entity in api.entities)
+    assert all(
+        entity.entity_kind is EntityKind.API_ENTRY_POINT for entity in api.entities
+    )
     assert any(
-        entity.qualified_name == "sample_app.api.handle_greet" for entity in api.entities
+        entity.qualified_name == "sample_app.api.handle_greet"
+        for entity in api.entities
     )
 
 
@@ -387,12 +392,17 @@ def test_compare_snapshots_rev_a_vs_rev_b_shows_diffs() -> None:
     assert rev_b.status is SnapshotStatus.ACTIVE
     scope = _scope(ids, binding_id)
     comparison = queries.compare_snapshots(
-        scope, rev_a.snapshot_id, rev_b.snapshot_id
+        scope, rev_a.snapshot_id, rev_b.snapshot_id, budget=BUDGET
     )
-    assert comparison.comparison.only_left_entities + comparison.comparison.only_right_entities > 0 or (
-        comparison.comparison.only_left_relations
-        + comparison.comparison.only_right_relations
+    assert (
+        comparison.comparison.only_left_entities
+        + comparison.comparison.only_right_entities
         > 0
+        or (
+            comparison.comparison.only_left_relations
+            + comparison.comparison.only_right_relations
+            > 0
+        )
     )
 
 
@@ -408,7 +418,7 @@ def test_get_sources_for_facts_returns_observation_ids() -> None:
     ).entities
     assert entities
     sources = queries.get_sources_for_facts(
-        scope, entity_fact_ids=(entities[0].entity_fact_id,)
+        scope, entity_fact_ids=(entities[0].entity_fact_id,), budget=BUDGET
     )
     assert sources.provenance
     assert sources.provenance[0].observation_id
@@ -457,9 +467,7 @@ def test_historical_get_snapshot_after_supersede() -> None:
     _build_rev_b(ingestion, ids, binding_id, idempotency_key="rev-b-hist")
     active = queries.get_active_snapshot(_scope(ids, binding_id))
     assert active.snapshot_id != first_id
-    historical = queries.get_snapshot(
-        _scope(ids, binding_id, snapshot_id=first_id)
-    )
+    historical = queries.get_snapshot(_scope(ids, binding_id, snapshot_id=first_id))
     assert historical.snapshot_id == first_id
     assert historical.status is SnapshotStatus.SUPERSEDED
     stored = graphs.require_snapshot(first_id, tenant_id=ids.tenant_alpha)

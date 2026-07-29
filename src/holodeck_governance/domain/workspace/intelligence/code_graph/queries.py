@@ -35,6 +35,18 @@ from holodeck_governance.domain.workspace.intelligence.code_graph.types import (
     code_graph_error,
 )
 
+# Safe default when a traversal budget omits both entity and relation allowlists.
+# Prefer explicit allowlists; this profile avoids expanding CONTAINS directory trees.
+DEFAULT_TRAVERSAL_RELATION_KINDS: frozenset[RelationKind] = frozenset(
+    {
+        RelationKind.IMPORTS,
+        RelationKind.CALLS,
+        RelationKind.INHERITS,
+        RelationKind.TESTS,
+        RelationKind.DEFINES,
+    }
+)
+
 
 class TraversalDirection(StrEnum):
     OUTGOING = "outgoing"
@@ -87,6 +99,21 @@ class QueryBudget:
         if not self.relation_kinds:
             return True
         return kind in self.relation_kinds
+
+
+def _traversal_budget(budget: QueryBudget) -> QueryBudget:
+    """Apply the default safe relation profile when both allowlists are empty."""
+
+    if budget.entity_kinds or budget.relation_kinds:
+        return budget
+    from dataclasses import replace
+
+    return replace(
+        budget,
+        relation_kinds=tuple(
+            sorted(DEFAULT_TRAVERSAL_RELATION_KINDS, key=lambda k: k.value)
+        ),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,20 +245,18 @@ def filter_entities(
     language: str | None = None,
     qualified_name: str | None = None,
     qualified_name_exact: bool = False,
-    budget: QueryBudget | None = None,
+    budget: QueryBudget,
 ) -> tuple[tuple[CodeEntityFact, ...], QueryOmissions]:
     """Filter entities with deterministic ``entity_key`` ordering."""
 
-    path_norm = (
-        normalize_repository_relative_path(path) if path is not None else None
-    )
+    path_norm = normalize_repository_relative_path(path) if path is not None else None
     prefix_norm = (
         normalize_repository_relative_path(path_prefix)
         if path_prefix is not None
         else None
     )
     kind_allow = frozenset(entity_kinds) if entity_kinds else None
-    if budget is not None and budget.entity_kinds:
+    if budget.entity_kinds:
         budget_kinds = frozenset(budget.entity_kinds)
         kind_allow = budget_kinds if kind_allow is None else kind_allow & budget_kinds
 
@@ -242,7 +267,7 @@ def filter_entities(
         if kind_allow is not None and entity.entity_kind not in kind_allow:
             kind_filtered = True
             continue
-        if budget is not None and not budget.allows_entity_kind(entity.entity_kind):
+        if not budget.allows_entity_kind(entity.entity_kind):
             kind_filtered = True
             continue
         if path_norm is not None and entity.repository_relative_path != path_norm:
@@ -272,10 +297,9 @@ def filter_entities(
     if kind_filtered:
         omissions.append("kind_filtered")
 
-    limit = budget.max_results if budget is not None else None
-    if limit is not None and len(matched) > limit:
+    if len(matched) > budget.max_results:
         omissions.append("max_results")
-        matched = matched[:limit]
+        matched = matched[: budget.max_results]
     return tuple(matched), QueryOmissions(reasons=tuple(dict.fromkeys(omissions)))
 
 
@@ -285,8 +309,12 @@ def _relation_sort_key(
 ) -> tuple[str, str, str]:
     source = entities_by_id.get(relation.source_entity_fact_id)
     target = entities_by_id.get(relation.target_entity_fact_id)
-    source_key = source.entity_key if source is not None else relation.source_entity_fact_id
-    target_key = target.entity_key if target is not None else relation.target_entity_fact_id
+    source_key = (
+        source.entity_key if source is not None else relation.source_entity_fact_id
+    )
+    target_key = (
+        target.entity_key if target is not None else relation.target_entity_fact_id
+    )
     return (
         build_relation_key(
             relation_kind=relation.relation_kind,
@@ -310,6 +338,7 @@ def neighbors_of(
 ) -> tuple[tuple[NeighborHit, ...], QueryOmissions]:
     """Return neighbors of one entity under direction and kind budgets."""
 
+    budget = _traversal_budget(budget)
     entities_by_id = {entity.entity_fact_id: entity for entity in entities}
     if seed_entity_fact_id not in entities_by_id:
         return (), QueryOmissions(reasons=())
@@ -383,6 +412,7 @@ def traverse_paths(
 ) -> tuple[tuple[GraphPath, ...], QueryOmissions]:
     """BFS path expansion with deterministic frontier ordering and budgets."""
 
+    budget = _traversal_budget(budget)
     entities_by_id = {entity.entity_fact_id: entity for entity in entities}
     if seed_entity_fact_id not in entities_by_id:
         return (), QueryOmissions(reasons=())
@@ -468,9 +498,11 @@ def traverse_paths(
             if len(visited) >= budget.max_visited_nodes:
                 visited_hit = True
                 continue
-            if len(paths) + len(queue) + (1 if enqueued_child else 0) >= (
-                budget.max_results
-            ) and not enqueued_child:
+            if (
+                len(paths) + len(queue) + (1 if enqueued_child else 0)
+                >= (budget.max_results)
+                and not enqueued_child
+            ):
                 # Still allow enqueueing until result budget is known at emit time.
                 pass
             visited.add(neighbor_id)
@@ -635,7 +667,9 @@ def sources_for_facts(
                     observation_id=relation.evidence_observation_id,
                 )
             )
-    hits.sort(key=lambda hit: (hit.fact_kind, hit.fact_id, hit.source_id, hit.observation_id))
+    hits.sort(
+        key=lambda hit: (hit.fact_kind, hit.fact_id, hit.source_id, hit.observation_id)
+    )
     return tuple(hits)
 
 
@@ -644,12 +678,37 @@ def compare_snapshots_facts(
     left_relations: tuple[CodeRelationFact, ...] | list[CodeRelationFact],
     right_entities: tuple[CodeEntityFact, ...] | list[CodeEntityFact],
     right_relations: tuple[CodeRelationFact, ...] | list[CodeRelationFact],
-) -> NormalizedSnapshotFacts:
-    """Thin wrap of ``compare_normalized_snapshots`` for query consumers."""
+    *,
+    budget: QueryBudget,
+) -> tuple[NormalizedSnapshotFacts, QueryOmissions]:
+    """Compare two fact sets under an explicit visit budget."""
 
-    return compare_normalized_snapshots(
-        left_entities,
-        left_relations,
-        right_entities,
-        right_relations,
+    visited = (
+        len(left_entities)
+        + len(left_relations)
+        + len(right_entities)
+        + len(right_relations)
+    )
+    if visited > budget.max_visited_nodes:
+        return (
+            NormalizedSnapshotFacts(
+                entity_fingerprints=frozenset(),
+                relation_fingerprints=frozenset(),
+                matching_entities=0,
+                only_left_entities=0,
+                only_right_entities=0,
+                matching_relations=0,
+                only_left_relations=0,
+                only_right_relations=0,
+            ),
+            QueryOmissions(reasons=("max_visited_nodes",)),
+        )
+    return (
+        compare_normalized_snapshots(
+            left_entities,
+            left_relations,
+            right_entities,
+            right_relations,
+        ),
+        QueryOmissions(),
     )

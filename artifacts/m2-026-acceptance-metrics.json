@@ -23,8 +23,8 @@
     "build_rev_a": {
       "entity_count": 43,
       "relation_count": 49,
-      "seconds": 0.0142,
-      "snapshot_id": "019faf63-6679-7917-802f-4303a349bca1",
+      "seconds": 0.0143,
+      "snapshot_id": "019faf98-03ac-7c95-b8b3-1509e488d809",
       "status": "pass"
     },
     "events": {
@@ -56,7 +56,7 @@
       "full_seconds": 0.0133,
       "incremental_entity_count": 45,
       "incremental_relation_count": 53,
-      "incremental_seconds": 0.0146,
+      "incremental_seconds": 0.0149,
       "rebuilt_entity_count": 32,
       "rebuilt_relation_count": 42,
       "reused_entity_count": 13,
@@ -92,11 +92,5 @@
       "status": "pass"
     }
   },
-  "task": "M2-026",
-  "verification": {
-    "build": "uv build -> holodeck_control_plane-0.1.0 wheel+sdist",
-    "focused": "uv run --extra dev pytest -q tests/test_m2_code_graph_acceptance.py -> 2 passed",
-    "full": "uv run --extra dev pytest -q -> 487 passed in 51.46s",
-    "twine": "uvx twine check dist/* -> PASSED"
-  }
+  "task": "M2-026"
 }

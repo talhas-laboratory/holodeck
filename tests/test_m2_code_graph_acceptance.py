@@ -15,8 +15,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier, Thread
 
-import pytest
-
 from holodeck_governance.adapters.code_graph.python_ast import (
     PythonStdlibAstExtractor,
     stable_source_id,
@@ -90,7 +88,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (  # noqa: E402
+from python_reference import (
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -294,7 +292,9 @@ def _build(
     )
 
 
-def _event_payloads(conn: sqlite3.Connection, tenant_id: str) -> list[dict[str, object]]:
+def _event_payloads(
+    conn: sqlite3.Connection, tenant_id: str
+) -> list[dict[str, object]]:
     rows = conn.execute(
         """
         SELECT event_type, payload_json FROM gov_domain_events
@@ -406,13 +406,13 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
     assert traversed.paths or "max_depth" in traversed.omissions.reasons
 
     sources = queries.get_sources_for_facts(
-        scope, entity_fact_ids=(greeter.entity_fact_id,)
+        scope, entity_fact_ids=(greeter.entity_fact_id,), budget=BUDGET
     )
     assert sources.provenance
     assert sources.provenance[0].observation_id
     assert sources.provenance[0].source_id
 
-    sentinels = queries.evaluate_sentinels(scope)
+    sentinels = queries.evaluate_sentinels(scope, budget=BUDGET)
     assert sentinels.findings
     assert all(
         finding.status in (SentinelStatus.ACTIVATED, SentinelStatus.UNRESOLVED)
@@ -492,7 +492,7 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
     assert comparison.only_right_relations == 0
 
     query_compare = queries.compare_snapshots(
-        scope, rev_a.snapshot_id, inc_b.snapshot_id
+        scope, rev_a.snapshot_id, inc_b.snapshot_id, budget=BUDGET
     )
     assert (
         query_compare.comparison.only_left_entities
@@ -539,9 +539,7 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
         entity.qualified_name == "sample_app.service.Greeter"
         for entity in hist_entities.entities
     )
-    assert graphs.list_snapshot_entities(
-        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
-    )
+    assert graphs.list_snapshot_entities(rev_a.snapshot_id, tenant_id=ids.tenant_alpha)
     metrics["steps"]["historical_rev_a"] = {"status": "pass"}
 
     # --- 7. Changed-source stale propagation (on a world that still has rev_a) ---
@@ -962,3 +960,238 @@ def test_m2_026_concurrent_activation_keeps_single_active(tmp_path: Path) -> Non
     # At most one activation may fail due to contention; both succeeding is ok
     # only if serialization kept a single active row (asserted above).
     assert len(errors) <= 1
+
+
+# --- M2-026 closeout acceptance: controlled failure extractors ---
+
+
+class _TimeoutExtractor:
+    def __init__(self, inner: PythonStdlibAstExtractor) -> None:
+        self._inner = inner
+
+    def describe_capabilities(self):
+        return self._inner.describe_capabilities()
+
+    def extract(self, request):
+        raise TimeoutError("simulated extractor timeout")
+
+
+class _MalformedExtractor:
+    def __init__(self, inner: PythonStdlibAstExtractor) -> None:
+        self._inner = inner
+
+    def describe_capabilities(self):
+        return self._inner.describe_capabilities()
+
+    def extract(self, request):
+        result = self._inner.extract(request)
+        if not result.candidate_entities:
+            raise RuntimeError("no entities to corrupt")
+        bad = result.candidate_entities[0]
+        from dataclasses import replace
+
+        corrupted = replace(bad, entity_fact_id="not-a-uuid")
+        return replace(
+            result,
+            candidate_entities=(corrupted, *result.candidate_entities[1:]),
+        )
+
+
+class _PersistThenFailActivate:
+    """Wraps graphs store to fail after persist_building_graph before activate."""
+
+    def __init__(self, inner: SqliteCodeGraphRepository) -> None:
+        self._inner = inner
+        self.fail_activate = False
+
+    def __getattr__(self, name: str):
+        return getattr(self._inner, name)
+
+    def activate_snapshot(self, *args, **kwargs):
+        if self.fail_activate:
+            raise RuntimeError("simulated activate failure after persist")
+        return self._inner.activate_snapshot(*args, **kwargs)
+
+
+def test_m2_026_timeout_extractor_fails_closed() -> None:
+    conn, _ingestion, _queries, ids, binding_id, _intel, graphs = _world()
+    # Rebuild world with timeout extractor.
+    from holodeck_governance.storage.sqlite.repos import (
+        SqliteCommandReceiptRepository,
+        SqliteDomainEventRepository,
+    )
+
+    collab = CollaborationApplicationService(
+        repository=SqliteCollaborationRepository(conn)
+    )
+    service = CodeGraphIngestionService(
+        collaboration=collab,
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=graphs,
+        extractor=_TimeoutExtractor(PythonStdlibAstExtractor()),
+        events=SqliteDomainEventRepository(conn),
+        receipts=SqliteCommandReceiptRepository(conn),
+        commit=conn.commit,
+    )
+    result = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_a",
+            requested_revision=REV_A,
+            actor_id=ids.human_owner,
+            idempotency_key="m2-026-timeout",
+            limits=LIMITS,
+            at=NOW,
+        )
+    )
+    assert result.status is SnapshotStatus.FAILED
+    assert (
+        graphs.get_active_snapshot(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+        )
+        is None
+    )
+
+
+def test_m2_026_malformed_fact_extractor_fails_closed() -> None:
+    conn, _ingestion, _queries, ids, binding_id, _intel, graphs = _world()
+    from holodeck_governance.storage.sqlite.repos import (
+        SqliteCommandReceiptRepository,
+        SqliteDomainEventRepository,
+    )
+
+    collab = CollaborationApplicationService(
+        repository=SqliteCollaborationRepository(conn)
+    )
+    service = CodeGraphIngestionService(
+        collaboration=collab,
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=graphs,
+        extractor=_MalformedExtractor(PythonStdlibAstExtractor()),
+        events=SqliteDomainEventRepository(conn),
+        receipts=SqliteCommandReceiptRepository(conn),
+        commit=conn.commit,
+    )
+    result = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_a",
+            requested_revision=REV_A,
+            actor_id=ids.human_owner,
+            idempotency_key="m2-026-malformed",
+            limits=LIMITS,
+            at=NOW,
+        )
+    )
+    assert result.status is SnapshotStatus.FAILED
+    assert (
+        graphs.get_active_snapshot(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+        )
+        is None
+    )
+
+
+def test_m2_026_claim_held_then_reclaim_after_lease() -> None:
+    _conn, ingestion, _queries, ids, binding_id, _intel, graphs = _world()
+    # Hold a claim without completing.
+    claim = graphs.claim_build_idempotency(
+        tenant_id=ids.tenant_alpha,
+        idempotency_key="m2-026-lease",
+        semantic_hash="hash-a",
+        command_id=generate_uuidv7(),
+        created_at=NOW - timedelta(seconds=120),
+        lease_seconds=30,
+    )
+    assert claim in ("claimed", "reclaimed", "already_claimed")
+    # Expired lease should allow reclaim.
+    reclaim = graphs.claim_build_idempotency(
+        tenant_id=ids.tenant_alpha,
+        idempotency_key="m2-026-lease",
+        semantic_hash="hash-a",
+        command_id=generate_uuidv7(),
+        created_at=NOW,
+        lease_seconds=30,
+    )
+    assert reclaim in ("claimed", "reclaimed")
+    graphs.release_build_idempotency_claim(
+        tenant_id=ids.tenant_alpha, idempotency_key="m2-026-lease"
+    )
+    # After release, a normal build succeeds.
+    result = _build(
+        ingestion,
+        ids,
+        binding_id,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="m2-026-lease-build",
+    )
+    assert result.status is SnapshotStatus.ACTIVE
+
+
+def test_m2_026_persist_then_fail_before_activate_retains_prior() -> None:
+    conn, _ingestion, _queries, ids, binding_id, _intel, graphs = _world()
+    from holodeck_governance.storage.sqlite.repos import (
+        SqliteCommandReceiptRepository,
+        SqliteDomainEventRepository,
+    )
+
+    wrapped = _PersistThenFailActivate(graphs)
+    collab = CollaborationApplicationService(
+        repository=SqliteCollaborationRepository(conn)
+    )
+    service = CodeGraphIngestionService(
+        collaboration=collab,
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=wrapped,
+        extractor=PythonStdlibAstExtractor(),
+        events=SqliteDomainEventRepository(conn),
+        receipts=SqliteCommandReceiptRepository(conn),
+        commit=conn.commit,
+    )
+    first = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_a",
+            requested_revision=REV_A,
+            actor_id=ids.human_owner,
+            idempotency_key="m2-026-prior",
+            limits=LIMITS,
+            at=NOW,
+        )
+    )
+    assert first.status is SnapshotStatus.ACTIVE
+    wrapped.fail_activate = True
+    failed = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_b",
+            requested_revision=REV_B,
+            actor_id=ids.human_owner,
+            idempotency_key="m2-026-fail-activate",
+            limits=LIMITS,
+            at=NOW,
+            base_snapshot_id=first.snapshot_id,
+            changed_paths=_changed_paths_rev_b(),
+        )
+    )
+    assert failed.status is SnapshotStatus.FAILED
+    active = graphs.get_active_snapshot(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert active is not None
+    assert active.snapshot_id == first.snapshot_id

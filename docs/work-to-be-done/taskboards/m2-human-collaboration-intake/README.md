@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`
 Owner: `talha`
-Status: **M2 milestone publication done (M2-011); M2-009 Buzz still gated; M3-000 unblocked**
+Status: **M2 milestone publication done (M2-011); graph closeout tip pending; M2-009 Buzz still gated; M3-000 re-blocked pending closeout tip**
 
 ## Boundary
 
@@ -43,7 +43,7 @@ agents (M5), or make completion decisions (M6).
    `artifacts/m2-consolidated-acceptance-evidence.md`, and
    `artifacts/m2-to-m3-handoff.md` (incorporating
    `artifacts/m2-code-graph-m3-handoff.md`). **M2-009** (Buzz adapter)
-   remains gated for live ingress. M3-000 may begin.
+   remains gated for live ingress. M3-000 is re-blocked until the graph closeout tip lands.
 4. No collaboration or repository extractor adapter may be built before its
    neutral contract and executable scenario specification are accepted.
 5. Keep provider SDK types inside adapters; domain records use stable external

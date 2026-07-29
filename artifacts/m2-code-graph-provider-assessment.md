@@ -1,8 +1,8 @@
 # M2 code-graph provider assessment
 
-**Date:** 2026-07-29  
-**Milestone task:** M2-020 (selection) / M2-022 (emission)  
-**Fixture:** `tests/fixtures/code_graph/python_reference`  
+**Date:** 2026-07-29
+**Milestone task:** M2-020 (selection) / M2-022 (emission)
+**Fixture:** `tests/fixtures/code_graph/python_reference`
 **Pinned fixture revisions:**
 
 - `rev_a`: `fixture:c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb`

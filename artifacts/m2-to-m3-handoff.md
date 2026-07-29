@@ -1,11 +1,11 @@
 # M2 → M3 consolidated handoff
 
-**Published by:** M2-011  
-**For:** an independent M3 agent starting M3-000  
-**Date:** 2026-07-29  
-**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`  
-**Companion index:** `artifacts/m2-contracts-index.md`  
-**Companion evidence:** `artifacts/m2-consolidated-acceptance-evidence.md`  
+**Published by:** M2-011
+**For:** an independent M3 agent starting M3-000
+**Date:** 2026-07-29
+**Verified commit:** `322317816bb83721b2ec361cb3f66e704cf0e4c3`
+**Companion index:** `artifacts/m2-contracts-index.md`
+**Companion evidence:** `artifacts/m2-consolidated-acceptance-evidence.md`
 **Graph handoff (must read):** `artifacts/m2-code-graph-m3-handoff.md`
 
 This document is the milestone close for M2 publication. It is sufficient to
