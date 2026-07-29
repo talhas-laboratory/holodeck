@@ -1,6 +1,6 @@
 # Holodeck build milestones
 
-**Status:** Active high-level roadmap  
+**Status:** Active high-level roadmap
 **Purpose:** Turn the complete work-to-be-done library into a delivery sequence without replacing, compressing, or discarding its source material.
 
 ## How to use this roadmap
@@ -72,6 +72,11 @@ Those completed tasks are retained as evidence and constraints for later work. T
 - Define a `CollaborationAdapter` contract for inbound messages, thread context, actor identity, attachments, outbound status, and event verification.
 - Implement Buzz as the first adapter only after the generic contract exists; preserve original message, thread, sender, timestamps, and external IDs as durable source records.
 - Build workspace intelligence and genesis: repository/project bindings, workspace discovery, eligibility checks, context acquisition, creation proposals, and explicit human decisions where needed.
+- Build a persistent, revision-scoped factual representation of bound
+  repositories: observed code entities and relations, exact source provenance,
+  immutable snapshots, safe refresh, and bounded factual queries. Keep
+  extractor providers replaceable and interpretations outside the factual
+  graph.
 - Record source trust, actor authorization, repository/project bindings, workspace purpose, and creation provenance before autonomous work begins.
 - Return clear, durable status updates to the originating collaboration thread without making Buzz the system of record.
 
@@ -79,6 +84,9 @@ Those completed tasks are retained as evidence and constraints for later work. T
 
 - A complete vertical slice can ingest an authenticated collaboration event and create a durable, queryable work origin.
 - Workspace selection/genesis is explainable, policy-checked, and reversible before execution.
+- A fixed repository revision produces a reproducible factual graph; failed or
+  partial refresh cannot silently replace the active snapshot; historical
+  snapshots remain queryable.
 - The initiating human can see a correlated status update with a link or identifier for the governed work.
 
 **Primary sources:** governance sections 03 and 04; architecture blueprint workspace/source/context/genesis and collaboration-facing modules; product vision and Buzz integration strategy.
@@ -90,7 +98,11 @@ Those completed tasks are retained as evidence and constraints for later work. T
 **Build:**
 
 - Build deterministic context compilation from workspace records, repository/project bindings, source material, and approved references.
+- Resolve task concepts against M2's factual graph, execute bounded factual
+  query plans, and preserve graph coverage and omission limits.
 - Capture intent, interpretation, uncertainty, assumptions, scope, constraints, desired outcomes, and ambiguity resolution as first-class records.
+- Keep task-local interpretations separate from factual graph records. Missing
+  evidence is unresolved, not proof that an impact is absent.
 - Create a mission compiler that produces an executable proposal rather than allowing agents to infer silent objectives at runtime.
 - Define delegated roles, permitted actions, authority boundaries, escalation paths, budget/time bounds, and cancellation/stop conditions.
 - Require human clarification or approval when confidence, authority, or material scope is insufficient.
@@ -98,8 +110,13 @@ Those completed tasks are retained as evidence and constraints for later work. T
 **Exit evidence:**
 
 - The same inputs produce an inspectable mission proposal with attributable sources and declared assumptions.
+- The same factual snapshot, task position, role, and compiler configuration
+  produce the same immutable context-packet hash.
 - A reviewer can determine what the system was asked to do, what it inferred, who authorized it, and why it may proceed.
 - Ambiguous or over-broad requests are paused or escalated instead of silently becoming execution work.
+- A comparative benchmark records whether typed intake, graph retrieval, and
+  task-local interpretive probes improve quality over ordinary agent search and
+  cheap sentinels; non-improving stages remain disabled or experimental.
 
 **Primary sources:** governance sections 04 and 05; architecture blueprint intent, delegation, task, and mission-compilation modules.
 

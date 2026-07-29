@@ -20,6 +20,14 @@
 | `M2-016` | done | cursor | Implement refresh, stale propagation, and intelligence query APIs | M2-013–M2-015 |
 | `M2-017` | ready | unassigned | Prove workspace onboarding and refresh scenarios | M2-012–M2-016 |
 | `M2-018` | done | cursor | Preserve conversation context manifests on task origins | M2-003, M2-008 |
-| `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010, M2-017 |
+| `M2-019` | ready | unassigned | Define factual code-graph contracts and golden fixture | M2-016 |
+| `M2-020` | backlog | unassigned | Establish extractor port and provider assessment | M2-019 |
+| `M2-021` | backlog | unassigned | Persist immutable code-graph snapshots in SQLite | M2-019 |
+| `M2-022` | backlog | unassigned | Implement the Python reference extractor | M2-019, M2-020 |
+| `M2-023` | backlog | unassigned | Ingest, validate, and activate factual graph snapshots | M2-021, M2-022 |
+| `M2-024` | backlog | unassigned | Implement safe incremental graph refresh and invalidation | M2-023 |
+| `M2-025` | backlog | unassigned | Expose bounded factual queries and high-recall sentinels | M2-023, M2-024 |
+| `M2-026` | backlog | unassigned | Prove factual graph acceptance and publish the M3 handoff | M2-017, M2-023–M2-025 |
+| `M2-011` | backlog | unassigned | Publish M2 contracts and M3 handoff | M2-010, M2-017, M2-018, M2-026 |
 
 Status values: `backlog`, `ready`, `in-progress`, `review`, `blocked`, `done`.

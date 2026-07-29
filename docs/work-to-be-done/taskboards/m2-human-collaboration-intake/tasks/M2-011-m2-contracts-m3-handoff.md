@@ -2,47 +2,57 @@
 
 **Status:** backlog
 **Owner:** unassigned
-**Depends on:** M2-010, M2-017
+**Depends on:** M2-010, M2-017, M2-018, M2-026
 
-## Outcome
+## Objective
 
-Publish the stable M2 collaboration + workspace-intelligence contracts and an
-explicit handoff packet for M3 mission compilation, without expanding M2 scope
-into mission/run authority.
+Publish the stable M2 collaboration, workspace-intelligence, source-context,
+and factual-repository-graph contracts plus the explicit handoff required to
+start M3, without expanding M2 into mission or execution authority.
 
-## In scope
+## Scope
 
-- Contract index for collaboration intake, workspace bindings/genesis,
-  intelligence records, curation/activation, refresh/query.
-- M3 handoff: what M2 guarantees, what M3 must not re-litigate, residual gaps.
-- Align TASKS/README/DECISIONS with final M2 done criteria.
+- Contract index for collaboration intake, task origins/context manifests,
+  workspace bindings/genesis, intelligence records, curation/activation,
+  source refresh, factual graph snapshots, extractors, bounded queries,
+  sentinels, coverage, and provenance.
+- Consolidate M2-017 and M2-026 acceptance evidence.
+- Publish what M2 guarantees, what remains partial/unsupported, and what M3
+  must not reinterpret as fact or authority.
+- Align board status, decisions, gates, events, API/application seams, schema
+  versions, packaging, and migration documentation.
 
 ## Non-goals
 
-- Implementing Buzz (M2-009).
-- Compiling missions or launching agents (M3/M5).
-
-## Required invariants
-
-- Hand-off documents distinguish durable product vision from implemented
-  behavior verified in source/tests.
-- No silent expansion of Holodeck into collaboration-system identity ownership.
+- Live Buzz adapter (M2-009 remains separately gated).
+- Task interpretation, context selection, packets, missions, requirements,
+  execution, or acceptance.
 
 ## Acceptance criteria
 
-- Contracts and handoff packet reviewed and linked from the M2 board.
-- M2-017 acceptance evidence recorded before marking this ready→done.
+- Every published capability is verified in source/tests at an exact commit.
+- Handoff distinguishes implemented behavior from proposal and research.
+- M3 receives fixture examples for origin → workspace → factual snapshot →
+  bounded query, including partial coverage and empty-result behavior.
+- GitNexus is not described as a production dependency without an explicit
+  license decision.
+- M3 board M3-000 can begin without hidden conversation context.
+- Full test/package/CI evidence and residual risks are recorded.
 
 ## Verification
 
-```text
-uv run --extra dev pytest -q
+```bash
+uv run pytest -q
+uv build
+python -m twine check dist/*
 ```
 
-## Evidence and handoff
+Use current repository-equivalent commands if packaging changes and record the
+replacement.
 
-Pending M2-017.
+## Expected artifacts
 
-## Residual risks
-
-- Buzz still gated; handoff must not claim live provider ingress.
+- M2 contract index.
+- Consolidated M2 acceptance evidence.
+- M2-to-M3 handoff linking M2-026 graph handoff.
+- Updated board and milestone documentation.
