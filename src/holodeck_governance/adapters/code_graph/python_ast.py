@@ -15,6 +15,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from holodeck_governance.adapters.code_graph.revision import (
+    resolve_actual_revision,
+    tree_content_hash,
+)
 from holodeck_governance.application.repository_extractor import (
     ExtractionCoverage,
     ExtractionRequest,
@@ -46,6 +50,17 @@ _CREATED_AT = datetime(2026, 7, 29, 14, 0, tzinfo=UTC)
 _SKIP_DIR_NAMES = frozenset({".git", "__pycache__", ".venv", "venv", ".tox", ".mypy_cache"})
 _CONFIG_SUFFIXES = frozenset({".toml", ".yaml", ".yml", ".ini", ".cfg", ".json"})
 _MANIFEST_NAMES = frozenset({"pyproject.toml", "setup.cfg", "setup.py", "Cargo.toml"})
+# Limit/truncation diagnostics make coverage PARTIAL; informational diagnostics
+# (e.g. unresolved_dynamic_call) do not — activation policy targets truncation.
+_TRUNCATION_DIAGNOSTIC_CODES = frozenset(
+    {
+        "file_limit",
+        "entity_limit",
+        "relation_limit",
+        "time_limit",
+        "file_too_large",
+    }
+)
 
 
 def _configuration_hash() -> str:
@@ -75,15 +90,39 @@ def deterministic_uuidv7(seed: str) -> str:
     return str(uuid.UUID(int=value))
 
 
-def tree_content_hash(root: Path) -> str:
-    digest = hashlib.sha256()
-    for path in _iter_repo_files(root):
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
+def stable_source_id(
+    *,
+    tenant_id: str,
+    workspace_object_id: str,
+    repository_binding_id: str,
+    repository_relative_path: str,
+) -> str:
+    """Source identity is stable across revisions for one repository path."""
+
+    return deterministic_uuidv7(
+        "source|"
+        f"{tenant_id}|{workspace_object_id}|{repository_binding_id}|"
+        f"{repository_relative_path}"
+    )
+
+
+def observation_id_for_revision(*, source_id: str, revision: str) -> str:
+    """Each revision gets a distinct source observation under a stable source."""
+
+    return deterministic_uuidv7(f"observation|{source_id}|{revision}")
+
+
+# Re-export for callers that imported tree_content_hash from this module.
+__all__ = (
+    "PYTHON_AST_PROVIDER_KEY",
+    "PYTHON_AST_PROVIDER_SCHEMA",
+    "PYTHON_AST_PROVIDER_VERSION",
+    "PythonStdlibAstExtractor",
+    "deterministic_uuidv7",
+    "observation_id_for_revision",
+    "stable_source_id",
+    "tree_content_hash",
+)
 
 
 def _iter_repo_files(root: Path) -> tuple[Path, ...]:
@@ -268,7 +307,7 @@ class PythonStdlibAstExtractor:
 
         coverage = (
             CoverageStatus.PARTIAL
-            if diagnostics
+            if any(item.code in _TRUNCATION_DIAGNOSTIC_CODES for item in diagnostics)
             else CoverageStatus.COMPLETE
         )
         notes: tuple[str, ...] = ()
@@ -287,24 +326,7 @@ class PythonStdlibAstExtractor:
         )
 
     def _actual_revision(self, root: Path, requested: str) -> str:
-        if requested.startswith("fixture:"):
-            return f"fixture:{tree_content_hash(root)}"
-        git = root / ".git"
-        if git.exists():
-            head = root / ".git" / "HEAD"
-            # Shallow read without spawning git when possible.
-            text = head.read_text(encoding="utf-8").strip()
-            if text.startswith("ref:"):
-                ref = text.split(" ", 1)[1].strip()
-                ref_path = root / ".git" / ref
-                if ref_path.is_file():
-                    return ref_path.read_text(encoding="utf-8").strip()[:40]
-            elif len(text) >= 7:
-                return text[:40]
-        marker = root / "REVISION"
-        if marker.is_file():
-            return marker.read_text(encoding="utf-8").strip()
-        return requested
+        return resolve_actual_revision(root, requested)
 
     def _select_files(
         self,
@@ -357,10 +379,17 @@ class PythonStdlibAstExtractor:
         bound = bindings.get(key)
         if bound is not None:
             return bound.source_id, bound.source_observation_id
-        seed = f"{request.requested_revision}|{key}"
+        source_id = stable_source_id(
+            tenant_id=request.tenant_id,
+            workspace_object_id=request.workspace_object_id,
+            repository_binding_id=request.repository_binding_id,
+            repository_relative_path=key,
+        )
         return (
-            deterministic_uuidv7(f"source|{seed}"),
-            deterministic_uuidv7(f"observation|{seed}"),
+            source_id,
+            observation_id_for_revision(
+                source_id=source_id, revision=request.requested_revision
+            ),
         )
 
     def _add_entity(
@@ -386,7 +415,9 @@ class PythonStdlibAstExtractor:
         if existing is not None:
             return existing
         entity = CodeEntityFact(
-            entity_fact_id=deterministic_uuidv7(f"entity|{entity_key}"),
+            entity_fact_id=deterministic_uuidv7(
+                f"entity|{entity_key}|{observation_id}"
+            ),
             tenant_id=request.tenant_id,
             workspace_object_id=request.workspace_object_id,
             repository_binding_id=request.repository_binding_id,
@@ -427,7 +458,8 @@ class PythonStdlibAstExtractor:
         relations.relations.append(
             CodeRelationFact(
                 relation_fact_id=deterministic_uuidv7(
-                    f"relation|{kind.value}|{source.entity_key}|{target.entity_key}"
+                    f"relation|{kind.value}|{source.entity_key}|"
+                    f"{target.entity_key}|{observation_id}"
                 ),
                 tenant_id=request.tenant_id,
                 workspace_object_id=request.workspace_object_id,

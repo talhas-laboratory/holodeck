@@ -127,7 +127,7 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
     conn.row_factory = sqlite3.Row
     ids = FixtureIds()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 23
+    assert governance_schema_version(conn) == 24
     report = import_legacy_database(
         conn, tenant_id=ids.tenant_alpha, actor_id=ids.system_service
     )
@@ -153,6 +153,8 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
     if "gov_command_receipts" in tables:
         assert conn.execute("SELECT COUNT(*) FROM gov_command_receipts").fetchone()[0] == 0
     # Rollback of additive migrations leaves earlier gov schema intact
+    rollback_governance_migration(conn, 24)
+    assert governance_schema_version(conn) == 23
     rollback_governance_migration(conn, 23)
     assert governance_schema_version(conn) == 22
     rollback_governance_migration(conn, 22)
@@ -200,7 +202,7 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
     assert "tasks" in tables
     # Re-upgrade restores command-path tables
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 23
+    assert governance_schema_version(conn) == 24
     assert "gov_command_receipts" in {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()

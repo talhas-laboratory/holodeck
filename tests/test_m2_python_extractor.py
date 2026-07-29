@@ -227,11 +227,10 @@ def test_revision_mismatch_before_extraction() -> None:
 
 
 def test_malformed_python_file_is_diagnostic(tmp_path: Path) -> None:
-    # Copy a tiny broken tree with matching fixture hash request bypass:
-    # use REVISION marker mode by requesting a hex revision matching marker.
+    from holodeck_governance.adapters.code_graph.revision import tree_content_hash
+
     (tmp_path / "broken.py").write_text("def oops(:\n", encoding="utf-8")
-    revision = "abcdef1"
-    (tmp_path / "REVISION").write_text(revision + "\n", encoding="utf-8")
+    revision = f"fixture:{tree_content_hash(tmp_path)}"
     result = PythonStdlibAstExtractor().extract(
         ExtractionRequest(
             repository_path=tmp_path,
@@ -243,3 +242,72 @@ def test_malformed_python_file_is_diagnostic(tmp_path: Path) -> None:
         )
     )
     assert any(item.code == "python_syntax_error" for item in result.diagnostics)
+
+
+def test_plain_directory_rejects_caller_supplied_revision(tmp_path: Path) -> None:
+    (tmp_path / "ok.py").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(MalformedCommandError, match=CodeGraphReason.REVISION_MISMATCH.value):
+        PythonStdlibAstExtractor().extract(
+            ExtractionRequest(
+                repository_path=tmp_path,
+                tenant_id=TENANT,
+                workspace_object_id=WORKSPACE,
+                repository_binding_id=BINDING,
+                requested_revision="abcdef1234567890",
+                limits=ExtractionLimits(max_files=20, max_entities=100),
+            )
+        )
+
+
+def test_git_worktree_revision_resolves(tmp_path: Path) -> None:
+    import subprocess
+
+    from holodeck_governance.adapters.code_graph.revision import resolve_actual_revision
+
+    main = tmp_path / "main"
+    worktree = tmp_path / "worktree"
+    main.mkdir()
+    subprocess.run(["git", "init"], cwd=main, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    (main / "mod.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "mod.py"], cwd=main, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=main, text=True
+    ).strip()
+    subprocess.run(
+        ["git", "worktree", "add", str(worktree), "HEAD"],
+        cwd=main,
+        check=True,
+        capture_output=True,
+    )
+    assert (worktree / ".git").is_file()
+    assert resolve_actual_revision(worktree, head) == head
+    result = PythonStdlibAstExtractor().extract(
+        ExtractionRequest(
+            repository_path=worktree,
+            tenant_id=TENANT,
+            workspace_object_id=WORKSPACE,
+            repository_binding_id=BINDING,
+            requested_revision=head,
+            limits=ExtractionLimits(max_files=20, max_entities=100),
+        )
+    )
+    assert result.actual_revision == head
+    assert any(e.entity_kind is EntityKind.FUNCTION for e in result.candidate_entities)

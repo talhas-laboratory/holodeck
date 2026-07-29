@@ -432,3 +432,30 @@ Finish the M2-018 capture workflow (beyond the v21 stub):
   tenant/workspace/binding/revision/extractor/config/limits via command receipts.
 - Durable events: build requested/completed/partial/failed and snapshot activated.
 - Application layer depends only on ports (no sqlite/adapter imports).
+
+## 2026-07-29 — Code-graph foundation blockers (pre-M2-024)
+
+Review of M2-019..023 blocked merge until exact-revision and provenance foundations
+were corrected. Migration **24** and adapter/store hardening:
+
+1. **Revision resolution fail-closed** — `adapters/code_graph/revision.py` resolves
+   `fixture:<hash>` or `git rev-parse HEAD` (worktree-safe `.git` file). Plain
+   directories never echo the caller-supplied revision.
+2. **Stable sources + observation-scoped facts** — source IDs are path-stable
+   across revisions; each revision gets a new observation; entity/relation fact
+   IDs and UNIQUE constraints include the evidence observation so `rev_b`
+   rebuilds succeed without locator/`entity_key` collisions.
+3. **Partial activation is explicit** — `allow_partial_activation` required to
+   activate PARTIAL coverage; default leaves a failed building snapshot and does
+   not replace the active graph.
+4. **Transactional persist** — `persist_building_graph` writes snapshot, run,
+   facts, and memberships in one `BEGIN IMMEDIATE` before activation.
+5. **Idempotency claim-first** — `gov_code_graph_build_claims` reserves the key
+   (and checks existing receipts) under `BEGIN IMMEDIATE` before extraction.
+6. **Provenance coupling** — DB triggers plus application checks require
+   `source_observation_id` / `evidence_observation_id` to belong to the paired
+   source under the same tenant/workspace.
+7. **Concurrent activation** — activation remains race-safe; tests use a
+   file-backed DB with separate connections (shared-connection CI flake fixed).
+
+M2-024 incremental refresh must not start until this hardening is on the tip.

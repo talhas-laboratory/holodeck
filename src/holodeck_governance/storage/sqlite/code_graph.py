@@ -9,6 +9,7 @@ from datetime import datetime
 from holodeck_governance.domain.errors import (
     ContentionError,
     CrossTenantAccessError,
+    IdempotencyConflictError,
     MalformedCommandError,
     NotFoundGovernanceError,
     RevisionImmutableError,
@@ -42,6 +43,16 @@ def _insert_immutable(conn: sqlite3.Connection, sql: str, params: tuple) -> None
         raise RevisionImmutableError(
             "code-graph record already exists and cannot be overwritten"
         ) from exc
+
+
+def _insert_ignore_existing(conn: sqlite3.Connection, sql: str, params: tuple) -> bool:
+    """Insert a row; return False when the primary key already exists."""
+
+    try:
+        conn.execute(sql, params)
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 
 def _json_list(values: tuple[str, ...]) -> str:
@@ -99,56 +110,35 @@ class SqliteCodeGraphRepository:
         snapshot = self.get_snapshot(run.snapshot_id)
         if snapshot is None:
             raise NotFoundGovernanceError(f"unknown snapshot {run.snapshot_id}")
-        _insert_immutable(
-            self._conn,
-            """
-            INSERT INTO gov_code_graph_extraction_runs(
-                extraction_run_id, snapshot_id, tenant_id, provider_key,
-                provider_version, provider_schema_version, configuration_hash,
-                requested_revision, actual_revision, started_at, completed_at,
-                status, created_by_actor_id, limits_json, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run.extraction_run_id,
-                run.snapshot_id,
-                snapshot.tenant_id,
-                run.provider_key,
-                run.provider_version,
-                run.provider_schema_version,
-                run.configuration_hash,
-                run.requested_revision,
-                run.actual_revision,
-                run.started_at.isoformat(),
-                None if run.completed_at is None else run.completed_at.isoformat(),
-                run.status.value,
-                run.created_by_actor_id,
-                _limits_json(run.limits),
-                run.schema_version,
-            ),
-        )
-        for index, diagnostic in enumerate(run.diagnostics):
-            _insert_immutable(
-                self._conn,
-                """
-                INSERT INTO gov_code_graph_extraction_diagnostics(
-                    diagnostic_id, extraction_run_id, tenant_id, code, message,
-                    repository_relative_path, sequence_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    generate_uuidv7(),
-                    run.extraction_run_id,
-                    snapshot.tenant_id,
-                    diagnostic.code,
-                    diagnostic.message,
-                    diagnostic.repository_relative_path,
-                    index,
-                ),
-            )
+        self._insert_extraction_run(run, tenant_id=snapshot.tenant_id)
         self._commit_write()
 
     def insert_entity_fact(self, entity: CodeEntityFact) -> None:
+        self._insert_entity_fact_row(entity)
+        self._commit_write()
+
+    def insert_relation_fact(self, relation: CodeRelationFact) -> None:
+        self._insert_relation_fact_row(relation)
+        self._commit_write()
+
+    def _insert_entity_fact_row(self, entity: CodeEntityFact) -> None:
+        existing = self.get_entity_fact(entity.entity_fact_id)
+        if existing is not None:
+            if (
+                existing.entity_key != entity.entity_key
+                or existing.source_observation_id != entity.source_observation_id
+            ):
+                raise RevisionImmutableError(
+                    "code-graph entity fact conflicts with an existing row"
+                )
+            return
+        self._require_observation_belongs_to_source(
+            tenant_id=entity.tenant_id,
+            workspace_object_id=entity.workspace_object_id,
+            source_id=entity.source_id,
+            observation_id=entity.source_observation_id,
+            kind="entity",
+        )
         span = entity.span
         _insert_immutable(
             self._conn,
@@ -185,9 +175,25 @@ class SqliteCodeGraphRepository:
                 entity.schema_version,
             ),
         )
-        self._commit_write()
 
-    def insert_relation_fact(self, relation: CodeRelationFact) -> None:
+    def _insert_relation_fact_row(self, relation: CodeRelationFact) -> None:
+        existing = self.get_relation_fact(relation.relation_fact_id)
+        if existing is not None:
+            if (
+                existing.relation_kind != relation.relation_kind
+                or existing.evidence_observation_id != relation.evidence_observation_id
+            ):
+                raise RevisionImmutableError(
+                    "code-graph relation fact conflicts with an existing row"
+                )
+            return
+        self._require_observation_belongs_to_source(
+            tenant_id=relation.tenant_id,
+            workspace_object_id=relation.workspace_object_id,
+            source_id=relation.evidence_source_id,
+            observation_id=relation.evidence_observation_id,
+            kind="relation",
+        )
         span = relation.evidence_span
         _insert_immutable(
             self._conn,
@@ -221,6 +227,235 @@ class SqliteCodeGraphRepository:
                 relation.created_at.isoformat(),
                 relation.schema_version,
             ),
+        )
+
+    def _require_observation_belongs_to_source(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        source_id: str,
+        observation_id: str,
+        kind: str,
+    ) -> None:
+        row = self._conn.execute(
+            """
+            SELECT 1 FROM gov_workspace_source_observations
+            WHERE observation_id = ?
+              AND source_id = ?
+              AND tenant_id = ?
+              AND workspace_object_id = ?
+            """,
+            (observation_id, source_id, tenant_id, workspace_object_id),
+        ).fetchone()
+        if row is None:
+            raise code_graph_error(
+                CodeGraphReason.MALFORMED_FACT,
+                f"{kind} observation {observation_id} does not belong to "
+                f"source {source_id}",
+            )
+
+    def _insert_extraction_run(
+        self, run: RepositoryExtractionRun, *, tenant_id: str
+    ) -> None:
+        _insert_immutable(
+            self._conn,
+            """
+            INSERT INTO gov_code_graph_extraction_runs(
+                extraction_run_id, snapshot_id, tenant_id, provider_key,
+                provider_version, provider_schema_version, configuration_hash,
+                requested_revision, actual_revision, started_at, completed_at,
+                status, created_by_actor_id, limits_json, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run.extraction_run_id,
+                run.snapshot_id,
+                tenant_id,
+                run.provider_key,
+                run.provider_version,
+                run.provider_schema_version,
+                run.configuration_hash,
+                run.requested_revision,
+                run.actual_revision,
+                run.started_at.isoformat(),
+                None if run.completed_at is None else run.completed_at.isoformat(),
+                run.status.value,
+                run.created_by_actor_id,
+                _limits_json(run.limits),
+                run.schema_version,
+            ),
+        )
+        for index, diagnostic in enumerate(run.diagnostics):
+            _insert_immutable(
+                self._conn,
+                """
+                INSERT INTO gov_code_graph_extraction_diagnostics(
+                    diagnostic_id, extraction_run_id, tenant_id, code, message,
+                    repository_relative_path, sequence_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    generate_uuidv7(),
+                    run.extraction_run_id,
+                    tenant_id,
+                    diagnostic.code,
+                    diagnostic.message,
+                    diagnostic.repository_relative_path,
+                    index,
+                ),
+            )
+
+    def persist_building_graph(
+        self,
+        *,
+        snapshot: RepositoryGraphSnapshot,
+        run: RepositoryExtractionRun,
+        entities: tuple[CodeEntityFact, ...],
+        relations: tuple[CodeRelationFact, ...],
+    ) -> None:
+        """Persist snapshot, run, facts, and memberships in one transaction."""
+
+        if snapshot.status is not SnapshotStatus.BUILDING:
+            raise code_graph_error(
+                CodeGraphReason.MALFORMED_FACT,
+                "new snapshots must start in building status",
+            )
+        assert_relation_endpoints_resolve(entities=entities, relations=relations)
+        assert_snapshot_counts_match(snapshot, entities=entities, relations=relations)
+
+        previous = self._conn.isolation_level
+        self._conn.isolation_level = None
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._insert_snapshot(snapshot)
+            self._insert_extraction_run(run, tenant_id=snapshot.tenant_id)
+            for entity in entities:
+                self._insert_entity_fact_row(entity)
+            for relation in relations:
+                self._insert_relation_fact_row(relation)
+            for entity in entities:
+                _insert_immutable(
+                    self._conn,
+                    """
+                    INSERT INTO gov_code_graph_snapshot_entities(
+                        snapshot_id, entity_fact_id, tenant_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        entity.entity_fact_id,
+                        snapshot.tenant_id,
+                    ),
+                )
+            for relation in relations:
+                _insert_immutable(
+                    self._conn,
+                    """
+                    INSERT INTO gov_code_graph_snapshot_relations(
+                        snapshot_id, relation_fact_id, tenant_id
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (
+                        snapshot.snapshot_id,
+                        relation.relation_fact_id,
+                        snapshot.tenant_id,
+                    ),
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._conn.isolation_level = previous
+
+    def claim_build_idempotency(
+        self,
+        *,
+        tenant_id: str,
+        idempotency_key: str,
+        semantic_hash: str,
+        command_id: str,
+        created_at: datetime,
+    ) -> str:
+        """Reserve an idempotency key before extraction (concurrency-safe).
+
+        Returns ``\"claimed\"`` when this caller owns the key, or
+        ``\"already_complete\"`` when a matching receipt already exists.
+        Raises ``IdempotencyConflictError`` on fingerprint mismatch and
+        ``ContentionError`` when another build holds the claim.
+        """
+
+        previous = self._conn.isolation_level
+        self._conn.isolation_level = None
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            receipt = self._conn.execute(
+                """
+                SELECT semantic_hash FROM gov_command_receipts
+                WHERE tenant_id = ? AND idempotency_key = ?
+                """,
+                (tenant_id, idempotency_key),
+            ).fetchone()
+            if receipt is not None:
+                if str(receipt["semantic_hash"]) != semantic_hash:
+                    self._conn.execute("ROLLBACK")
+                    raise IdempotencyConflictError(
+                        "idempotency key was reused with different graph-build inputs"
+                    )
+                self._conn.execute("COMMIT")
+                return "already_complete"
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO gov_code_graph_build_claims(
+                        tenant_id, idempotency_key, semantic_hash,
+                        command_id, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        tenant_id,
+                        idempotency_key,
+                        semantic_hash,
+                        command_id,
+                        created_at.isoformat(),
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                row = self._conn.execute(
+                    """
+                    SELECT semantic_hash FROM gov_code_graph_build_claims
+                    WHERE tenant_id = ? AND idempotency_key = ?
+                    """,
+                    (tenant_id, idempotency_key),
+                ).fetchone()
+                self._conn.execute("ROLLBACK")
+                if row is not None and str(row["semantic_hash"]) != semantic_hash:
+                    raise IdempotencyConflictError(
+                        "idempotency key was reused with different graph-build inputs"
+                    ) from exc
+                raise ContentionError(
+                    "graph build idempotency key is already claimed"
+                ) from exc
+            self._conn.execute("COMMIT")
+            return "claimed"
+        except (IdempotencyConflictError, ContentionError):
+            raise
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._conn.isolation_level = previous
+
+    def release_build_idempotency_claim(
+        self, *, tenant_id: str, idempotency_key: str
+    ) -> None:
+        self._conn.execute(
+            """
+            DELETE FROM gov_code_graph_build_claims
+            WHERE tenant_id = ? AND idempotency_key = ?
+            """,
+            (tenant_id, idempotency_key),
         )
         self._commit_write()
 
@@ -284,8 +519,14 @@ class SqliteCodeGraphRepository:
         *,
         tenant_id: str,
         activated_at: datetime,
+        allow_partial_activation: bool = False,
     ) -> RepositoryGraphSnapshot:
-        """Atomically activate a building snapshot; supersede any prior active."""
+        """Atomically activate a building snapshot; supersede any prior active.
+
+        Partial coverage activates only when ``allow_partial_activation`` is
+        explicitly true (policy-checked decision). Complete coverage activates
+        normally.
+        """
 
         previous = self._conn.isolation_level
         self._conn.isolation_level = None
@@ -302,12 +543,29 @@ class SqliteCodeGraphRepository:
                     CodeGraphReason.REVISION_MISMATCH,
                     "requested and actual revisions must match before activation",
                 )
+            if run.status is ExtractionRunStatus.FAILED:
+                raise MalformedCommandError(
+                    "failed extraction runs cannot activate"
+                )
+            if run.status is ExtractionRunStatus.PARTIAL and not allow_partial_activation:
+                raise code_graph_error(
+                    CodeGraphReason.PARTIAL_COVERAGE,
+                    "partial extraction requires explicit allow_partial_activation",
+                )
             if run.status not in (
                 ExtractionRunStatus.SUCCEEDED,
                 ExtractionRunStatus.PARTIAL,
             ):
                 raise MalformedCommandError(
                     "extraction run must succeed or be partial before activation"
+                )
+            if (
+                snapshot.coverage_status is CoverageStatus.PARTIAL
+                and not allow_partial_activation
+            ):
+                raise code_graph_error(
+                    CodeGraphReason.PARTIAL_COVERAGE,
+                    "partial snapshot coverage requires explicit allow_partial_activation",
                 )
             entities = self.list_snapshot_entities(snapshot_id, tenant_id=tenant_id)
             relations = self.list_snapshot_relations(snapshot_id, tenant_id=tenant_id)
@@ -473,6 +731,13 @@ class SqliteCodeGraphRepository:
             (entity_fact_id,),
         ).fetchone()
         return None if row is None else self._entity_from_row(row)
+
+    def get_relation_fact(self, relation_fact_id: str) -> CodeRelationFact | None:
+        row = self._conn.execute(
+            "SELECT * FROM gov_code_relation_facts WHERE relation_fact_id = ?",
+            (relation_fact_id,),
+        ).fetchone()
+        return None if row is None else self._relation_from_row(row)
 
     def _insert_snapshot(self, snapshot: RepositoryGraphSnapshot) -> None:
         _insert_immutable(

@@ -190,7 +190,7 @@ class CodeGraphStorePort(Protocol):
         semantic_hash: str,
         command_id: str,
         created_at: datetime,
-    ) -> None: ...
+    ) -> str: ...
 
     def release_build_idempotency_claim(
         self, *, tenant_id: str, idempotency_key: str
@@ -333,13 +333,23 @@ class CodeGraphIngestionService:
         )
 
         command_id = generate_uuidv7()
-        self._graphs.claim_build_idempotency(
+        claim = self._graphs.claim_build_idempotency(
             tenant_id=request.tenant_id,
             idempotency_key=request.idempotency_key,
             semantic_hash=fingerprint,
             command_id=command_id,
             created_at=request.at,
         )
+        if claim == "already_complete":
+            existing_after_claim = self._receipts.get_by_idempotency(
+                request.tenant_id, request.idempotency_key
+            )
+            if existing_after_claim is None:
+                raise MalformedCommandError(
+                    "idempotency claim reported complete without a receipt"
+                )
+            _prior_hash, receipt = existing_after_claim
+            return self._result_from_receipt(receipt, replayed=True)
         try:
             return self._build_graph_claimed(
                 request=request,
@@ -875,6 +885,7 @@ class CodeGraphIngestionService:
                     "max_relations": request.limits.max_relations,
                     "max_seconds": request.limits.max_seconds,
                 },
+                "allow_partial_activation": request.allow_partial_activation,
             }
         )
 

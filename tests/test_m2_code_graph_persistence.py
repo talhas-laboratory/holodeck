@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Barrier, Thread
 
 import pytest
@@ -288,8 +289,29 @@ def test_facts_are_immutable_and_memberships_reuse_content() -> None:
         qn="sample_app.service",
     )
     graph.insert_entity_fact(entity)
+    # Identical normalized fact + observation may be reused across snapshots.
+    graph.insert_entity_fact(entity)
+    conflicting = CodeEntityFact(
+        entity_fact_id=entity.entity_fact_id,
+        tenant_id=entity.tenant_id,
+        workspace_object_id=entity.workspace_object_id,
+        repository_binding_id=entity.repository_binding_id,
+        entity_key=build_entity_key(
+            entity_kind=EntityKind.CLASS,
+            repository_relative_path="sample_app/other.py",
+            qualified_name="sample_app.other.Other",
+        ),
+        entity_kind=EntityKind.CLASS,
+        repository_relative_path="sample_app/other.py",
+        source_id=source_id,
+        source_observation_id=observation_id,
+        observation_method=ObservationMethod.DIRECT_PARSE,
+        created_at=NOW,
+        language="python",
+        qualified_name="sample_app.other.Other",
+    )
     with pytest.raises(RevisionImmutableError):
-        graph.insert_entity_fact(entity)
+        graph.insert_entity_fact(conflicting)
     graph.add_snapshot_entity_memberships(
         snapshot_id=snap_a.snapshot_id,
         tenant_id=ids.tenant_alpha,
@@ -459,15 +481,149 @@ def test_relation_endpoint_coupling_rejects_cross_binding() -> None:
         )
 
 
-def test_concurrent_activation_keeps_single_active() -> None:
-    conn, graph, ids, binding_id, source_id, observation_id = _world()
-    entities = []
-    snapshots = []
+def test_concurrent_activation_keeps_single_active(tmp_path: Path) -> None:
+    """File-backed DB + per-thread connections; one active snapshot remains."""
+
+    db_path = tmp_path / "graph.sqlite"
+    setup_conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    setup_conn.row_factory = sqlite3.Row
+    setup_conn.execute("PRAGMA busy_timeout = 5000")
+    migrate_governance(setup_conn)
+    ids = FixtureIds()
+    ensure_default_local_tenant(
+        setup_conn, tenant_id=ids.tenant_alpha, created_by_actor_id=ids.system_service
+    )
+    auth = SqliteAuthorityRepository(setup_conn)
+    for actor_id, name, kind in (
+        (ids.human_owner, "Owner", ActorKind.HUMAN),
+        (ids.system_service, "System", ActorKind.SERVICE),
+    ):
+        auth.save_actor(
+            Actor(
+                actor_id=actor_id,
+                tenant_id=ids.tenant_alpha,
+                kind=kind,
+                display_name=name,
+                created_at=FIXED_CLOCK,
+                created_by_actor_id=ids.system_service,
+            )
+        )
+    revisions = SqliteRevisionRepository(setup_conn)
+    revisions.register_object(
+        GovernanceObject(
+            object_id=ids.workspace_alpha_1,
+            tenant_id=ids.tenant_alpha,
+            object_type="Workspace",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    collab = CollaborationApplicationService(
+        repository=SqliteCollaborationRepository(setup_conn)
+    )
+    ref = ExternalReference(
+        reference_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        provider="git",
+        object_type="repository",
+        external_object_id="repo-concurrent",
+        locator="git://example/concurrent",
+        observed_at=NOW,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    collab.save_external_reference(ref)
+    binding = RepositoryBinding(
+        binding_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        provider="git",
+        external_repository_id="repo-concurrent",
+        canonical_locator="git://example/concurrent",
+        default_branch="main",
+        status=WorkspaceBindingStatus.ACTIVE,
+        external_reference_id=ref.reference_id,
+        created_at=NOW,
+        created_by_actor_id=ids.system_service,
+    )
+    collab.save_repository_binding(binding)
+
+    from datetime import timedelta
+
+    from holodeck_governance.domain.authority.assignments import RoleAssignment
+    from holodeck_governance.domain.authority.roles import RoleProfile
+    from holodeck_governance.domain.workspace.intelligence import (
+        INTELLIGENCE_CURATE_PERMISSION,
+    )
+
+    role_object_id = generate_uuidv7()
+    revisions.register_object(
+        GovernanceObject(
+            object_id=role_object_id,
+            tenant_id=ids.tenant_alpha,
+            object_type="RoleProfile",
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_role_profile(
+        RoleProfile(
+            role_profile_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            role_object_id=role_object_id,
+            revision=1,
+            name="intelligence-curator",
+            permissions=(INTELLIGENCE_CURATE_PERMISSION,),
+            jurisdiction={"tenant": ids.tenant_alpha},
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+        )
+    )
+    auth.save_assignment(
+        RoleAssignment(
+            assignment_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            actor_id=ids.human_owner,
+            role_object_id=role_object_id,
+            role_revision=1,
+            workspace_object_id=None,
+            jurisdiction_key="tenant",
+            jurisdiction_value=ids.tenant_alpha,
+            effective_from=NOW - timedelta(hours=1),
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
+            effective_until=NOW + timedelta(days=30),
+        )
+    )
+    intelligence = SqliteWorkspaceIntelligenceRepository(setup_conn)
+    source_id = generate_uuidv7()
+    observation_id = generate_uuidv7()
+    intelligence.register_source(
+        WorkspaceSource(
+            source_id=source_id,
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            source_type=SourceType.REPOSITORY_FILE,
+            locator="sample_app/shared.py",
+            observed_revision=REV,
+            trust_class=TrustClass.ORDINARY_REFERENCE,
+            owner_actor_id=ids.human_owner,
+            sensitivity="public",
+            refresh_policy="on_revision_change",
+            observed_at=NOW,
+            stale_status=StaleStatus.FRESH,
+            created_at=NOW,
+            created_by_actor_id=ids.human_owner,
+            current_observation_id=observation_id,
+        )
+    )
+    graph = SqliteCodeGraphRepository(setup_conn)
+    snapshot_ids: list[str] = []
     for index in range(2):
         run_id = generate_uuidv7()
         entity = _entity(
             ids=ids,
-            binding_id=binding_id,
+            binding_id=binding.binding_id,
             source_id=source_id,
             observation_id=observation_id,
             path=f"sample_app/mod{index}.py",
@@ -475,9 +631,11 @@ def test_concurrent_activation_keeps_single_active() -> None:
             qn=f"sample_app.mod{index}",
         )
         graph.insert_entity_fact(entity)
-        entities.append(entity)
         snap = _building_snapshot(
-            ids=ids, binding_id=binding_id, run_id=run_id, entity_count=1
+            ids=ids,
+            binding_id=binding.binding_id,
+            run_id=run_id,
+            entity_count=1,
         )
         graph.save_building_snapshot(snap)
         graph.save_extraction_run(
@@ -502,13 +660,17 @@ def test_concurrent_activation_keeps_single_active() -> None:
             tenant_id=ids.tenant_alpha,
             entity_fact_ids=(entity.entity_fact_id,),
         )
-        snapshots.append(snap)
+        snapshot_ids.append(snap.snapshot_id)
+    setup_conn.close()
 
     barrier = Barrier(2)
     errors: list[BaseException] = []
 
     def _activate(snapshot_id: str) -> None:
-        local = SqliteCodeGraphRepository(conn)
+        local_conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        local_conn.row_factory = sqlite3.Row
+        local_conn.execute("PRAGMA busy_timeout = 5000")
+        local = SqliteCodeGraphRepository(local_conn)
         try:
             barrier.wait(timeout=5)
             local.activate_snapshot(
@@ -516,28 +678,66 @@ def test_concurrent_activation_keeps_single_active() -> None:
             )
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
+        finally:
+            local_conn.close()
 
     threads = [
-        Thread(target=_activate, args=(snapshots[0].snapshot_id,)),
-        Thread(target=_activate, args=(snapshots[1].snapshot_id,)),
+        Thread(target=_activate, args=(snapshot_ids[0],)),
+        Thread(target=_activate, args=(snapshot_ids[1],)),
     ]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join(timeout=10)
 
-    active_rows = conn.execute(
+    verify = sqlite3.connect(str(db_path))
+    verify.row_factory = sqlite3.Row
+    active_rows = verify.execute(
         """
         SELECT snapshot_id FROM gov_code_graph_snapshots
         WHERE status = 'active'
           AND repository_binding_id = ?
         """,
-        (binding_id,),
+        (binding.binding_id,),
     ).fetchall()
+    verify.close()
     assert len(active_rows) == 1
-    # At most one activation may fail with contention; both succeeding is also
-    # fine if serialized (second supersedes first).
-    assert all(
-        isinstance(err, (ContentionError, sqlite3.IntegrityError)) or True
-        for err in errors
+    for err in errors:
+        assert isinstance(err, (ContentionError, sqlite3.IntegrityError))
+
+
+def test_source_observation_coupling_rejects_mismatched_pair() -> None:
+    conn, graph, ids, binding_id, source_a, _observation_a = _world()
+    intelligence = SqliteWorkspaceIntelligenceRepository(conn)
+    source_b = generate_uuidv7()
+    observation_b = generate_uuidv7()
+    intelligence.register_source(
+        WorkspaceSource(
+            source_id=source_b,
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            source_type=SourceType.REPOSITORY_FILE,
+            locator="sample_app/other.py",
+            observed_revision=REV,
+            trust_class=TrustClass.ORDINARY_REFERENCE,
+            owner_actor_id=ids.human_owner,
+            sensitivity="public",
+            refresh_policy="on_revision_change",
+            observed_at=NOW,
+            stale_status=StaleStatus.FRESH,
+            created_at=NOW,
+            created_by_actor_id=ids.human_owner,
+            current_observation_id=observation_b,
+        )
     )
+    mismatched = _entity(
+        ids=ids,
+        binding_id=binding_id,
+        source_id=source_a,
+        observation_id=observation_b,
+        path="sample_app/mismatch.py",
+        kind=EntityKind.MODULE,
+        qn="sample_app.mismatch",
+    )
+    with pytest.raises(MalformedCommandError, match="does not belong to source"):
+        graph.insert_entity_fact(mismatched)

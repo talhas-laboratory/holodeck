@@ -303,7 +303,7 @@ def _readiness(
 def test_migrate_v19_creates_intelligence_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 23
+    assert governance_schema_version(conn) == 24
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")

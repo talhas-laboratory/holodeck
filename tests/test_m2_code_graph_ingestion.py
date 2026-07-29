@@ -305,3 +305,107 @@ def test_extraction_failure_emits_failed_event_without_active_snapshot() -> None
         ).fetchone()["n"]
         == 0
     )
+
+
+def test_second_revision_rebuild_succeeds_with_stable_sources() -> None:
+    conn, service, ids, binding_id = _service()
+    rev_b = fixture_revision_id("rev_b")
+    first = service.build_graph(
+        _request(ids, binding_id, idempotency_key="rev-a", revision=REV_A)
+    )
+    assert first.status is SnapshotStatus.ACTIVE
+    second = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_b",
+            requested_revision=rev_b,
+            actor_id=ids.human_owner,
+            idempotency_key="rev-b",
+            limits=ExtractionLimits(
+                max_files=200, max_entities=5000, max_relations=20000
+            ),
+            at=NOW,
+        )
+    )
+    assert second.status is SnapshotStatus.ACTIVE
+    assert second.actual_revision == rev_b
+    assert second.snapshot_id != first.snapshot_id
+    status = service.get_status(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert status.active_snapshot is not None
+    assert status.active_snapshot.snapshot_id == second.snapshot_id
+    superseded = conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM gov_code_graph_snapshots
+        WHERE snapshot_id = ? AND status = 'superseded'
+        """,
+        (first.snapshot_id,),
+    ).fetchone()["n"]
+    assert superseded == 1
+    # Same path keeps one source_id across revisions; observations differ.
+    locators = conn.execute(
+        """
+        SELECT locator, COUNT(DISTINCT source_id) AS sources
+        FROM gov_workspace_sources
+        WHERE tenant_id = ? AND workspace_object_id = ?
+          AND locator LIKE 'sample_app/%.py'
+        GROUP BY locator
+        """,
+        (ids.tenant_alpha, ids.workspace_alpha_1),
+    ).fetchall()
+    assert locators
+    assert all(int(row["sources"]) == 1 for row in locators)
+
+
+def test_partial_build_does_not_activate_without_explicit_policy() -> None:
+    _conn, service, ids, binding_id = _service()
+    rejected = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_a",
+            requested_revision=REV_A,
+            actor_id=ids.human_owner,
+            idempotency_key="partial-default",
+            limits=ExtractionLimits(max_files=1, max_entities=5000),
+            at=NOW,
+            allow_partial_activation=False,
+        )
+    )
+    assert rejected.status is SnapshotStatus.FAILED
+    status = service.get_status(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert status.active_snapshot is None
+
+    allowed = service.build_graph(
+        GraphBuildRequest(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            repository_path=TREES_ROOT / "rev_a",
+            requested_revision=REV_A,
+            actor_id=ids.human_owner,
+            idempotency_key="partial-allowed",
+            limits=ExtractionLimits(max_files=1, max_entities=5000),
+            at=NOW,
+            allow_partial_activation=True,
+        )
+    )
+    assert allowed.status is SnapshotStatus.ACTIVE
+    status = service.get_status(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert status.active_snapshot is not None
+    assert status.active_snapshot.snapshot_id == allowed.snapshot_id
+    assert status.active_snapshot.coverage_status.value == "partial"
