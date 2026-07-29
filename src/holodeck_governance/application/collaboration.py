@@ -20,6 +20,11 @@ from holodeck_governance.domain.workspace.bindings import (
     RepositoryBinding,
     WorkspaceBindingStatus,
 )
+from holodeck_governance.domain.workspace.discovery import (
+    WorkspaceDiscoveryQuery,
+    WorkspaceDiscoveryResult,
+    evaluate_workspace_discovery,
+)
 
 
 class CollaborationRepositoryPort(Protocol):
@@ -103,6 +108,8 @@ class CollaborationRepositoryPort(Protocol):
     def set_collaboration_location_binding_status(
         self, binding_id: str, *, tenant_id: str, status: WorkspaceBindingStatus
     ) -> CollaborationLocationBinding: ...
+
+    def get_workspace_status(self, workspace_object_id: str) -> str | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +229,65 @@ class CollaborationApplicationService:
     ) -> CollaborationLocationBinding:
         return self.repository.set_collaboration_location_binding_status(
             binding_id, tenant_id=tenant_id, status=status
+        )
+
+    def discover_workspace(
+        self, query: WorkspaceDiscoveryQuery
+    ) -> WorkspaceDiscoveryResult:
+        """Explainably discover an eligible workspace for intake context."""
+
+        endpoint = self.repository.get_endpoint(query.endpoint_id)
+        if endpoint is None:
+            raise MalformedCommandError(f"unknown collaboration endpoint {query.endpoint_id}")
+        if endpoint.tenant_id != query.tenant_id:
+            raise CrossTenantAccessError("discovery endpoint tenant mismatch")
+
+        exact = self.repository.resolve_active_collaboration_location_binding(
+            tenant_id=query.tenant_id,
+            endpoint_id=query.endpoint_id,
+            location_kind=query.location_kind,
+            external_location_id=query.external_location_id,
+        )
+        parent = None
+        if (
+            query.parent_location_kind is not None
+            and query.parent_external_location_id is not None
+        ):
+            parent = self.repository.resolve_active_collaboration_location_binding(
+                tenant_id=query.tenant_id,
+                endpoint_id=query.endpoint_id,
+                location_kind=query.parent_location_kind,
+                external_location_id=query.parent_external_location_id,
+            )
+        repository = None
+        if (
+            query.repository_provider is not None
+            and query.external_repository_id is not None
+        ):
+            repository = self.repository.resolve_active_repository_binding(
+                tenant_id=query.tenant_id,
+                provider=query.repository_provider,
+                external_repository_id=query.external_repository_id,
+            )
+
+        workspace_ids: set[str] = set()
+        for binding in (exact, parent, repository):
+            if binding is not None:
+                workspace_ids.add(binding.workspace_object_id)
+        workspace_statuses: dict[str, str] = {}
+        for workspace_object_id in workspace_ids:
+            status = self.repository.get_workspace_status(workspace_object_id)
+            if status is None:
+                workspace_statuses[workspace_object_id] = "missing"
+            else:
+                workspace_statuses[workspace_object_id] = status
+
+        return evaluate_workspace_discovery(
+            query,
+            exact_location_binding=exact,
+            parent_location_binding=parent,
+            repository_binding=repository,
+            workspace_statuses=workspace_statuses,
         )
 
     def record_inbound_receipt(

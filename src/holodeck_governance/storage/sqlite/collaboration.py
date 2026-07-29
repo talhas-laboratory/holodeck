@@ -1078,6 +1078,28 @@ class SqliteCollaborationRepository:
         assert updated is not None
         return updated
 
+    def get_workspace_status(self, workspace_object_id: str) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT status FROM gov_workspaces
+            WHERE object_id = ?
+            ORDER BY revision DESC
+            LIMIT 1
+            """,
+            (workspace_object_id,),
+        ).fetchone()
+        if row is not None:
+            return str(row["status"])
+        obj = self._conn.execute(
+            "SELECT object_type FROM gov_objects WHERE object_id = ?",
+            (workspace_object_id,),
+        ).fetchone()
+        if obj is None:
+            return None
+        if str(obj["object_type"]) != "Workspace":
+            return None
+        return "active"
+
     def _insert_task_origin(self, origin: TaskOrigin) -> None:
         _insert_immutable(
             self._conn,

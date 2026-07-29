@@ -106,3 +106,12 @@
   `(tenant, provider, external_repository_id)` or
   `(tenant, endpoint, location_kind, external_location_id)`.
 - Channels/repos remain external; they never become the workspace identity.
+
+## 2026-07-29 — M2-006 explainable workspace discovery
+
+- `discover_workspace` ranks active location/repository bindings with stable
+  reason codes (`location.exact`, `location.parent`, `repository.exact`,
+  agreement/conflict markers).
+- Outcomes are explicit: `selected`, `ambiguous`, `unbound`, or
+  `ineligible_only`. Suspended/archived workspaces never silently win.
+- Discovery is pure evaluation over bindings; genesis remains M2-007.
