@@ -5,12 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from holodeck_governance.domain.authority.actors import Actor, ActorKind
 from holodeck_governance.domain.errors import MalformedCommandError
 from holodeck_governance.domain.ids import require_opaque_id
 from holodeck_governance.domain.records._common import require_utc
+from holodeck_governance.domain.workspace.intelligence.gaps import WorkspaceDecision
 from holodeck_governance.domain.workspace.intelligence.types import (
     READINESS_LEVEL_ORDER,
     READINESS_PERMITTED_CAPABILITY,
+    DecisionOutcome,
     ReadinessLevel,
 )
 
@@ -83,6 +86,56 @@ def readiness_at_most(
         raise MalformedCommandError(
             "readiness cannot exceed the evidence and approved authority available"
         )
+
+
+def assert_readiness_decision_authorizes(
+    *,
+    decision: WorkspaceDecision,
+    actor: Actor,
+    claimed_level: ReadinessLevel,
+    tenant_id: str,
+    workspace_object_id: str,
+    subject_revision_ids: frozenset[str],
+) -> ReadinessLevel:
+    """Require an APPROVED HUMAN WorkspaceDecision authorizing readiness.
+
+    Returns the decision's typed ``authorized_readiness_level``. Claims must
+    not exceed that authorized level.
+    """
+
+    if actor.kind is not ActorKind.HUMAN:
+        raise MalformedCommandError(
+            "readiness decision authorizing actor must be human"
+        )
+    if actor.actor_id != decision.authorized_actor_id:
+        raise MalformedCommandError(
+            "actor does not match readiness decision authorized_actor_id"
+        )
+    if actor.tenant_id != decision.tenant_id:
+        raise MalformedCommandError("decision authorizing actor tenant mismatch")
+    if decision.outcome is not DecisionOutcome.APPROVED:
+        raise MalformedCommandError(
+            "readiness requires an approved workspace decision"
+        )
+    if decision.tenant_id != tenant_id:
+        raise MalformedCommandError("readiness decision tenant mismatch")
+    if decision.workspace_object_id != workspace_object_id:
+        raise MalformedCommandError(
+            "readiness decision workspace does not match assessment"
+        )
+    if decision.subject_revision_id not in subject_revision_ids:
+        raise MalformedCommandError(
+            "readiness decision subject must be the model revision or assessment"
+        )
+    if decision.authorized_readiness_level is None:
+        raise MalformedCommandError(
+            "readiness decision must set authorized_readiness_level"
+        )
+    readiness_at_most(
+        claimed=claimed_level,
+        evidenced_maximum=decision.authorized_readiness_level,
+    )
+    return decision.authorized_readiness_level
 
 
 def derive_evidenced_maximum_readiness(

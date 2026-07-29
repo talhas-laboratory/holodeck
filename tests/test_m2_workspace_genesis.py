@@ -210,7 +210,7 @@ def _open_proposal(
 def test_migrate_v17_creates_genesis_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 21
+    assert governance_schema_version(conn) == 22
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -547,7 +547,7 @@ def test_service_actor_with_genesis_decide_cannot_decide() -> None:
     assert conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
 
 
-def test_service_actor_with_genesis_propose_cannot_propose() -> None:
+def test_service_actor_with_genesis_propose_can_propose_but_cannot_decide() -> None:
     conn, service, ids, _ = _service()
     _grant_genesis(conn, ids, actor_id=ids.system_service)
     endpoint = _endpoint(ids)
@@ -559,29 +559,52 @@ def test_service_actor_with_genesis_propose_cannot_propose() -> None:
         locator="memory://channel-service-propose",
     )
     service.save_external_reference(location)
-    with pytest.raises(MalformedCommandError, match="human"):
-        service.propose_workspace_genesis(
-            WorkspaceGenesisProposal(
-                proposal_id=generate_uuidv7(),
-                tenant_id=ids.tenant_alpha,
-                endpoint_id=endpoint.endpoint_id,
-                location_kind=LocationKind.CHANNEL,
-                external_location_id="channel-service-propose",
-                location_reference_id=location.reference_id,
-                proposed_workspace_object_id=generate_uuidv7(),
-                display_name="Service Denied",
-                purpose_text="Should fail",
-                status=GenesisProposalStatus.PROPOSED,
-                created_at=NOW,
-                created_by_actor_id=ids.system_service,
-            )
+    proposal = service.propose_workspace_genesis(
+        WorkspaceGenesisProposal(
+            proposal_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            endpoint_id=endpoint.endpoint_id,
+            location_kind=LocationKind.CHANNEL,
+            external_location_id="channel-service-propose",
+            location_reference_id=location.reference_id,
+            proposed_workspace_object_id=generate_uuidv7(),
+            display_name="Service Proposed",
+            purpose_text="Service may propose",
+            status=GenesisProposalStatus.PROPOSED,
+            created_at=NOW,
+            created_by_actor_id=ids.system_service,
         )
+    )
+    assert proposal.status is GenesisProposalStatus.PROPOSED
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM gov_workspace_genesis_proposals"
         ).fetchone()[0]
-        == 0
+        == 1
     )
+    with pytest.raises(MalformedCommandError, match="human"):
+        service.decide_workspace_genesis(
+            WorkspaceGenesisDecision(
+                proposal_id=proposal.proposal_id,
+                tenant_id=ids.tenant_alpha,
+                outcome=GenesisDecisionOutcome.APPROVE,
+                decided_at=NOW,
+                decided_by_actor_id=ids.system_service,
+            )
+        )
+    assert conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 0
+    # Human can still decide a service-proposed genesis.
+    decided = service.decide_workspace_genesis(
+        WorkspaceGenesisDecision(
+            proposal_id=proposal.proposal_id,
+            tenant_id=ids.tenant_alpha,
+            outcome=GenesisDecisionOutcome.APPROVE,
+            decided_at=NOW,
+            decided_by_actor_id=ids.human_owner,
+        )
+    )
+    assert decided.status is GenesisProposalStatus.APPROVED
+    assert conn.execute("SELECT COUNT(*) FROM gov_workspaces").fetchone()[0] == 1
 
 
 def test_genesis_emits_proposed_and_decided_events() -> None:

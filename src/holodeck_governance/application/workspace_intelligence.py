@@ -43,6 +43,7 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceReadinessAssessment,
     WorkspaceSource,
     assert_trust_promotion_decision_authorizes,
+    assert_readiness_decision_authorizes,
     derive_evidenced_maximum_readiness,
     invent_sources_from_observations,
     module_ids_depending_on_source,
@@ -264,6 +265,14 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
     def save_readiness_assessment(
         self, assessment: WorkspaceReadinessAssessment
     ) -> None: ...
+
+    def record_readiness_assessment(
+        self,
+        assessment: WorkspaceReadinessAssessment,
+        *,
+        readiness_decision_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> WorkspaceReadinessAssessment: ...
 
     def get_readiness_assessment(
         self, assessment_id: str
@@ -828,10 +837,29 @@ class WorkspaceIntelligenceApplicationService:
         return self.repository.get_workspace_decision(decision_id)
 
     def save_readiness_assessment(
-        self, assessment: WorkspaceReadinessAssessment
+        self,
+        assessment: WorkspaceReadinessAssessment,
+        *,
+        readiness_decision_id: str | None = None,
     ) -> WorkspaceReadinessAssessment:
-        self.repository.save_readiness_assessment(assessment)
-        return assessment
+        """Persist readiness through the shared evidence + human-auth gate."""
+
+        return self.repository.record_readiness_assessment(
+            assessment, readiness_decision_id=readiness_decision_id
+        )
+
+    def record_readiness_assessment(
+        self,
+        assessment: WorkspaceReadinessAssessment,
+        *,
+        readiness_decision_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> WorkspaceReadinessAssessment:
+        return self.repository.record_readiness_assessment(
+            assessment,
+            readiness_decision_id=readiness_decision_id,
+            causation_id=causation_id,
+        )
 
     def get_readiness_assessment(
         self, assessment_id: str
@@ -954,31 +982,24 @@ class WorkspaceIntelligenceApplicationService:
             )
         if decision.tenant_id != proposal.tenant_id:
             raise CrossTenantAccessError("readiness decision tenant mismatch")
-        if decision.workspace_object_id != proposal.workspace_object_id:
-            raise MalformedCommandError(
-                "readiness decision workspace does not match curation proposal"
-            )
-        if decision.outcome is not DecisionOutcome.APPROVED:
-            raise MalformedCommandError(
-                "readiness requires an approved workspace decision"
-            )
-        if decision.subject_revision_id not in {
-            proposal.model_revision_id,
-            proposal.assessment_id or "",
-        }:
-            raise MalformedCommandError(
-                "readiness decision subject must be the model revision or assessment"
-            )
         actor = self.repository.get_actor(decision.authorized_actor_id)
         if actor is None:
             raise NotFoundGovernanceError(
                 f"unknown actor {decision.authorized_actor_id}"
             )
-        if actor.kind is not ActorKind.HUMAN:
-            raise MalformedCommandError(
-                "readiness decision authorizing actor must be human"
-            )
-        return proposal.claimed_readiness_level
+        return assert_readiness_decision_authorizes(
+            decision=decision,
+            actor=actor,
+            claimed_level=proposal.claimed_readiness_level,
+            tenant_id=proposal.tenant_id,
+            workspace_object_id=proposal.workspace_object_id,
+            subject_revision_ids=frozenset(
+                {
+                    proposal.model_revision_id,
+                    proposal.assessment_id or "",
+                }
+            ),
+        )
 
     def _derive_evidenced_maximum_for_proposal(
         self,

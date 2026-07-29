@@ -40,6 +40,7 @@ from holodeck_governance.domain.workspace.intelligence.model import (
 from holodeck_governance.domain.workspace.intelligence.readiness import (
     AUTHORITY_COVERING_MODULE_KEYS,
     WorkspaceReadinessAssessment,
+    assert_readiness_decision_authorizes,
     derive_evidenced_maximum_readiness,
     readiness_at_most,
     readiness_level_index,
@@ -154,6 +155,7 @@ __all__ = [
     "WorkspaceSource",
     "assert_trust_promotion_allowed",
     "assert_trust_promotion_decision_authorizes",
+    "assert_readiness_decision_authorizes",
     "classify_observed_path",
     "derive_evidenced_maximum_readiness",
     "invent_sources_from_observations",

@@ -13,6 +13,7 @@ from holodeck_governance.domain.workspace.intelligence.types import (
     ContradictionStatus,
     DecisionOutcome,
     GapStatus,
+    ReadinessLevel,
 )
 
 
@@ -125,6 +126,7 @@ class WorkspaceDecision:
     authorized_actor_id: str
     decided_at: datetime
     signed_source_reference_id: str | None = None
+    authorized_readiness_level: ReadinessLevel | None = None
     schema_version: str = "m2.workspace_decision.v1"
 
     def __post_init__(self) -> None:

@@ -269,3 +269,30 @@ Release blockers found against M2 acceptance and fixed in this change:
 
 Board packets added: M2-017 (ready), M2-011 (backlog), M2-009 (blocked),
 M2-018 (ready). M2-002/M2-013 done-lane symlinks already present.
+
+## 2026-07-29 — Readiness bypass closed + observation coupling
+
+Follow-up acceptance findings against the prior blocker fix:
+
+1. **Readiness write gate** — all readiness persistence now goes through
+   `record_readiness_assessment` (repository + application). It loads durable
+   evidence, derives the ceiling with `derive_evidenced_maximum_readiness`,
+   rejects claims above that ceiling, and for ≥ `GOVERNED` requires a HUMAN
+   APPROVED `WorkspaceDecision` with typed `authorized_readiness_level`.
+   `onboard_intelligence`, `save_readiness_assessment`, and `activate_curation`
+   share this gate (no unchecked insert paths).
+2. **Typed authorized readiness** — migration v22 adds
+   `gov_workspace_decisions.authorized_readiness_level`. Curation no longer
+   treats `proposal.claimed_readiness_level` as human authorization; it uses
+   `decision.authorized_readiness_level` and enforces `claimed <= authorized`.
+3. **Observation coupling** — v22 installs tenant/workspace coupling triggers on
+   `gov_workspace_source_observations` (must match the referenced source) and
+   adds `gov_context_modules.observation_ids_json` / domain
+   `ContextModule.observation_ids`. Module save/onboard require observation_ids
+   when source_ids are present and validate existence, tenant/workspace, and
+   source membership.
+4. **Genesis propose relaxed** — non-human actors with propose authority may
+   propose; decide remains HUMAN-only.
+
+M2-018 remains **ready** (minimal conversation_context_manifest stub only;
+rich Buzz-backed capture workflow not implemented in this change).

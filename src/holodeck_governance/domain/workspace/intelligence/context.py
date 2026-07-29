@@ -104,6 +104,7 @@ class ContextModule:
     revision: int = 1
     item_ids: tuple[str, ...] = ()
     source_ids: tuple[str, ...] = ()
+    observation_ids: tuple[str, ...] = ()
     approved_by_actor_id: str | None = None
     approved_at: datetime | None = None
     schema_version: str = "m2.context_module.v1"
@@ -129,6 +130,12 @@ class ContextModule:
             require_opaque_id(item_id, "item_ids")
         for source_id in self.source_ids:
             require_opaque_id(source_id, "source_ids")
+        for observation_id in self.observation_ids:
+            require_opaque_id(observation_id, "observation_ids")
+        if self.source_ids and not self.observation_ids:
+            raise MalformedCommandError(
+                "observation_ids are required when source_ids are present"
+            )
         if self.approval_status is ModuleApprovalStatus.APPROVED:
             if self.approved_by_actor_id is None or self.approved_at is None:
                 raise MalformedCommandError(

@@ -225,6 +225,7 @@ def _source(
         created_at=NOW,
         created_by_actor_id=ids.human_owner,
         module_tags=("architecture",),
+        current_observation_id=generate_uuidv7(),
     )
 
 
@@ -234,6 +235,7 @@ def _module(
     key: str = "architecture",
     revision: int = 1,
     source_ids: tuple[str, ...] = (),
+    observation_ids: tuple[str, ...] = (),
 ):
     from holodeck_governance.domain.workspace.intelligence import ContextModule
 
@@ -250,6 +252,7 @@ def _module(
         created_by_actor_id=ids.human_owner,
         revision=revision,
         source_ids=source_ids,
+        observation_ids=observation_ids,
     )
 
 
@@ -268,15 +271,21 @@ def _gap(ids: FixtureIds, *, question: str = "What is approved topology?") -> Kn
     )
 
 
-def _readiness(ids: FixtureIds, *, model_id: str) -> WorkspaceReadinessAssessment:
+def _readiness(
+    ids: FixtureIds,
+    *,
+    model_id: str,
+    level: ReadinessLevel = ReadinessLevel.UNINTERPRETED,
+    open_gap_ids: tuple[str, ...] = (),
+) -> WorkspaceReadinessAssessment:
     return WorkspaceReadinessAssessment(
         assessment_id=generate_uuidv7(),
         tenant_id=ids.tenant_alpha,
         workspace_object_id=ids.workspace_alpha_1,
         model_revision_id=model_id,
-        level=ReadinessLevel.DISCOVERED,
+        level=level,
         dimensions_checked=("identity", "sources"),
-        open_gap_ids=(),
+        open_gap_ids=open_gap_ids,
         policy_basis="m2.onboarding.v1",
         evaluator_summary="discovered at onboard",
         assessed_at=NOW,
@@ -340,6 +349,7 @@ def _readiness_decision(
     *,
     model_id: str,
     actor_id: str | None = None,
+    authorized_readiness_level: ReadinessLevel = ReadinessLevel.GOVERNED,
 ) -> WorkspaceDecision:
     return WorkspaceDecision(
         decision_id=generate_uuidv7(),
@@ -350,6 +360,7 @@ def _readiness_decision(
         rationale="Human authorized readiness level",
         authorized_actor_id=actor_id or ids.human_owner,
         decided_at=NOW,
+        authorized_readiness_level=authorized_readiness_level,
     )
 
 
@@ -380,14 +391,18 @@ def test_activate_curation_happy_path_with_human_decision_and_supersede() -> Non
     second = _model(ids, revision=2)
     source = _source(ids, locator="repo://README.md")
     module = _module(
-        ids, key="architecture", revision=2, source_ids=(source.source_id,)
+        ids,
+        key="architecture",
+        revision=2,
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
     )
     service.onboard(
         model=second,
         sources=(source,),
         modules=(module,),
         gaps=(),
-        readiness=_readiness(ids, model_id=second.model_revision_id),
+        readiness=_readiness(ids, model_id=second.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -482,7 +497,7 @@ def test_silent_instruction_authority_without_decision_fails() -> None:
         sources=(source,),
         modules=(),
         gaps=(),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -519,7 +534,7 @@ def test_service_actor_decision_rejected() -> None:
         sources=(source,),
         modules=(),
         gaps=(),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -554,7 +569,7 @@ def test_wrong_subject_and_rejected_decision_fail() -> None:
         sources=(source, other),
         modules=(),
         gaps=(),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -606,7 +621,7 @@ def test_missing_decision_id_fails() -> None:
         sources=(source,),
         modules=(),
         gaps=(),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -637,7 +652,7 @@ def test_service_activator_with_valid_human_decision_succeeds() -> None:
         sources=(source,),
         modules=(),
         gaps=(),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, level=ReadinessLevel.DISCOVERED),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -674,7 +689,7 @@ def test_open_gap_ids_must_match_actual_open_gaps() -> None:
         sources=(),
         modules=(),
         gaps=(gap,),
-        readiness=_readiness(ids, model_id=model.model_revision_id),
+        readiness=_readiness(ids, model_id=model.model_revision_id, open_gap_ids=(gap.gap_id,)),
         actor_id=ids.human_owner,
         at=NOW,
     )
@@ -860,3 +875,148 @@ def test_reactivating_already_approved_model_fails_cleanly() -> None:
     service.activate_curation(proposal)
     with pytest.raises(MalformedCommandError, match="only proposed"):
         service.activate_curation(proposal)
+
+
+def test_onboard_rejects_operationally_assured_without_evidence() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    with pytest.raises(
+        MalformedCommandError,
+        match="readiness cannot exceed|readiness_decision_id is required",
+    ):
+        service.onboard(
+            model=model,
+            sources=(),
+            modules=(),
+            gaps=(),
+            readiness=_readiness(
+                ids,
+                model_id=model.model_revision_id,
+                level=ReadinessLevel.OPERATIONALLY_ASSURED,
+            ),
+            actor_id=ids.human_owner,
+            at=NOW,
+        )
+
+
+def test_save_readiness_assessment_rejects_operationally_assured_without_evidence() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    service.save_model_revision(model)
+    with pytest.raises(MalformedCommandError, match="readiness cannot exceed|readiness_decision_id"):
+        service.save_readiness_assessment(
+            WorkspaceReadinessAssessment(
+                assessment_id=generate_uuidv7(),
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                model_revision_id=model.model_revision_id,
+                level=ReadinessLevel.OPERATIONALLY_ASSURED,
+                dimensions_checked=("identity", "authority"),
+                open_gap_ids=(),
+                policy_basis="m2.bypass.v1",
+                evaluator_summary="caller-trusted claim",
+                assessed_at=NOW,
+                assessed_by_actor_id=ids.human_owner,
+            )
+        )
+
+
+def test_governed_decision_cannot_authorize_operationally_assured_activation() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    source = _source(ids)
+    module = _module(
+        ids,
+        key="security-and-authority",
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
+    )
+    service.onboard(
+        model=model,
+        sources=(source,),
+        modules=(module,),
+        gaps=(),
+        readiness=_readiness(
+            ids,
+            model_id=model.model_revision_id,
+            level=ReadinessLevel.DISCOVERED,
+        ),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    trust_decision = _human_decision(ids, source_id=source.source_id)
+    service.save_workspace_decision(trust_decision)
+    readiness_decision = _readiness_decision(
+        ids,
+        model_id=model.model_revision_id,
+        authorized_readiness_level=ReadinessLevel.GOVERNED,
+    )
+    service.save_workspace_decision(readiness_decision)
+    with pytest.raises(MalformedCommandError, match="readiness cannot exceed"):
+        service.activate_curation(
+            _proposal(
+                ids,
+                model_id=model.model_revision_id,
+                module_ids=(module.module_id,),
+                promotions=(
+                    TrustPromotion(
+                        source_id=source.source_id,
+                        to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                        decision_id=trust_decision.decision_id,
+                    ),
+                ),
+                claimed=ReadinessLevel.OPERATIONALLY_ASSURED,
+                readiness_decision_id=readiness_decision.decision_id,
+            )
+        )
+
+
+def test_activate_curation_governed_with_evidence_and_typed_decision() -> None:
+    _conn, service, ids, _ = _service()
+    model = _model(ids)
+    source = _source(ids)
+    module = _module(
+        ids,
+        key="security-and-authority",
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
+    )
+    service.onboard(
+        model=model,
+        sources=(source,),
+        modules=(module,),
+        gaps=(),
+        readiness=_readiness(
+            ids,
+            model_id=model.model_revision_id,
+            level=ReadinessLevel.DISCOVERED,
+        ),
+        actor_id=ids.human_owner,
+        at=NOW,
+    )
+    trust_decision = _human_decision(ids, source_id=source.source_id)
+    service.save_workspace_decision(trust_decision)
+    readiness_decision = _readiness_decision(
+        ids,
+        model_id=model.model_revision_id,
+        authorized_readiness_level=ReadinessLevel.GOVERNED,
+    )
+    service.save_workspace_decision(readiness_decision)
+    result = service.activate_curation(
+        _proposal(
+            ids,
+            model_id=model.model_revision_id,
+            module_ids=(module.module_id,),
+            promotions=(
+                TrustPromotion(
+                    source_id=source.source_id,
+                    to_trust=TrustClass.INSTRUCTION_AUTHORITY,
+                    decision_id=trust_decision.decision_id,
+                ),
+            ),
+            claimed=ReadinessLevel.GOVERNED,
+            readiness_decision_id=readiness_decision.decision_id,
+        )
+    )
+    assert result.readiness.level is ReadinessLevel.GOVERNED
+    assert result.approved_model.status is ModelRevisionStatus.APPROVED

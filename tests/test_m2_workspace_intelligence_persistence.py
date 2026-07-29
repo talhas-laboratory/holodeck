@@ -236,6 +236,7 @@ def _source(
         created_at=NOW,
         created_by_actor_id=ids.human_owner,
         module_tags=tags,
+        current_observation_id=generate_uuidv7(),
     )
 
 
@@ -244,6 +245,7 @@ def _module(
     *,
     key: str = "architecture",
     source_ids: tuple[str, ...] = (),
+    observation_ids: tuple[str, ...] = (),
 ) -> ContextModule:
     return ContextModule(
         module_id=generate_uuidv7(),
@@ -257,6 +259,7 @@ def _module(
         created_at=NOW,
         created_by_actor_id=ids.human_owner,
         source_ids=source_ids,
+        observation_ids=observation_ids,
     )
 
 
@@ -300,7 +303,7 @@ def _readiness(
 def test_migrate_v19_creates_intelligence_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 21
+    assert governance_schema_version(conn) == 22
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -327,7 +330,7 @@ def test_onboard_persists_intelligence_without_mission_or_run() -> None:
     conn, service, ids, _ = _service()
     model = _model(ids)
     source = _source(ids)
-    module = _module(ids, source_ids=(source.source_id,))
+    module = _module(ids, source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
     gap = _gap(ids)
     readiness = _readiness(ids, model_id=model.model_revision_id, open_gap_ids=(gap.gap_id,))
 
@@ -505,6 +508,7 @@ def test_context_module_rejects_unknown_item_and_source_ids() -> None:
                 created_at=NOW,
                 created_by_actor_id=ids.human_owner,
                 source_ids=(generate_uuidv7(),),
+                observation_ids=(generate_uuidv7(),),
             )
         )
 
@@ -512,7 +516,7 @@ def test_context_module_rejects_unknown_item_and_source_ids() -> None:
 def test_mark_source_stale_only_affects_dependent_modules() -> None:
     conn, service, ids, _ = _service()
     source = _source(ids)
-    dependent = _module(ids, key="architecture", source_ids=(source.source_id,))
+    dependent = _module(ids, key="architecture", source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
     unrelated = _module(ids, key="domain-language")
     service.register_source(source)
     service.save_context_module(dependent)
@@ -670,3 +674,55 @@ def test_duplicate_source_natural_key_rejected() -> None:
     service.register_source(first)
     with pytest.raises(IdempotencyConflictError):
         service.register_source(_source(ids, locator="repo://dup.md"))
+
+
+def test_observation_insert_rejects_cross_tenant_workspace_coupling() -> None:
+    conn, service, ids, _ = _service()
+    source = _source(ids)
+    service.register_source(source)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            """
+            INSERT INTO gov_workspace_source_observations(
+                observation_id, source_id, tenant_id, workspace_object_id,
+                observed_revision, content_hash, observed_at, created_at,
+                created_by_actor_id, schema_version
+            ) VALUES (?, ?, ?, ?, 'rev', NULL, ?, ?, ?, 'm2.workspace_source_observation.v1')
+            """,
+            (
+                generate_uuidv7(),
+                source.source_id,
+                ids.tenant_beta,
+                ids.workspace_beta_1,
+                NOW.isoformat(),
+                NOW.isoformat(),
+                ids.human_reviewer,
+            ),
+        )
+        conn.commit()
+
+
+def test_module_rejects_nonexistent_and_wrong_source_observation_ids() -> None:
+    _conn, service, ids, _ = _service()
+    source = _source(ids)
+    other = _source(ids, locator="repo://OTHER.md")
+    service.register_source(source)
+    service.register_source(other)
+    with pytest.raises(NotFoundGovernanceError, match="unknown source observation"):
+        service.save_context_module(
+            _module(
+                ids,
+                source_ids=(source.source_id,),
+                observation_ids=(generate_uuidv7(),),
+            )
+        )
+    with pytest.raises(
+        MalformedCommandError, match="observation_id does not belong to module source_ids"
+    ):
+        service.save_context_module(
+            _module(
+                ids,
+                source_ids=(source.source_id,),
+                observation_ids=(other.current_observation_id,),
+            )
+        )

@@ -223,6 +223,7 @@ def _source(
         created_by_actor_id=ids.human_owner,
         content_hash=content_hash,
         module_tags=("architecture",),
+        current_observation_id=generate_uuidv7(),
     )
 
 
@@ -231,6 +232,7 @@ def _module(
     *,
     key: str = "architecture",
     source_ids: tuple[str, ...] = (),
+    observation_ids: tuple[str, ...] = (),
 ) -> ContextModule:
     return ContextModule(
         module_id=generate_uuidv7(),
@@ -245,6 +247,7 @@ def _module(
         created_by_actor_id=ids.human_owner,
         revision=1,
         source_ids=source_ids,
+        observation_ids=observation_ids,
     )
 
 
@@ -283,8 +286,8 @@ def test_module_ids_depending_on_source_helper() -> None:
     ids = FixtureIds()
     source_a = generate_uuidv7()
     source_b = generate_uuidv7()
-    dependent = _module(ids, key="architecture", source_ids=(source_a,))
-    unrelated = _module(ids, key="domain-language", source_ids=(source_b,))
+    dependent = _module(ids, key="architecture", source_ids=(source_a,), observation_ids=(generate_uuidv7(),))
+    unrelated = _module(ids, key="domain-language", source_ids=(source_b,), observation_ids=(generate_uuidv7(),))
     assert module_ids_depending_on_source(
         (dependent, unrelated), source_a
     ) == (dependent.module_id,)
@@ -294,8 +297,8 @@ def test_revision_change_stales_only_dependent_modules() -> None:
     conn, service, ids, _ = _service()
     source = _source(ids)
     other = _source(ids, locator="repo://README.md", observed_revision="r1")
-    dependent = _module(ids, key="architecture", source_ids=(source.source_id,))
-    unrelated = _module(ids, key="domain-language", source_ids=(other.source_id,))
+    dependent = _module(ids, key="architecture", source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
+    unrelated = _module(ids, key="domain-language", source_ids=(other.source_id,), observation_ids=(other.current_observation_id,))
     service.register_source(source)
     service.register_source(other)
     service.save_context_module(dependent)
@@ -379,7 +382,7 @@ def test_refresh_creates_immutable_source_observations() -> None:
 def test_same_revision_refresh_is_noop() -> None:
     conn, service, ids, _ = _service()
     source = _source(ids, observed_revision="abc123")
-    dependent = _module(ids, source_ids=(source.source_id,))
+    dependent = _module(ids, source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
     service.register_source(source)
     service.save_context_module(dependent)
 
@@ -415,7 +418,7 @@ def test_same_revision_refresh_is_noop() -> None:
 def test_propagate_source_stale_resolves_dependents() -> None:
     _conn, service, ids, _ = _service()
     source = _source(ids)
-    dependent = _module(ids, key="architecture", source_ids=(source.source_id,))
+    dependent = _module(ids, key="architecture", source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
     unrelated = _module(ids, key="domain-language")
     service.register_source(source)
     service.save_context_module(dependent)
@@ -446,11 +449,27 @@ def test_query_workspace_intelligence_snapshot() -> None:
     service.save_model_revision(proposed)
     source = _source(ids)
     service.register_source(source)
-    module = _module(ids, source_ids=(source.source_id,))
+    module = _module(
+        ids,
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
+    )
     service.save_context_module(module)
     gap = _gap(ids)
     service.save_knowledge_gap(gap)
-    readiness = _readiness(ids, model_id=approved.model_revision_id)
+    readiness = WorkspaceReadinessAssessment(
+        assessment_id=generate_uuidv7(),
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        model_revision_id=approved.model_revision_id,
+        level=ReadinessLevel.DISCOVERED,
+        dimensions_checked=("identity", "sources"),
+        open_gap_ids=(gap.gap_id,),
+        policy_basis="m2.refresh.v1",
+        evaluator_summary="discovered snapshot",
+        assessed_at=NOW,
+        assessed_by_actor_id=ids.human_owner,
+    )
     service.save_readiness_assessment(readiness)
 
     service.refresh_sources(

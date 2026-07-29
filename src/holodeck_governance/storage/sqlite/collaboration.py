@@ -1310,10 +1310,6 @@ class SqliteCollaborationRepository:
                 )
             if str(actor["tenant_id"]) != proposal.tenant_id:
                 raise CrossTenantAccessError("genesis proposal actor tenant mismatch")
-            if str(actor["kind"]) != ActorKind.HUMAN.value:
-                raise MalformedCommandError(
-                    "genesis proposals require a human created_by actor"
-                )
             if not self.actor_has_permission(
                 tenant_id=proposal.tenant_id,
                 actor_id=proposal.created_by_actor_id,

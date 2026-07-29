@@ -59,6 +59,11 @@ from holodeck_governance.domain.workspace.intelligence import (
     WorkspaceSource,
     SourceObservation,
     assert_trust_promotion_allowed,
+    assert_readiness_decision_authorizes,
+    derive_evidenced_maximum_readiness,
+    readiness_at_most,
+    readiness_level_index,
+    AUTHORITY_COVERING_MODULE_KEYS,
 )
 from holodeck_governance.storage.sqlite.migrations import migrate_governance
 from holodeck_governance.storage.sqlite.repos import SqliteDomainEventRepository
@@ -488,6 +493,7 @@ class SqliteWorkspaceIntelligenceRepository:
             revision=module.revision,
             item_ids=module.item_ids,
             source_ids=module.source_ids,
+            observation_ids=module.observation_ids,
             approved_by_actor_id=approved_by_actor_id,
             approved_at=approved_at,
             schema_version=module.schema_version,
@@ -538,6 +544,7 @@ class SqliteWorkspaceIntelligenceRepository:
             observed_at=source.observed_at,
             created_at=source.created_at,
             created_by_actor_id=source.created_by_actor_id,
+            observation_id=source.current_observation_id,
         )
         self._commit_write()
 
@@ -973,6 +980,7 @@ class SqliteWorkspaceIntelligenceRepository:
             tenant_id=module.tenant_id,
             workspace_object_id=module.workspace_object_id,
         )
+        self._require_module_observation_ids(module)
         self._insert_context_module(module)
         self._commit_write()
 
@@ -1044,6 +1052,39 @@ class SqliteWorkspaceIntelligenceRepository:
                     "context module source workspace does not match module"
                 )
 
+    def _require_module_observation_ids(self, module: ContextModule) -> None:
+        if module.source_ids and not module.observation_ids:
+            raise MalformedCommandError(
+                "observation_ids are required when source_ids are present"
+            )
+        allowed_sources = set(module.source_ids)
+        for observation_id in module.observation_ids:
+            row = self._conn.execute(
+                """
+                SELECT source_id, tenant_id, workspace_object_id
+                FROM gov_workspace_source_observations
+                WHERE observation_id = ?
+                """,
+                (observation_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundGovernanceError(
+                    f"unknown source observation {observation_id}"
+                )
+            if str(row["tenant_id"]) != module.tenant_id:
+                raise CrossTenantAccessError(
+                    "context module observation tenant mismatch"
+                )
+            if str(row["workspace_object_id"]) != module.workspace_object_id:
+                raise MalformedCommandError(
+                    "context module observation workspace does not match module"
+                )
+            source_id = str(row["source_id"])
+            if allowed_sources and source_id not in allowed_sources:
+                raise MalformedCommandError(
+                    "observation_id does not belong to module source_ids"
+                )
+
     def _insert_context_module(self, module: ContextModule) -> None:
         _insert_immutable(
             self._conn,
@@ -1052,8 +1093,8 @@ class SqliteWorkspaceIntelligenceRepository:
                 module_id, tenant_id, workspace_object_id, module_key, purpose_text,
                 applicability_text, approval_status, freshness, created_at,
                 created_by_actor_id, revision, item_ids_json, source_ids_json,
-                approved_by_actor_id, approved_at, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                observation_ids_json, approved_by_actor_id, approved_at, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 module.module_id,
@@ -1069,6 +1110,7 @@ class SqliteWorkspaceIntelligenceRepository:
                 module.revision,
                 _json_list(module.item_ids),
                 _json_list(module.source_ids),
+                _json_list(module.observation_ids),
                 module.approved_by_actor_id,
                 None if module.approved_at is None else module.approved_at.isoformat(),
                 module.schema_version,
@@ -1341,8 +1383,8 @@ class SqliteWorkspaceIntelligenceRepository:
             INSERT INTO gov_workspace_decisions(
                 decision_id, tenant_id, workspace_object_id, subject_revision_id,
                 outcome, rationale, authorized_actor_id, decided_at,
-                signed_source_reference_id, schema_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                signed_source_reference_id, authorized_readiness_level, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 decision.decision_id,
@@ -1354,6 +1396,11 @@ class SqliteWorkspaceIntelligenceRepository:
                 decision.authorized_actor_id,
                 decision.decided_at.isoformat(),
                 decision.signed_source_reference_id,
+                (
+                    None
+                    if decision.authorized_readiness_level is None
+                    else decision.authorized_readiness_level.value
+                ),
                 decision.schema_version,
             ),
         )
@@ -1371,16 +1418,159 @@ class SqliteWorkspaceIntelligenceRepository:
     def save_readiness_assessment(
         self, assessment: WorkspaceReadinessAssessment
     ) -> None:
-        self.require_workspace_object(
+        """Persist readiness via the shared evidence + human-auth gate."""
+
+        self.record_readiness_assessment(assessment)
+
+    def record_readiness_assessment(
+        self,
+        assessment: WorkspaceReadinessAssessment,
+        *,
+        readiness_decision_id: str | None = None,
+        causation_id: str | None = None,
+    ) -> WorkspaceReadinessAssessment:
+        """Gate, insert, and emit readiness.assessed for every readiness write.
+
+        When already inside a write transaction (``_tx_depth > 0``), does not
+        begin/commit; the caller owns the transaction. Otherwise opens one.
+        """
+
+        nested = self._tx_depth > 0
+        previous: str | None = None
+        if not nested:
+            previous = self._begin_write()
+        try:
+            self.require_workspace_object(
+                assessment.workspace_object_id, tenant_id=assessment.tenant_id
+            )
+            self._require_curate(
+                assessment.assessed_by_actor_id,
+                tenant_id=assessment.tenant_id,
+                at=assessment.assessed_at,
+            )
+            self._assert_readiness_claim_allowed(
+                assessment, readiness_decision_id=readiness_decision_id
+            )
+            self._insert_readiness(assessment)
+            self._append_event(
+                tenant_id=assessment.tenant_id,
+                event_type=M2_EVENT_READINESS_ASSESSED,
+                actor_id=assessment.assessed_by_actor_id,
+                workspace_object_id=assessment.workspace_object_id,
+                causation_id=causation_id or assessment.assessment_id,
+                at=assessment.assessed_at,
+                payload={
+                    "assessment_id": assessment.assessment_id,
+                    "level": assessment.level.value,
+                    "model_revision_id": assessment.model_revision_id,
+                },
+            )
+            if not nested:
+                self._commit_txn(previous)
+        except Exception:
+            if not nested:
+                self._rollback_txn(previous)
+            raise
+        return assessment
+
+    def _assert_readiness_claim_allowed(
+        self,
+        assessment: WorkspaceReadinessAssessment,
+        *,
+        readiness_decision_id: str | None,
+    ) -> None:
+        model = self.get_model_revision(assessment.model_revision_id)
+        if model is None:
+            raise NotFoundGovernanceError(
+                f"unknown model revision {assessment.model_revision_id}"
+            )
+        if model.tenant_id != assessment.tenant_id:
+            raise CrossTenantAccessError("readiness model tenant mismatch")
+        if model.workspace_object_id != assessment.workspace_object_id:
+            raise MalformedCommandError(
+                "readiness model workspace does not match assessment"
+            )
+
+        actual_open = {
+            gap.gap_id
+            for gap in self.list_knowledge_gaps(
+                assessment.workspace_object_id,
+                tenant_id=assessment.tenant_id,
+                status=GapStatus.OPEN,
+            )
+        }
+        if set(assessment.open_gap_ids) != actual_open:
+            raise MalformedCommandError(
+                "open_gap_ids must exactly match open knowledge gaps"
+            )
+
+        sources = self.list_sources(
             assessment.workspace_object_id, tenant_id=assessment.tenant_id
         )
-        self._require_curate(
-            assessment.assessed_by_actor_id,
-            tenant_id=assessment.tenant_id,
-            at=assessment.assessed_at,
+        modules = self.list_context_modules(
+            assessment.workspace_object_id, tenant_id=assessment.tenant_id
         )
-        self._insert_readiness(assessment)
-        self._commit_write()
+        approved_modules = [
+            module
+            for module in modules
+            if module.approval_status is ModuleApprovalStatus.APPROVED
+        ]
+        has_ia = any(
+            source.trust_class is TrustClass.INSTRUCTION_AUTHORITY
+            or source.instruction_authority
+            for source in sources
+        )
+        has_authority_module = any(
+            module.module_key in AUTHORITY_COVERING_MODULE_KEYS
+            for module in approved_modules
+        )
+        model_approved = model.status is ModelRevisionStatus.APPROVED
+
+        human_authorized: ReadinessLevel | None = None
+        claimed_governed_or_higher = readiness_level_index(
+            assessment.level
+        ) >= readiness_level_index(ReadinessLevel.GOVERNED)
+        if claimed_governed_or_higher and readiness_decision_id is None:
+            raise MalformedCommandError(
+                "readiness_decision_id is required for governed or higher claims"
+            )
+        if readiness_decision_id is not None:
+            decision = self.get_workspace_decision(readiness_decision_id)
+            if decision is None:
+                raise NotFoundGovernanceError(
+                    f"unknown workspace decision {readiness_decision_id}"
+                )
+            if decision.tenant_id != assessment.tenant_id:
+                raise CrossTenantAccessError("readiness decision tenant mismatch")
+            actor = self.get_actor(decision.authorized_actor_id)
+            if actor is None:
+                raise NotFoundGovernanceError(
+                    f"unknown actor {decision.authorized_actor_id}"
+                )
+            human_authorized = assert_readiness_decision_authorizes(
+                decision=decision,
+                actor=actor,
+                claimed_level=assessment.level,
+                tenant_id=assessment.tenant_id,
+                workspace_object_id=assessment.workspace_object_id,
+                subject_revision_ids=frozenset(
+                    {
+                        assessment.model_revision_id,
+                        assessment.assessment_id,
+                    }
+                ),
+            )
+
+        evidenced = derive_evidenced_maximum_readiness(
+            has_model=True,
+            model_approved_or_approving=model_approved,
+            has_sources=bool(sources),
+            approved_or_approving_module_count=len(approved_modules),
+            open_gap_count=len(actual_open),
+            has_governed_authority_basis=has_ia or has_authority_module,
+            human_authorized_readiness=human_authorized,
+        )
+        readiness_at_most(claimed=assessment.level, evidenced_maximum=evidenced)
 
     def _insert_readiness(self, assessment: WorkspaceReadinessAssessment) -> None:
         _insert_immutable(
@@ -1531,6 +1721,7 @@ class SqliteWorkspaceIntelligenceRepository:
                     observed_at=source.observed_at,
                     created_at=source.created_at,
                     created_by_actor_id=source.created_by_actor_id,
+                    observation_id=source.current_observation_id,
                 )
             for item in items:
                 if item.approved_by_actor_id is not None:
@@ -1556,12 +1747,13 @@ class SqliteWorkspaceIntelligenceRepository:
                     tenant_id=tenant_id,
                     workspace_object_id=workspace_object_id,
                 )
+                self._require_module_observation_ids(module)
                 self._insert_context_module(module)
             for gap in gaps:
                 if gap.owner_actor_id is not None:
                     self._require_actor(gap.owner_actor_id, tenant_id=tenant_id)
                 self._insert_knowledge_gap(gap)
-            self._insert_readiness(readiness)
+            self.record_readiness_assessment(readiness)
 
             self._append_event(
                 tenant_id=tenant_id,
@@ -1608,18 +1800,6 @@ class SqliteWorkspaceIntelligenceRepository:
                     payload={"gap_id": gap.gap_id},
                 )
                 event_types.append(M2_EVENT_KNOWLEDGE_GAP_CREATED)
-            self._append_event(
-                tenant_id=tenant_id,
-                event_type=M2_EVENT_READINESS_ASSESSED,
-                actor_id=actor_id,
-                workspace_object_id=workspace_object_id,
-                causation_id=command_id,
-                at=at,
-                payload={
-                    "assessment_id": readiness.assessment_id,
-                    "level": readiness.level.value,
-                },
-            )
             event_types.append(M2_EVENT_READINESS_ASSESSED)
             self._commit_txn(previous)
         except Exception:
@@ -1762,19 +1942,10 @@ class SqliteWorkspaceIntelligenceRepository:
                     "open_gap_ids must exactly match open knowledge gaps"
                 )
 
-            self._insert_readiness(readiness)
-            self._append_event(
-                tenant_id=tenant_id,
-                event_type=M2_EVENT_READINESS_ASSESSED,
-                actor_id=proposal.actor_id,
-                workspace_object_id=workspace_object_id,
+            self.record_readiness_assessment(
+                readiness,
+                readiness_decision_id=proposal.readiness_decision_id,
                 causation_id=proposal.model_revision_id,
-                at=proposal.at,
-                payload={
-                    "assessment_id": readiness.assessment_id,
-                    "level": readiness.level.value,
-                    "model_revision_id": proposal.model_revision_id,
-                },
             )
             event_types.append(M2_EVENT_READINESS_ASSESSED)
             self._commit_txn(previous)
@@ -1918,6 +2089,12 @@ class SqliteWorkspaceIntelligenceRepository:
     def _context_module_from_row(row: sqlite3.Row) -> ContextModule:
         approved_by = row["approved_by_actor_id"]
         approved_at = row["approved_at"]
+        keys = row.keys()
+        observation_ids = (
+            _read_list(row["observation_ids_json"])
+            if "observation_ids_json" in keys and row["observation_ids_json"] is not None
+            else ()
+        )
         return ContextModule(
             module_id=str(row["module_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -1932,6 +2109,7 @@ class SqliteWorkspaceIntelligenceRepository:
             revision=int(row["revision"]),
             item_ids=_read_list(row["item_ids_json"]),
             source_ids=_read_list(row["source_ids_json"]),
+            observation_ids=observation_ids,
             approved_by_actor_id=None if approved_by is None else str(approved_by),
             approved_at=(
                 None if approved_at is None else datetime.fromisoformat(str(approved_at))
@@ -1979,6 +2157,13 @@ class SqliteWorkspaceIntelligenceRepository:
     @staticmethod
     def _decision_from_row(row: sqlite3.Row) -> WorkspaceDecision:
         signed = row["signed_source_reference_id"]
+        keys = row.keys()
+        authorized_level = None
+        if (
+            "authorized_readiness_level" in keys
+            and row["authorized_readiness_level"] is not None
+        ):
+            authorized_level = ReadinessLevel(str(row["authorized_readiness_level"]))
         return WorkspaceDecision(
             decision_id=str(row["decision_id"]),
             tenant_id=str(row["tenant_id"]),
@@ -1989,6 +2174,7 @@ class SqliteWorkspaceIntelligenceRepository:
             authorized_actor_id=str(row["authorized_actor_id"]),
             decided_at=datetime.fromisoformat(str(row["decided_at"])),
             signed_source_reference_id=None if signed is None else str(signed),
+            authorized_readiness_level=authorized_level,
             schema_version=str(row["schema_version"]),
         )
 
