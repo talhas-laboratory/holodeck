@@ -2,10 +2,10 @@
 
 from holodeck_governance.adapters.collaboration.memory import (
     MEMORY_PROVIDER,
-    CollaborationAdapterAuthError,
     InMemoryCollaborationAdapter,
     MemoryExternalActor,
 )
+from holodeck_governance.domain.collaboration import CollaborationAdapterAuthError
 
 __all__ = [
     "MEMORY_PROVIDER",

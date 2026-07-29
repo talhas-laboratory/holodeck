@@ -51,6 +51,10 @@ class CollaborationRepositoryPort(Protocol):
         self, *, tenant_id: str, provider: str, external_event_id: str
     ) -> InboundEventReceipt | None: ...
 
+    def actor_may_intake(
+        self, *, tenant_id: str, actor_id: str, at: datetime
+    ) -> bool: ...
+
     def save_inbound_receipt(
         self,
         receipt: InboundEventReceipt,
@@ -206,6 +210,22 @@ class CollaborationApplicationService:
             tenant_id=tenant_id,
             provider=provider,
             external_actor_id=external_actor_id,
+        )
+
+    def get_inbound_receipt_by_external(
+        self, *, tenant_id: str, provider: str, external_event_id: str
+    ) -> InboundEventReceipt | None:
+        return self.repository.get_inbound_receipt_by_external(
+            tenant_id=tenant_id,
+            provider=provider,
+            external_event_id=external_event_id,
+        )
+
+    def actor_may_intake(
+        self, *, tenant_id: str, actor_id: str, at: datetime
+    ) -> bool:
+        return self.repository.actor_may_intake(
+            tenant_id=tenant_id, actor_id=actor_id, at=at
         )
 
     def save_repository_binding(self, binding: RepositoryBinding) -> RepositoryBinding:

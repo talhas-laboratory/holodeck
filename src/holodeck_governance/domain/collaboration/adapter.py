@@ -9,6 +9,25 @@ from holodeck_governance.domain.collaboration.inbound import (
     VerifiedActorIdentity,
 )
 from holodeck_governance.domain.collaboration.outbound import OutboundCollaborationMessage
+from holodeck_governance.domain.collaboration.types import VerificationResult
+from holodeck_governance.domain.errors import GovernanceError
+
+
+class CollaborationAdapterAuthError(GovernanceError):
+    """Adapter-local authentication failure.
+
+    Refuses a trusted tenant event. Does not create a Holodeck inbound receipt
+    (CIS-001).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        verification_result: VerificationResult,
+    ) -> None:
+        super().__init__(message)
+        self.verification_result = verification_result
 
 
 class CollaborationAdapter(Protocol):

@@ -5,7 +5,10 @@ Must not import application, storage, sqlite3, HTTP, MCP, or provider SDKs.
 
 from __future__ import annotations
 
-from holodeck_governance.domain.collaboration.adapter import CollaborationAdapter
+from holodeck_governance.domain.collaboration.adapter import (
+    CollaborationAdapter,
+    CollaborationAdapterAuthError,
+)
 from holodeck_governance.domain.collaboration.bindings import (
     BindingStatus,
     CollaborationEndpoint,
@@ -68,6 +71,7 @@ __all__ = [
     "BindingStatus",
     "CIS_EXPECTATIONS",
     "CollaborationAdapter",
+    "CollaborationAdapterAuthError",
     "CollaborationEndpoint",
     "CollaborationScenarioExpectation",
     "ConversationLocation",

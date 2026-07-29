@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, MutableMapping
 
+from holodeck_governance.domain.collaboration.adapter import CollaborationAdapterAuthError
 from holodeck_governance.domain.collaboration.inbound import (
     AttachmentRef,
     ConversationLocation,
@@ -26,23 +27,6 @@ from holodeck_governance.domain.provenance.external_reference import ExternalRef
 
 MEMORY_PROVIDER = "memory"
 _VALID_SIGNATURE = "ok"
-
-
-class CollaborationAdapterAuthError(Exception):
-    """Adapter-local authentication failure.
-
-    Does not create a Holodeck inbound receipt. CIS-001 expects this refusal
-    path instead of a trusted tenant event.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        verification_result: VerificationResult,
-    ) -> None:
-        super().__init__(message)
-        self.verification_result = verification_result
 
 
 @dataclass(frozen=True, slots=True)

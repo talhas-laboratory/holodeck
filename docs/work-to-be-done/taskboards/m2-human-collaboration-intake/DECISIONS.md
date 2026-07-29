@@ -141,3 +141,15 @@
 - Domain forbidden-import prefixes now include `holodeck_governance.adapters`.
 - Live Buzz ingress (M2-009) remains gated; E2E CIS persistence may proceed
   against this harness as M2-010.
+
+## 2026-07-29 — M2-010 E2E intake against memory harness
+
+- `CollaborationIntakeOrchestrator` normalizes/verifies via `CollaborationAdapter`,
+  then records receipts/origins and enqueues correlated outbound status before
+  adapter publish.
+- `CollaborationAdapterAuthError` lives on the domain adapter port (CIS-001
+  refusal without Holodeck receipts).
+- E2E coverage proves CIS auth failure, authorization reject, duplicate/replay,
+  cross-tenant deny, non-intake ignore, and happy-path correlation without
+  mission/run creation.
+- Buzz remains gated; next productive track is workspace intelligence (M2-012).
