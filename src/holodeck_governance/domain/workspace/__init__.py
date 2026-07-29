@@ -1,4 +1,4 @@
-"""Workspace domain package (bindings and later intelligence records)."""
+"""Workspace domain package (bindings, discovery, genesis, intelligence)."""
 
 from __future__ import annotations
 
@@ -24,22 +24,60 @@ from holodeck_governance.domain.workspace.genesis import (
     WorkspaceGenesisProposal,
     genesis_proposal_open_dedupe_key,
 )
+from holodeck_governance.domain.workspace.intelligence import (
+    M2_INTELLIGENCE_COMMAND_TYPES,
+    REQUIRED_MODEL_SECTIONS,
+    WIS_EXPECTATIONS,
+    ContextItem,
+    ContextModule,
+    Contradiction,
+    IntentSeed,
+    KnowledgeGap,
+    ModelSectionState,
+    ReadinessLevel,
+    TrustClass,
+    WorkspaceDecision,
+    WorkspaceModelRevision,
+    WorkspaceReadinessAssessment,
+    WorkspaceSource,
+    assert_trust_promotion_allowed,
+    readiness_at_most,
+    required_intelligence_scenario_ids,
+)
 
 __all__ = [
     "CollaborationLocationBinding",
+    "ContextItem",
+    "ContextModule",
+    "Contradiction",
     "GenesisDecisionOutcome",
     "GenesisProposalStatus",
+    "IntentSeed",
+    "KnowledgeGap",
+    "M2_INTELLIGENCE_COMMAND_TYPES",
+    "ModelSectionState",
+    "REQUIRED_MODEL_SECTIONS",
+    "ReadinessLevel",
     "RepositoryBinding",
+    "TrustClass",
+    "WIS_EXPECTATIONS",
     "WorkspaceBindingStatus",
     "WorkspaceCandidate",
+    "WorkspaceDecision",
     "WorkspaceDiscoveryOutcome",
     "WorkspaceDiscoveryQuery",
     "WorkspaceDiscoveryResult",
     "WorkspaceEligibility",
     "WorkspaceGenesisDecision",
     "WorkspaceGenesisProposal",
+    "WorkspaceModelRevision",
+    "WorkspaceReadinessAssessment",
+    "WorkspaceSource",
+    "assert_trust_promotion_allowed",
     "collaboration_location_binding_dedupe_key",
     "evaluate_workspace_discovery",
     "genesis_proposal_open_dedupe_key",
+    "readiness_at_most",
     "repository_binding_dedupe_key",
+    "required_intelligence_scenario_ids",
 ]

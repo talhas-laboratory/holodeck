@@ -1,7 +1,9 @@
 # Workspace model and intelligence design
 
-**Status:** Proposed — requires approval before M2 implementation
+**Status:** Implementation-ready contract (persistence deferred to M2-013+)
 **Milestones:** M2 workspace intelligence and genesis; M3 context compilation
+**Companion task:** M2-012 workspace intelligence records and contracts
+**Contract package:** `holodeck_governance.domain.workspace.intelligence`
 
 ## Decision
 

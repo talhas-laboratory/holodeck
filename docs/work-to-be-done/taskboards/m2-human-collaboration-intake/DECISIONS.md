@@ -153,3 +153,12 @@
   cross-tenant deny, non-intake ignore, and happy-path correlation without
   mission/run creation.
 - Buzz remains gated; next productive track is workspace intelligence (M2-012).
+
+## 2026-07-29 — M2-012 workspace intelligence contracts
+
+- Domain package `holodeck_governance.domain.workspace.intelligence` locks
+  model revisions, sources, context items/modules, gaps/contradictions/
+  decisions, readiness, trust-promotion rules, and WIS-001..006 expectations.
+- Generated/untrusted content cannot become instruction authority without
+  authorized human promotion; readiness cannot exceed evidence.
+- Persistence and application operations remain M2-013.
