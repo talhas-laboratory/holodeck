@@ -543,3 +543,12 @@ M2-024 incremental refresh must not start until this hardening is on the tip.
 - PRs #31 and #33 are superseded by this tip (parent will close via tools).
 - **Do not mark M2-009 done.** M3-000 remains blocked until this tip lands /
   is accepted as the closeout baseline.
+
+## 2026-07-30 — M2 closeout accepted; Buzz integration deferred
+
+- The cumulative M2 closeout, including the bounded multi-hop frontier repair
+  and its discriminating regression coverage, is the accepted M2 baseline.
+- M2-009 remains explicitly deferred because live Buzz ingress depends on the
+  external collaboration-platform integration; it does not block M3-000.
+- M3 starts with M3-000 contract validation and benchmark-protocol lock. M2
+  factual records remain evidence, never M3 interpretations or prompt text.

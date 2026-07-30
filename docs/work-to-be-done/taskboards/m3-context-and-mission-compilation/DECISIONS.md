@@ -40,3 +40,10 @@
   factual graph require tip `cursor/m2-graph-closeout-blockers-2175` before
   M3-000 contract validation proceeds as the accepted baseline.
 - PRs #31 and #33 are superseded by that tip.
+
+## 2026-07-30 — M2 graph closeout accepted; M3-000 ready
+
+- The cumulative M2 closeout is accepted with bounded traversal, raw-row
+  budgets, fallback behavior, and multi-hop/cycle regression coverage.
+- M3-000 is ready to validate the accepted contracts and lock the comparative
+  benchmark before any context-compiler implementation begins.
