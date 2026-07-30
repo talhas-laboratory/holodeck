@@ -1682,7 +1682,7 @@ def test_change_neighborhood_multihop_includes_downstream() -> None:
         _relation(kind=RelationKind.CALLS, source=node_b, target=node_c),
     )
     padding = tuple(_synth(f"pad/m{i}.py") for i in range(20))
-    _activate_synthetic_snapshot(
+    snapshot_id = _activate_synthetic_snapshot(
         graphs=graphs,
         ids=ids,
         binding_id=binding_id,
@@ -1696,8 +1696,10 @@ def test_change_neighborhood_multihop_includes_downstream() -> None:
         workspace_object_id=ids.workspace_alpha_1,
         repository_binding_id=binding_id,
     )
-    # Generous budget so incompleteness cannot hide a frontier bug.
-    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=30)
+    # Force the bounded loader while leaving ample room for the A→B→C walk.
+    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=20)
+    snapshot = graphs.require_snapshot(snapshot_id, tenant_id=ids.tenant_alpha)
+    assert snapshot.entity_count + snapshot.relation_count > budget.max_visited_nodes
     result = queries.get_change_neighborhood(scope, ("chain/a.py",), budget=budget)
     paths = {entity.repository_relative_path for entity in result.entities}
     assert "chain/a.py" in paths
@@ -1706,7 +1708,7 @@ def test_change_neighborhood_multihop_includes_downstream() -> None:
     assert {rel.relation_fact_id for rel in result.relations} >= {
         chain_relations[0].relation_fact_id,
         chain_relations[1].relation_fact_id,
-    } or len(result.relations) >= 2
+    }
     assert result.fallback_full is False
     assert "impact_neighborhood_incomplete" not in result.omissions.reasons
 
@@ -1757,7 +1759,7 @@ def test_change_neighborhood_cycle_terminates() -> None:
         _relation(kind=RelationKind.CALLS, source=node_b, target=node_a),
     )
     padding = tuple(_synth(f"pad/c{i}.py") for i in range(20))
-    _activate_synthetic_snapshot(
+    snapshot_id = _activate_synthetic_snapshot(
         graphs=graphs,
         ids=ids,
         binding_id=binding_id,
@@ -1771,7 +1773,9 @@ def test_change_neighborhood_cycle_terminates() -> None:
         workspace_object_id=ids.workspace_alpha_1,
         repository_binding_id=binding_id,
     )
-    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=30)
+    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=20)
+    snapshot = graphs.require_snapshot(snapshot_id, tenant_id=ids.tenant_alpha)
+    assert snapshot.entity_count + snapshot.relation_count > budget.max_visited_nodes
     graphs.entities_rows_fetched = 0
     graphs.relations_rows_fetched = 0
     result = queries.get_change_neighborhood(scope, ("cycle/a.py",), budget=budget)
