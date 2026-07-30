@@ -8,6 +8,12 @@ Board id: `m3-context-and-mission-compilation`
 Owner: `talha`
 Status: **ready — M2 handoff and graph closeout accepted; begin with M3-000**
 
+## Start here
+
+[M3 introduction](INTRODUCTION.md) explains the problem M3 solves, its
+authority and evidence boundaries, the intended inputs and outputs, current
+dependency state, and implementation sequence.
+
 ## Boundary
 
 M3 owns typed task intake, task positioning, task-local interpretation,
