@@ -1576,3 +1576,209 @@ def test_change_neighborhood_counts_repeated_expansion_rows() -> None:
     assert graphs.relations_rows_fetched <= budget.max_visited_nodes + 1
     assert result.fallback_full is True
     assert "impact_neighborhood_incomplete" in result.omissions.reasons
+
+
+def _activate_synthetic_snapshot(
+    *,
+    graphs: SqliteCodeGraphRepository,
+    ids: FixtureIds,
+    binding_id: str,
+    expected_active_snapshot_id: str,
+    entities: tuple[CodeEntityFact, ...],
+    relations: tuple[CodeRelationFact, ...],
+    note: str,
+) -> str:
+    run_id = generate_uuidv7()
+    snap_id = generate_uuidv7()
+    snapshot = RepositoryGraphSnapshot(
+        snapshot_id=snap_id,
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+        repository_revision=REV_A,
+        extraction_run_id=run_id,
+        status=SnapshotStatus.BUILDING,
+        created_at=NOW,
+        created_by_actor_id=ids.human_owner,
+        coverage_status=CoverageStatus.COMPLETE,
+        entity_count=len(entities),
+        relation_count=len(relations),
+        coverage_notes=(note,),
+    )
+    run = RepositoryExtractionRun(
+        extraction_run_id=run_id,
+        snapshot_id=snap_id,
+        provider_key="fake",
+        provider_version="1",
+        provider_schema_version="m2.fake.v1",
+        configuration_hash="cfg",
+        requested_revision=REV_A,
+        actual_revision=REV_A,
+        started_at=NOW,
+        completed_at=NOW,
+        status=ExtractionRunStatus.SUCCEEDED,
+        created_by_actor_id=ids.human_owner,
+        limits=ExtractionLimits(max_files=100),
+    )
+    graphs.persist_building_graph(
+        snapshot=snapshot,
+        run=run,
+        entities=entities,
+        relations=relations,
+    )
+    graphs.activate_snapshot(
+        snap_id,
+        tenant_id=ids.tenant_alpha,
+        activated_at=NOW,
+        expected_active_snapshot_id=expected_active_snapshot_id,
+    )
+    return snap_id
+
+
+def test_change_neighborhood_multihop_includes_downstream() -> None:
+    """A→B→C must expand B so C is discovered under the bounded loader."""
+
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="multihop-a",
+    )
+    donor = graphs.list_snapshot_entities(
+        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
+    )[0]
+
+    def _synth(path: str) -> CodeEntityFact:
+        return CodeEntityFact(
+            entity_fact_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            entity_key=build_entity_key(
+                entity_kind=EntityKind.FUNCTION,
+                repository_relative_path=path,
+                qualified_name=path,
+            ),
+            entity_kind=EntityKind.FUNCTION,
+            repository_relative_path=path,
+            source_id=donor.source_id,
+            source_observation_id=donor.source_observation_id,
+            observation_method=ObservationMethod.DIRECT_PARSE,
+            created_at=NOW,
+            language="python",
+            qualified_name=path,
+        )
+
+    node_a = _synth("chain/a.py")
+    node_b = _synth("chain/b.py")
+    node_c = _synth("chain/c.py")
+    chain_entities = (node_a, node_b, node_c)
+    chain_relations = (
+        _relation(kind=RelationKind.CALLS, source=node_a, target=node_b),
+        _relation(kind=RelationKind.CALLS, source=node_b, target=node_c),
+    )
+    padding = tuple(_synth(f"pad/m{i}.py") for i in range(20))
+    _activate_synthetic_snapshot(
+        graphs=graphs,
+        ids=ids,
+        binding_id=binding_id,
+        expected_active_snapshot_id=rev_a.snapshot_id,
+        entities=(*chain_entities, *padding),
+        relations=chain_relations,
+        note="multihop A→B→C",
+    )
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    # Generous budget so incompleteness cannot hide a frontier bug.
+    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=30)
+    result = queries.get_change_neighborhood(scope, ("chain/a.py",), budget=budget)
+    paths = {entity.repository_relative_path for entity in result.entities}
+    assert "chain/a.py" in paths
+    assert "chain/b.py" in paths
+    assert "chain/c.py" in paths
+    assert {rel.relation_fact_id for rel in result.relations} >= {
+        chain_relations[0].relation_fact_id,
+        chain_relations[1].relation_fact_id,
+    } or len(result.relations) >= 2
+    assert result.fallback_full is False
+    assert "impact_neighborhood_incomplete" not in result.omissions.reasons
+
+
+def test_change_neighborhood_cycle_terminates() -> None:
+    """A→B→A must terminate without looping forever under the bounded loader."""
+
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="cycle-a",
+    )
+    donor = graphs.list_snapshot_entities(
+        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
+    )[0]
+
+    def _synth(path: str) -> CodeEntityFact:
+        return CodeEntityFact(
+            entity_fact_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            entity_key=build_entity_key(
+                entity_kind=EntityKind.FUNCTION,
+                repository_relative_path=path,
+                qualified_name=path,
+            ),
+            entity_kind=EntityKind.FUNCTION,
+            repository_relative_path=path,
+            source_id=donor.source_id,
+            source_observation_id=donor.source_observation_id,
+            observation_method=ObservationMethod.DIRECT_PARSE,
+            created_at=NOW,
+            language="python",
+            qualified_name=path,
+        )
+
+    node_a = _synth("cycle/a.py")
+    node_b = _synth("cycle/b.py")
+    cycle_entities = (node_a, node_b)
+    cycle_relations = (
+        _relation(kind=RelationKind.CALLS, source=node_a, target=node_b),
+        _relation(kind=RelationKind.CALLS, source=node_b, target=node_a),
+    )
+    padding = tuple(_synth(f"pad/c{i}.py") for i in range(20))
+    _activate_synthetic_snapshot(
+        graphs=graphs,
+        ids=ids,
+        binding_id=binding_id,
+        expected_active_snapshot_id=rev_a.snapshot_id,
+        entities=(*cycle_entities, *padding),
+        relations=cycle_relations,
+        note="cycle A→B→A",
+    )
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    budget = QueryBudget(max_depth=4, max_results=50, max_visited_nodes=30)
+    graphs.entities_rows_fetched = 0
+    graphs.relations_rows_fetched = 0
+    result = queries.get_change_neighborhood(scope, ("cycle/a.py",), budget=budget)
+    paths = {entity.repository_relative_path for entity in result.entities}
+    assert paths >= {"cycle/a.py", "cycle/b.py"}
+    assert len(result.relations) >= 1
+    # Expanded frontier IDs prevent re-querying A forever; counters stay bounded.
+    assert graphs.entities_rows_fetched <= budget.max_visited_nodes + 1
+    assert graphs.relations_rows_fetched <= budget.max_visited_nodes + 1
+    assert result.fallback_full is False

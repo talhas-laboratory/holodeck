@@ -876,8 +876,9 @@ class CodeGraphQueryService:
 
         Visit budget accounts for raw storage rows returned (before dedupe), so
         endpoint loads plus full-path expansion cannot multiply work past
-        ``max_visited_nodes + 1``. Relation expansion never re-queries entity
-        IDs already seen as relation endpoints.
+        ``max_visited_nodes + 1``. Only frontier IDs that were actually submitted
+        as relation queries are excluded from re-expansion; newly discovered
+        targets remain eligible so multi-hop paths continue.
         """
 
         if _snapshot_fact_count(snapshot) <= budget.max_visited_nodes:
@@ -899,7 +900,9 @@ class CodeGraphQueryService:
         truncated = False
         entity_rows_consumed = 0
         relation_rows_consumed = 0
-        relation_endpoints_seen: set[str] = set()
+        # IDs actually submitted as a relation frontier query. Newly discovered
+        # targets must NOT be added here, or multi-hop paths are skipped.
+        expanded_frontier_ids: set[str] = set()
 
         def _mark(*reason: str) -> None:
             nonlocal truncated
@@ -972,22 +975,20 @@ class CodeGraphQueryService:
                     entity.entity_fact_id
                     for entity in entities_by_id.values()
                     if entity.repository_relative_path in frontier_paths
-                    and entity.entity_fact_id not in relation_endpoints_seen
+                    and entity.entity_fact_id not in expanded_frontier_ids
                 )
             )
             if not frontier_ids:
                 break
             batch = _fetch_relations(either_entity_fact_ids=frontier_ids)
+            # Only IDs actually queried are expanded — not discovered targets.
+            expanded_frontier_ids.update(frontier_ids)
             new_paths: set[str] = set()
             needed: set[str] = set()
             for relation in batch:
                 relations_by_id[relation.relation_fact_id] = relation
-                relation_endpoints_seen.add(relation.source_entity_fact_id)
-                relation_endpoints_seen.add(relation.target_entity_fact_id)
                 needed.add(relation.source_entity_fact_id)
                 needed.add(relation.target_entity_fact_id)
-            # Frontier IDs are covered even when they produced no rows.
-            relation_endpoints_seen.update(frontier_ids)
             missing = tuple(sorted(eid for eid in needed if eid not in entities_by_id))
             if missing:
                 if _remaining_entity_rows() <= 0:
@@ -1026,11 +1027,12 @@ class CodeGraphQueryService:
                     entity.entity_fact_id
                     for entity in entities_by_id.values()
                     if entity.repository_relative_path in frontier_paths
-                    and entity.entity_fact_id not in relation_endpoints_seen
+                    and entity.entity_fact_id not in expanded_frontier_ids
                 )
             )
             if frontier_ids:
                 batch = _fetch_relations(either_entity_fact_ids=frontier_ids)
+                expanded_frontier_ids.update(frontier_ids)
                 if batch:
                     _mark("impact_depth_exhausted")
                 for relation in batch:
