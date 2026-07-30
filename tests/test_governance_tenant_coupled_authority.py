@@ -182,7 +182,7 @@ def _seed_authority_world(conn: sqlite3.Connection) -> dict[str, str]:
 def test_fresh_migrate_applies_through_v9_and_installs_authority_triggers() -> None:
     conn = _connect()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 10
+    assert governance_schema_version(conn) == 25
     triggers = {
         str(row[0])
         for row in conn.execute(
@@ -238,7 +238,7 @@ def test_v8_database_upgrades_to_v9_preserving_valid_rows() -> None:
     )
     conn.commit()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 10
+    assert governance_schema_version(conn) == 25
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM gov_revocation_decisions WHERE revocation_id = ?",
@@ -396,7 +396,7 @@ def test_beta_revocation_cannot_affect_alpha_authorization_defense_in_depth() ->
     assert reason == ReasonCode.DENY_MISSING_AUTHORITY.value
 
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 10
+    assert governance_schema_version(conn) == 25
     # Existing bad row may remain; new inserts of that shape are forbidden.
     with pytest.raises(
         sqlite3.IntegrityError, match="cross-tenant authority reference forbidden"

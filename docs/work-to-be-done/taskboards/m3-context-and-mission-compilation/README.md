@@ -6,7 +6,7 @@ and the smallest sufficient role-specific context packet.
 
 Board id: `m3-context-and-mission-compilation`
 Owner: `talha`
-Status: **planned — blocked on M2-011 handoff**
+Status: **ready — M2 handoff and graph closeout accepted; begin with M3-000**
 
 ## Boundary
 
@@ -24,12 +24,20 @@ harness plan as binding authority.
 2. `docs/plans/2026-07-29-persistent-codebase-factual-graph-design.md`
 3. `docs/work-to-be-done/governance/04-curation/specification.md`
 4. `docs/work-to-be-done/governance/05-context-compiler/specification.md`
-5. M2-011 and `m2-human-collaboration-intake/artifacts/m2-code-graph-m3-handoff.md`
+5. M2-011 handoff packet (required):
+   - `artifacts/m2-to-m3-handoff.md`
+   - `artifacts/m2-contracts-index.md`
+   - `artifacts/m2-consolidated-acceptance-evidence.md`
+   - `artifacts/m2-code-graph-m3-handoff.md` (also indexed under
+     `m2-human-collaboration-intake/artifacts/`)
 
 ## Agent start protocol
 
-1. Read this board, gates, decisions, recent updates, and the M2 handoff.
-2. Complete M3-000 before implementation.
+1. Read this board, gates, decisions, recent updates, and the M2 handoff
+   (`artifacts/m2-to-m3-handoff.md` checklist §12).
+2. Complete M3-000 before implementation. The M2-011 handoff artifacts and
+   graph closeout are accepted; validate the contracts and lock the benchmark
+   protocol before beginning M3 implementation work.
 3. Preserve literal human input separately from generated interpretations.
 4. Treat M2 graph data as factual evidence with explicit coverage, not as a
    complete model of runtime behavior.

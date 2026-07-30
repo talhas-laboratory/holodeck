@@ -5,8 +5,25 @@ Adapters may import this module. Application modules must not import it.
 
 from __future__ import annotations
 
+import sqlite3
+
+from holodeck_governance.application.collaboration import CollaborationApplicationService
 from holodeck_governance.application.commands import GovernanceApplicationService
+from holodeck_governance.application.workspace_intelligence import (
+    WorkspaceIntelligenceApplicationService,
+)
+from holodeck_governance.storage.sqlite.collaboration import SqliteCollaborationRepository
 from holodeck_governance.storage.sqlite.gateway import SqliteGovernanceGateway
+from holodeck_governance.storage.sqlite.intelligence import (
+    SqliteWorkspaceIntelligenceRepository,
+)
+from holodeck_governance.storage.sqlite.migrations import migrate_governance
+from holodeck_governance.application.code_graph_ingestion import (
+    CodeGraphIngestionService,
+)
+from holodeck_governance.application.code_graph_queries import CodeGraphQueryService
+from holodeck_governance.adapters.code_graph.python_ast import PythonStdlibAstExtractor
+from holodeck_governance.storage.sqlite.code_graph import SqliteCodeGraphRepository
 
 
 def open_governance_app(
@@ -18,3 +35,74 @@ def open_governance_app(
         database, bootstrap_actor_id=bootstrap_actor_id
     )
     return GovernanceApplicationService(commands=gateway, reconstruction=gateway)
+
+
+def open_collaboration_app(database: str) -> CollaborationApplicationService:
+    """Open the collaboration binding/receipt seam on the governance database."""
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return CollaborationApplicationService(
+        repository=SqliteCollaborationRepository(conn)
+    )
+
+
+def open_workspace_intelligence_app(
+    database: str,
+) -> WorkspaceIntelligenceApplicationService:
+    """Open the workspace-intelligence seam on the governance database."""
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return WorkspaceIntelligenceApplicationService(
+        repository=SqliteWorkspaceIntelligenceRepository(conn)
+    )
+
+
+def open_code_graph_ingestion_app(
+    database: str,
+    *,
+    extractor: object | None = None,
+) -> CodeGraphIngestionService:
+    """Open the factual code-graph build/activate seam."""
+
+    from holodeck_governance.storage.sqlite.repos import (
+        SqliteCommandReceiptRepository,
+        SqliteDomainEventRepository,
+    )
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return CodeGraphIngestionService(
+        collaboration=CollaborationApplicationService(
+            repository=SqliteCollaborationRepository(conn)
+        ),
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=SqliteCodeGraphRepository(conn),
+        extractor=extractor or PythonStdlibAstExtractor(),  # type: ignore[arg-type]
+        events=SqliteDomainEventRepository(conn),
+        receipts=SqliteCommandReceiptRepository(conn),
+        commit=conn.commit,
+    )
+
+
+def open_code_graph_query_app(database: str) -> CodeGraphQueryService:
+    """Open the read-only bounded factual code-graph query seam."""
+
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    migrate_governance(conn)
+    return CodeGraphQueryService(
+        collaboration=CollaborationApplicationService(
+            repository=SqliteCollaborationRepository(conn)
+        ),
+        intelligence=SqliteWorkspaceIntelligenceRepository(conn),
+        graphs=SqliteCodeGraphRepository(conn),
+    )

@@ -1,8 +1,8 @@
 # M2-001 — Collaboration boundary and intake scenario specification
 
-**Status:** ready  
-**Owner:** unassigned  
-**Depends on:** M1 contracts/migration/M2 handoff
+**Status:** done
+**Owner:** cursor
+**Depends on:** M2-000
 
 ## Outcome
 
@@ -25,6 +25,8 @@ scenarios that every M2 adapter must satisfy before Buzz-specific code exists.
 - Buzz SDK or protocol implementation (M2-009).
 - Context or mission compilation (M3).
 - Agent execution, repository worktree provisioning, or acceptance (M4–M6).
+- Persistent M2 records, repository discovery, or workspace intelligence
+  behavior (later M2 packets).
 
 ## Required invariants
 
@@ -48,21 +50,32 @@ scenarios that every M2 adapter must satisfy before Buzz-specific code exists.
 ## Verification
 
 ```text
-uv run pytest -q tests/test_m2_collaboration_contract.py
+uv run --extra dev pytest -q tests/test_m2_collaboration_contract.py
+uv run --extra dev pytest -q
 ```
 
-The test file may initially be a contract/snapshot suite; it becomes the
-implementation acceptance suite for M2-002–M2-004.
+## Evidence and handoff
 
-## Deliverables
+Verification completed 2026-07-27:
 
-- `docs/plans/<dated>-m2-collaboration-intake-design.md`
-- `docs/plans/<dated>-m2-collaboration-intake-test-specification.md`
-- Provider-neutral contract modules/interfaces and contract tests, if the
-  existing M1 layout can host them without pre-implementing M2 persistence.
+- `uv run pytest -q tests/test_m2_collaboration_contract.py` → **15 passed in 0.06s**
+- `uv run pytest -q` → **268 passed in 32.52s**
+
+Changed artifacts:
+
+- `docs/plans/2026-07-27-m2-collaboration-intake-design.md`
+- `docs/plans/2026-07-27-m2-collaboration-intake-test-specification.md`
+- `src/holodeck_governance/domain/collaboration/` (provider-neutral contracts)
+- `tests/test_m2_collaboration_contract.py`
+- this task packet and the M2 board index, lanes, decisions, and updates
+
+Next ready task: **M2-002** — Add collaboration bindings, external actor
+mappings, and durable event receipts.
 
 ## Residual risks
 
-Buzz implementation claims in the strategy are dated. Revalidate upstream
-protocol details immediately before M2-009; do not treat this packet as proof
-of current Buzz behavior.
+- Buzz implementation claims in the strategy are dated. Revalidate upstream
+  protocol details immediately before M2-009.
+- M1-024 and M1-025 remain in review; production Buzz ingress stays deferred.
+- Contractual command type names are fixed for builders; storage packing may
+  refine in M2-002 without changing CIS scenario outcomes.

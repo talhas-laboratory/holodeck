@@ -156,8 +156,9 @@ class SqliteOutboxRepository:
         delivery_purpose: str,
         dedup_key: str,
         created_at: str,
+        outbox_item_id: str | None = None,
     ) -> str:
-        item_id = generate_uuidv7()
+        item_id = outbox_item_id or generate_uuidv7()
         self._conn.execute(
             """
             INSERT INTO gov_outbox_items(
@@ -168,6 +169,16 @@ class SqliteOutboxRepository:
             (item_id, tenant_id, domain_event_id, delivery_purpose, dedup_key, created_at),
         )
         return item_id
+
+    def get_by_dedup(self, *, tenant_id: str, dedup_key: str) -> str | None:
+        row = self._conn.execute(
+            """
+            SELECT outbox_item_id FROM gov_outbox_items
+            WHERE tenant_id = ? AND dedup_key = ?
+            """,
+            (tenant_id, dedup_key),
+        ).fetchone()
+        return None if row is None else str(row["outbox_item_id"])
 
 
 class SqliteTransitionRecordRepository:

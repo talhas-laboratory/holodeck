@@ -7,11 +7,66 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from holodeck_governance.storage.sqlite.migrate_v5 import upgrade_command_path_tables
-from holodeck_governance.storage.sqlite.migrate_v6 import upgrade_record_family_alignment
-from holodeck_governance.storage.sqlite.migrate_v7 import upgrade_enforcement_and_envelopes
-from holodeck_governance.storage.sqlite.migrate_v8 import upgrade_tenant_coupled_ownership
-from holodeck_governance.storage.sqlite.migrate_v9 import upgrade_tenant_coupled_authority
-from holodeck_governance.storage.sqlite.migrate_v10 import upgrade_authority_issuance_basis
+from holodeck_governance.storage.sqlite.migrate_v6 import (
+    upgrade_record_family_alignment,
+)
+from holodeck_governance.storage.sqlite.migrate_v7 import (
+    upgrade_enforcement_and_envelopes,
+)
+from holodeck_governance.storage.sqlite.migrate_v8 import (
+    upgrade_tenant_coupled_ownership,
+)
+from holodeck_governance.storage.sqlite.migrate_v9 import (
+    upgrade_tenant_coupled_authority,
+)
+from holodeck_governance.storage.sqlite.migrate_v10 import (
+    upgrade_authority_issuance_basis,
+)
+from holodeck_governance.storage.sqlite.migrate_v11 import (
+    upgrade_collaboration_bindings_and_receipts,
+)
+from holodeck_governance.storage.sqlite.migrate_v12 import upgrade_task_origins
+from holodeck_governance.storage.sqlite.migrate_v13 import (
+    upgrade_collaboration_tenant_coupling,
+)
+from holodeck_governance.storage.sqlite.migrate_v14 import (
+    upgrade_accepted_intake_mapping_attribution,
+)
+from holodeck_governance.storage.sqlite.migrate_v15 import (
+    upgrade_outbound_collaboration_messages,
+)
+from holodeck_governance.storage.sqlite.migrate_v16 import upgrade_workspace_bindings
+from holodeck_governance.storage.sqlite.migrate_v17 import (
+    upgrade_workspace_genesis_proposals,
+)
+from holodeck_governance.storage.sqlite.migrate_v18 import (
+    upgrade_workspace_binding_active_uniques,
+)
+from holodeck_governance.storage.sqlite.migrate_v19 import (
+    WORKSPACE_INTELLIGENCE_TABLES,
+    upgrade_workspace_intelligence,
+)
+from holodeck_governance.storage.sqlite.migrate_v20 import (
+    upgrade_source_promotion_decision,
+)
+from holodeck_governance.storage.sqlite.migrate_v21 import (
+    SOURCE_OBSERVATION_TABLES,
+    upgrade_source_observations,
+)
+from holodeck_governance.storage.sqlite.migrate_v22 import (
+    upgrade_readiness_auth_and_observation_coupling,
+)
+from holodeck_governance.storage.sqlite.migrate_v23 import (
+    CODE_GRAPH_TABLES,
+    upgrade_code_graph_persistence,
+)
+from holodeck_governance.storage.sqlite.migrate_v24 import (
+    CODE_GRAPH_BUILD_CLAIM_TABLES,
+    upgrade_code_graph_foundation_hardening,
+)
+from holodeck_governance.storage.sqlite.migrate_v25 import (
+    upgrade_legacy_source_observation_backfill,
+)
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
 
@@ -322,6 +377,37 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (8, "tenant_coupled_ownership", upgrade_tenant_coupled_ownership),
     (9, "tenant_coupled_authority", upgrade_tenant_coupled_authority),
     (10, "authority_issuance_basis", upgrade_authority_issuance_basis),
+    (
+        11,
+        "collaboration_bindings_and_receipts",
+        upgrade_collaboration_bindings_and_receipts,
+    ),
+    (12, "task_origins", upgrade_task_origins),
+    (13, "collaboration_tenant_coupling", upgrade_collaboration_tenant_coupling),
+    (
+        14,
+        "accepted_intake_mapping_attribution",
+        upgrade_accepted_intake_mapping_attribution,
+    ),
+    (15, "outbound_collaboration_messages", upgrade_outbound_collaboration_messages),
+    (16, "workspace_bindings", upgrade_workspace_bindings),
+    (17, "workspace_genesis_proposals", upgrade_workspace_genesis_proposals),
+    (18, "workspace_binding_active_uniques", upgrade_workspace_binding_active_uniques),
+    (19, "workspace_intelligence", upgrade_workspace_intelligence),
+    (20, "source_promotion_decision", upgrade_source_promotion_decision),
+    (21, "source_observations", upgrade_source_observations),
+    (
+        22,
+        "readiness_auth_observation_coupling",
+        upgrade_readiness_auth_and_observation_coupling,
+    ),
+    (23, "code_graph_persistence", upgrade_code_graph_persistence),
+    (24, "code_graph_foundation_hardening", upgrade_code_graph_foundation_hardening),
+    (
+        25,
+        "legacy_source_observation_backfill",
+        upgrade_legacy_source_observation_backfill,
+    ),
 ]
 
 
@@ -334,7 +420,9 @@ def governance_schema_version(conn: sqlite3.Connection) -> int:
         )
         """
     )
-    row = conn.execute("SELECT COALESCE(MAX(version), 0) FROM gov_schema_migrations").fetchone()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) FROM gov_schema_migrations"
+    ).fetchone()
     return int(row[0])
 
 
@@ -344,6 +432,119 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 25:
+        # Data backfill only; rolling back removes the version marker.
+        # Observation rows created by the backfill remain (immutable history).
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 24:
+        for table in CODE_GRAPH_BUILD_CLAIM_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 23:
+        for table in reversed(CODE_GRAPH_TABLES):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 22:
+        # Column + trigger migration; rolling back removes the version marker only.
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 21:
+        try:
+            cols = {
+                str(row[1])
+                for row in conn.execute(
+                    "PRAGMA table_info(gov_workspace_sources)"
+                ).fetchall()
+            }
+            if "current_observation_id" in cols:
+                conn.execute(
+                    "UPDATE gov_workspace_sources SET current_observation_id = NULL"
+                )
+        except sqlite3.Error:
+            pass
+        for table in SOURCE_OBSERVATION_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 20:
+        # Column migration; rolling back removes the version marker only.
+        # SQLite cannot DROP COLUMN portably here without table rebuild.
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 19:
+        for table in WORKSPACE_INTELLIGENCE_TABLES:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 18:
+        for table in (
+            "gov_collaboration_location_bindings",
+            "gov_repository_bindings",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        from holodeck_governance.storage.sqlite.migrate_v16 import (
+            upgrade_workspace_bindings as rebuild_v16_bindings,
+        )
+
+        rebuild_v16_bindings(conn)
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 17:
+        conn.execute("DROP TABLE IF EXISTS gov_workspace_genesis_proposals")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 16:
+        for table in (
+            "gov_collaboration_location_bindings",
+            "gov_repository_bindings",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 15:
+        conn.execute("DROP TABLE IF EXISTS gov_outbound_collaboration_messages")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 14:
+        # Column + trigger migration; rolling back removes the version marker only.
+        # SQLite cannot DROP COLUMN portably here without table rebuild.
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 13:
+        # Trigger-only migration; rolling back removes the version marker.
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 12:
+        conn.execute("DROP TABLE IF EXISTS gov_task_origins")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
+    if version == 11:
+        for table in (
+            "gov_inbound_event_receipts",
+            "gov_external_actor_mappings",
+            "gov_collaboration_endpoints",
+        ):
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 10:
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
         conn.commit()
@@ -406,4 +607,6 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
         conn.commit()
         return
-    raise ValueError(f"rollback not supported for governance migration version {version}")
+    raise ValueError(
+        f"rollback not supported for governance migration version {version}"
+    )

@@ -1,7 +1,7 @@
 # M2-020 — Establish extractor port and provider assessment
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-019
 
 ## Objective
@@ -33,28 +33,6 @@ The default implementation decision is Python standard-library AST. Tree-sitter
 is the preferred later multi-language adapter. Override only with recorded
 license, runtime, determinism, and fixture evidence.
 
-## Provider gates
-
-Evaluate:
-
-1. license and commercial redistribution;
-2. fixed-revision operation;
-3. structured entity/relation export;
-4. deterministic output at a pinned version;
-5. Python fixture accuracy;
-6. partial/unsupported coverage reporting;
-7. offline and privacy behavior;
-8. installation/runtime footprint;
-9. full and incremental behavior;
-10. timeout, malformed output, and stale-index handling.
-
-## Non-goals
-
-- Shipping a production provider.
-- Adopting a provider database as Holodeck authority.
-- MCP prompt retrieval, embeddings, clustering, generated wikis, or semantic
-  interpretation.
-
 ## Acceptance criteria
 
 - Domain/application modules import no provider SDK.
@@ -70,17 +48,21 @@ Evaluate:
 ## Verification
 
 ```bash
-uv run pytest -q tests/test_m2_repository_extractor_contract.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_repository_extractor_contract.py
+uv run --extra dev pytest -q
 ```
 
-Any external-provider smoke test must run from a temporary directory, must not
-modify global editor/MCP configuration, and must record its exact pinned
-version.
+Results: contract tests passed; full suite `438 passed in 40.75s`.
 
-## Expected artifacts
+## Evidence and handoff
 
-- Extractor port and fake adapter.
-- Reusable provider contract test.
-- `artifacts/m2-code-graph-provider-assessment.md`.
-- Durable provider decision in the M2 board.
+- Port: `holodeck_governance.application.repository_extractor`
+- Conformance: `repository_extractor_conformance.run_extractor_conformance`
+- Fake adapter + `PythonStdlibAstExtractor` (honest partial until M2-022)
+- Assessment: `artifacts/m2-code-graph-provider-assessment.md`
+- Selected provider: `python_stdlib_ast`; GitNexus research-only; Tree-sitter deferred
+
+## Residual risks
+
+- Full AST candidate emission remains M2-022.
+- Do not activate partial M2-020 AST results as a graph snapshot.

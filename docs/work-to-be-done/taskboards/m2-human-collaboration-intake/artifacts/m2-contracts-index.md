@@ -1,0 +1,1 @@
+../../../../../artifacts/m2-contracts-index.md

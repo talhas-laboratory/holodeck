@@ -1,8 +1,12 @@
 # Workspace model and intelligence design
 
-**Status:** Approved and progressively implemented; extended by
-`2026-07-29-persistent-codebase-factual-graph-design.md`
+**Status:** Implemented and accepted through M2 workspace onboarding,
+conversation-context preservation, and the revision-scoped factual code graph.
+M3 begins with context-compilation entry validation. Extended by
+`2026-07-29-persistent-codebase-factual-graph-design.md`.
 **Milestones:** M2 workspace intelligence and genesis; M3 context compilation
+**Companion tasks:** M2-012 contracts; M2-013 persistence; M2-014 discovery/trust; M2-015 curation/activation
+**Contract package:** `holodeck_governance.domain.workspace.intelligence`
 
 ## Decision
 

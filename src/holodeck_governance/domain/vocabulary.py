@@ -32,6 +32,7 @@ ADAPTER_ROOT: Final = "holodeck_control_plane"
 FORBIDDEN_DOMAIN_IMPORT_PREFIXES: Final[tuple[str, ...]] = (
     "holodeck_governance.application",
     "holodeck_governance.storage",
+    "holodeck_governance.adapters",
     "holodeck_control_plane",
     "sqlite3",
     "http.server",

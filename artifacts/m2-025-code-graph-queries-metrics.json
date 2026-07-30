@@ -1,0 +1,35 @@
+{
+  "coverage_status": "complete",
+  "entity_count": 43,
+  "find_entities_greeter_qn": "sample_app.service.Greeter",
+  "limit_behavior": {
+    "max_depth_omissions": ["max_depth"],
+    "max_results_omissions": ["max_results"],
+    "max_results_path_count": 1,
+    "max_visited_omissions": ["max_visited_nodes"]
+  },
+  "neighbor_count": 5,
+  "neighbor_order_sha256": "485af0bfef37786f0bc527b917bf04c329c8b46cbed10776e86331b4c3b55d8f",
+  "relation_count": 49,
+  "residual_risks": [
+    "Empty query results never prove absence of a dependency or risk.",
+    "PUBLIC_EXPORT change-mode high-recall includes non-test modules/classes on changed paths; may over-activate.",
+    "Sentinels never emit cleared; unresolved remains the only insufficient-evidence outcome.",
+    "HTTP/CLI adapters intentionally omitted; M3 consumes application DTOs."
+  ],
+  "sentinels_rev_a_kinds": [
+    "api_entry",
+    "configuration",
+    "manifest",
+    "ownership_tag",
+    "public_export",
+    "schema_or_migration",
+    "sensitive_path_or_symbol",
+    "test_association"
+  ],
+  "task": "M2-025",
+  "verification": {
+    "focused": "uv run --extra dev pytest -q tests/test_m2_code_graph_queries.py tests/test_m2_code_graph_sentinels.py -> 11 passed",
+    "full": "uv run --extra dev pytest -q -> 485 passed"
+  }
+}

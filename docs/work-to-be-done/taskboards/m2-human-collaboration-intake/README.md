@@ -6,7 +6,7 @@ explainable workspace selection or reversible workspace-genesis proposal.
 
 Board id: `m2-human-collaboration-intake`
 Owner: `talha`
-Status: **implementation in cumulative review; M2-017 and M2-019 ready**
+Status: **closed — M2-011 and graph closeout accepted; M2-009 Buzz integration is explicitly deferred; M3-000 is ready**
 
 ## Boundary
 
@@ -29,17 +29,37 @@ agents (M5), or make completion decisions (M6).
 5. `../m1-governance-kernel/artifacts/m1-contracts-migration-m2-handoff.md`
 6. `../../governance/03-workspace-intelligence/specification.md`
 7. `../../governance/04-curation/specification.md`
-8. `../../../plans/2026-07-29-persistent-codebase-factual-graph-design.md`
+8. `docs/plans/2026-07-27-m2-collaboration-intake-design.md`
+9. `docs/plans/2026-07-27-m2-collaboration-intake-test-specification.md`
+10. `docs/plans/2026-07-29-persistent-codebase-factual-graph-design.md`
 
 ## Agent start protocol
 
 1. Read this file, `TASKS.md`, `GATES.md`, `DECISIONS.md`, and recent updates.
-2. Use cumulative M2 review PR #5 as the implementation baseline until it is
-   merged; do not implement new work against the older base branch by accident.
-3. No collaboration or repository extractor adapter may be built before its
+2. M2 is the accepted baseline. M3 work begins with M3-000; do not reopen M2
+   work without a newly recorded acceptance gap.
+3. `M2-001`–`M2-008`, `M2-010`, and `M2-012`–`M2-026` plus **M2-011** are
+   done. M2-011 published `artifacts/m2-contracts-index.md`,
+   `artifacts/m2-consolidated-acceptance-evidence.md`, and
+   `artifacts/m2-to-m3-handoff.md` (incorporating
+   `artifacts/m2-code-graph-m3-handoff.md`). **M2-009** (Buzz adapter)
+   remains gated for live ingress as a deferred collaboration-platform
+   integration. M3-000 is ready.
+4. No collaboration or repository extractor adapter may be built before its
    neutral contract and executable scenario specification are accepted.
-4. Keep provider SDK types inside adapters; domain records use stable external
+5. Keep provider SDK types inside adapters; domain records use stable external
    references only.
-5. Preserve M1 command, tenant, provenance, and outbox guarantees.
-6. Keep factual graph records separate from M3 interpretations and packets.
-7. Do not mark a task done without recorded verification evidence.
+6. Preserve M1 command, tenant, provenance, and outbox guarantees.
+7. Keep factual graph records separate from M3 interpretations and packets.
+8. Do not mark a task done without recorded verification evidence.
+
+## Acceptance-blocker fixes (2026-07-29)
+
+PR-facing note: genesis decide now claims the proposal row first (rowcount==1)
+inside a write txn before creating workspaces; decide requires HUMAN actors and
+emits `workspace.genesis.proposed` / `workspace.genesis.decided`. Curation
+readiness ceilings are **derived** from durable evidence; governed+ claims need
+a HUMAN `readiness_decision_id` with typed `authorized_readiness_level`. Source
+refreshes append immutable observations (migration v21). Context item/module
+provenance IDs are strictly validated. All readiness writes share
+`record_readiness_assessment`.

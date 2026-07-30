@@ -1,7 +1,7 @@
 # M2-011 — Publish M2 contracts and M3 handoff
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-010, M2-017, M2-018, M2-026
 
 ## Objective
@@ -17,6 +17,9 @@ start M3, without expanding M2 into mission or execution authority.
   source refresh, factual graph snapshots, extractors, bounded queries,
   sentinels, coverage, and provenance.
 - Consolidate M2-017 and M2-026 acceptance evidence.
+- **M2-026 published** `artifacts/m2-code-graph-m3-handoff.md` (and acceptance
+  evidence/metrics); M2-011 must consolidate that graph handoff into the final
+  M2→M3 publication. Do not treat M2-026 alone as the milestone close.
 - Publish what M2 guarantees, what remains partial/unsupported, and what M3
   must not reinterpret as fact or authority.
 - Align board status, decisions, gates, events, API/application seams, schema
@@ -52,7 +55,9 @@ replacement.
 
 ## Expected artifacts
 
-- M2 contract index.
-- Consolidated M2 acceptance evidence.
-- M2-to-M3 handoff linking M2-026 graph handoff.
-- Updated board and milestone documentation.
+- `artifacts/m2-contracts-index.md`
+- `artifacts/m2-consolidated-acceptance-evidence.md`
+- `artifacts/m2-to-m3-handoff.md` (links `artifacts/m2-code-graph-m3-handoff.md`)
+- Board/M3 documentation updates; artifacts indexed under
+  `m2-human-collaboration-intake/artifacts/`
+- Optional: `tests/test_m2_011_handoff_artifacts.py`

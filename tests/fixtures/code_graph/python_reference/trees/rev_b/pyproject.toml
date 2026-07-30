@@ -1,0 +1,5 @@
+[project]
+name = "sample-app"
+version = "0.1.0"
+description = "Holodeck factual code-graph reference fixture"
+requires-python = ">=3.12"

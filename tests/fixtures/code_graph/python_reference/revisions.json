@@ -1,0 +1,25 @@
+{
+  "revisions": {
+    "rev_a": {
+      "repository_revision": "fixture:c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb",
+      "tree": "trees/rev_a",
+      "tree_sha256": "c059dce6bb6c4dfa257e2cc1d5d737089fea940091e57090d268dc6dae2c21bb"
+    },
+    "rev_b": {
+      "changed_paths_from_rev_a": [
+        "sample_app/service.py",
+        "tests/test_api.py",
+        "tests/test_service.py"
+      ],
+      "repository_revision": "fixture:9714592f9bbc4b5c5a7b2548d52d57e88d5af1d43e6e27ac0a9864e0a3ec021e",
+      "tree": "trees/rev_b",
+      "tree_sha256": "9714592f9bbc4b5c5a7b2548d52d57e88d5af1d43e6e27ac0a9864e0a3ec021e"
+    }
+  },
+  "schema_version": "m2.code_graph_fixture_revisions.v1",
+  "unresolved_dynamic_call": {
+    "diagnostic_code": "unresolved_dynamic_call",
+    "path": "sample_app/service.py",
+    "symbol": "Greeter.invoke"
+  }
+}

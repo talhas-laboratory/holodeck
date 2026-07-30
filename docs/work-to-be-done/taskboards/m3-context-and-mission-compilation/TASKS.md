@@ -2,7 +2,7 @@
 
 | id | status | owner | title | depends on |
 | --- | --- | --- | --- | --- |
-| `M3-000` | backlog | unassigned | Validate M3 entry, handoff, and benchmark protocol | M2-011 |
+| `M3-000` | ready | unassigned | Validate M3 entry, handoff, and benchmark protocol | M2-011 |
 | `M3-001` | backlog | unassigned | Define typed task contracts and phase readiness | M3-000 |
 | `M3-002` | backlog | unassigned | Persist task position, interpretation, ambiguity, and decisions | M3-001 |
 | `M3-003` | backlog | unassigned | Resolve seed entities and build bounded factual context plans | M3-002 |

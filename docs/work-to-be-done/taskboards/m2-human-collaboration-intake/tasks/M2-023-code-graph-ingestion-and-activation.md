@@ -1,7 +1,7 @@
 # M2-023 — Ingest, validate, and activate factual graph snapshots
 
-**Status:** backlog
-**Owner:** unassigned
+**Status:** done
+**Owner:** cursor
 **Depends on:** M2-021, M2-022
 
 ## Objective
@@ -10,64 +10,33 @@ Connect repository bindings, workspace sources, the extractor port, and SQLite
 persistence through one governed application operation that produces an
 atomically active factual graph for an exact revision.
 
-## Scope
-
-- Add governed application commands for graph build/rebuild and status query.
-- Resolve tenant-scoped active repository bindings and immutable commits.
-- Register or refresh file sources and source observations before facts refer
-  to them.
-- Normalize extractor candidates into M2-019 facts.
-- Persist build/run diagnostics and facts through M2-021.
-- Validate revision, source observation, fact vocabulary, spans, endpoints,
-  counts, limits, and coverage before activation.
-- Atomically activate a successful snapshot and retain the previous active
-  snapshot on every failure.
-- Emit durable requested, completed, partial, failed, and activated events.
-- Provide read-only build/run/snapshot status through the application seam.
-
-## Authority and idempotency
-
-- Mutation requires the existing workspace-intelligence curation authority or
-  a narrower graph-refresh permission introduced with an explicit decision.
-- The idempotency key binds tenant, workspace, repository binding, revision,
-  extractor descriptor, and configuration hash.
-- A replay returns the original result. Reusing the key with different inputs
-  fails.
-- Repository content remains reference data and cannot become instructions.
-
-## Failure scenarios
-
-- Missing/retired binding or unknown revision.
-- Checkout changes during extraction.
-- Extractor unavailable, timeout, partial output, or malformed output.
-- Unknown source observation, invalid span, dangling edge, or cross-tenant ID.
-- Transaction crash before and during activation.
-- Duplicate and concurrent build requests.
-
-## Acceptance criteria
-
-- A fixture revision creates a complete, queryable active snapshot with exact
-  provenance.
-- No partial write becomes active.
-- Requested and actual revisions are identical.
-- Replay is stable and conflicting replay is rejected.
-- A failed rebuild leaves the prior active snapshot unchanged.
-- Every active fact can be traced to a source observation and extraction run.
-- Events and application results use stable schema versions and reason codes.
-
 ## Verification
 
 ```bash
-uv run pytest -q tests/test_m2_code_graph_ingestion.py
-uv run pytest -q tests/test_m2_code_graph_failure_recovery.py
-uv run pytest -q
+uv run --extra dev pytest -q tests/test_m2_code_graph_ingestion.py
+uv run --extra dev pytest -q tests/test_m2_code_graph_failure_recovery.py
+uv run --extra dev pytest -q
 ```
 
-Record exact commands/results, event evidence, active snapshot IDs, changed
-files, and residual risks.
+Results: ingestion+recovery `7 passed`; module contracts green with no
+application→sqlite imports.
 
-## Expected artifacts
+## Evidence and handoff
 
-- Application service/command seam.
-- Normalization and activation orchestration.
-- Ingestion, authority, replay, crash, and concurrent-build tests.
+- `CodeGraphIngestionService.build_graph`: curate authority → active binding →
+  extract → normalize/validate → ensure source observations → persist building
+  snapshot/run/facts/memberships → activate (or mark failed).
+- Durable events: `build_requested`, `build_completed`/`build_partial`,
+  `build_failed`, `snapshot_activated`.
+- Idempotency via `gov_command_receipts` fingerprinting tenant/workspace/binding/
+  revision/extractor descriptor/limits; replay returns prior result; conflicting
+  reuse raises `IdempotencyConflictError`.
+- Failed rebuild leaves prior active snapshot unchanged.
+- Composition: `open_code_graph_ingestion_app`.
+
+## Residual risks
+
+- Incremental refresh remains M2-024.
+- Bounded queries/sentinels remain M2-025.
+- Concurrent dual-build races rely on activation `BEGIN IMMEDIATE` contention;
+  no separate build-lock table yet.

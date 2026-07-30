@@ -255,7 +255,7 @@ def test_migrate_v10_applies() -> None:
     version = conn.execute(
         "SELECT MAX(version) FROM gov_schema_migrations"
     ).fetchone()[0]
-    assert int(version) == 10
+    assert int(version) == 25
     cols = {
         str(row[1])
         for row in conn.execute("PRAGMA table_info(gov_domain_events)").fetchall()

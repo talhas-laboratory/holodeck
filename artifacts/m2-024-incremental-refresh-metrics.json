@@ -1,0 +1,34 @@
+{
+  "changed_paths": [
+    "sample_app/service.py",
+    "tests/test_api.py",
+    "tests/test_service.py"
+  ],
+  "equivalence": {
+    "matching_entities": 45,
+    "matching_relations": 53,
+    "only_left_entities": 0,
+    "only_left_relations": 0,
+    "only_right_entities": 0,
+    "only_right_relations": 0
+  },
+  "full": {
+    "entity_count": 45,
+    "entity_fingerprint_count": 45,
+    "relation_count": 53,
+    "relation_fingerprint_count": 53
+  },
+  "incremental": {
+    "entity_count": 45,
+    "fallback_full": false,
+    "rebuilt_entity_count": 32,
+    "rebuilt_relation_count": 42,
+    "relation_count": 53,
+    "reused_entity_count": 13,
+    "reused_relation_count": 11
+  },
+  "residual_risks": [
+    "Neighborhood re-extraction stamps new observations on impact neighbors even when file bytes are unchanged.",
+    "Rename/delete without an explicit changed-path entry still requires full fallback or an adapter-provided path set."
+  ]
+}
