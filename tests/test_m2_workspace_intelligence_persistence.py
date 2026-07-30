@@ -303,7 +303,7 @@ def _readiness(
 def test_migrate_v19_creates_intelligence_tables() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -326,13 +326,185 @@ def test_migrate_v19_creates_intelligence_tables() -> None:
     assert "promotion_decision_id" in columns
 
 
+def test_migrate_v25_backfills_legacy_source_observations() -> None:
+    """Pre-v21 sources remain visible with observation provenance after upgrade."""
+
+    from holodeck_governance.storage.sqlite.migrations import (
+        GOVERNANCE_MIGRATIONS,
+        migration_now,
+    )
+
+    ids = FixtureIds()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS gov_schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+        """
+    )
+    # Stop before observation pointers exist (through v20).
+    for version, _name, upgrade in GOVERNANCE_MIGRATIONS:
+        if version > 20:
+            break
+        previous = conn.isolation_level
+        conn.isolation_level = None
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            upgrade(conn)
+            conn.execute(
+                "INSERT INTO gov_schema_migrations(version, applied_at) VALUES (?, ?)",
+                (version, migration_now()),
+            )
+            conn.execute("COMMIT")
+        finally:
+            conn.isolation_level = previous
+
+    # Seed a populated pre-observation source without calling helpers that
+    # eagerly migrate to tip (ensure_default_local_tenant migrates fully).
+    conn.execute(
+        """
+        INSERT INTO gov_tenants(
+            tenant_id, slug, display_name, schema_version, created_at,
+            created_by_actor_id, provenance_ref, status, is_default_local
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ids.tenant_alpha,
+            "alpha-legacy",
+            "Alpha",
+            "m1.tenant.v1",
+            NOW.isoformat(),
+            ids.system_service,
+            None,
+            "active",
+            1,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO gov_actors(
+            actor_id, tenant_id, kind, display_name, created_at, created_by_actor_id,
+            schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ids.system_service,
+            ids.tenant_alpha,
+            ActorKind.SERVICE.value,
+            "System",
+            FIXED_CLOCK.isoformat(),
+            ids.system_service,
+            "m1.actor.v1",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO gov_actors(
+            actor_id, tenant_id, kind, display_name, created_at, created_by_actor_id,
+            schema_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ids.human_owner,
+            ids.tenant_alpha,
+            ActorKind.HUMAN.value,
+            "Owner",
+            FIXED_CLOCK.isoformat(),
+            ids.system_service,
+            "m1.actor.v1",
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO gov_objects(
+            object_id, tenant_id, object_type, schema_version, created_at,
+            created_by_actor_id
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ids.workspace_alpha_1,
+            ids.tenant_alpha,
+            "Workspace",
+            "m1.object.v1",
+            NOW.isoformat(),
+            ids.system_service,
+        ),
+    )
+    source_id = generate_uuidv7()
+    columns = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(gov_workspace_sources)").fetchall()
+    }
+    assert "current_observation_id" not in columns
+    assert governance_schema_version(conn) == 20
+    conn.execute(
+        """
+        INSERT INTO gov_workspace_sources(
+            source_id, tenant_id, workspace_object_id, source_type, locator,
+            observed_revision, trust_class, owner_actor_id, sensitivity,
+            refresh_policy, observed_at, stale_status, instruction_authority,
+            content_hash, provenance_reference_id, module_tags_json, created_at,
+            created_by_actor_id, schema_version, promotion_decision_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source_id,
+            ids.tenant_alpha,
+            ids.workspace_alpha_1,
+            SourceType.REPOSITORY_FILE.value,
+            "legacy/README.md",
+            "rev-legacy",
+            TrustClass.ORDINARY_REFERENCE.value,
+            ids.human_owner,
+            "public",
+            "on_revision_change",
+            NOW.isoformat(),
+            StaleStatus.FRESH.value,
+            0,
+            "hash-legacy",
+            None,
+            "[]",
+            NOW.isoformat(),
+            ids.human_owner,
+            "m2.workspace_source.v1",
+            None,
+        ),
+    )
+    conn.commit()
+
+    migrate_governance(conn)
+    assert governance_schema_version(conn) == 25
+    repo = SqliteWorkspaceIntelligenceRepository(conn)
+    listed = repo.list_sources(ids.workspace_alpha_1, tenant_id=ids.tenant_alpha)
+    assert len(listed) == 1
+    source = listed[0]
+    assert source.source_id == source_id
+    assert source.locator == "legacy/README.md"
+    assert source.current_observation_id is not None
+    observation = repo.get_source_observation(source.current_observation_id)
+    assert observation is not None
+    assert observation.source_id == source_id
+    assert observation.observed_revision == "rev-legacy"
+    assert observation.content_hash == "hash-legacy"
+
+
 def test_onboard_persists_intelligence_without_mission_or_run() -> None:
     conn, service, ids, _ = _service()
     model = _model(ids)
     source = _source(ids)
-    module = _module(ids, source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
+    module = _module(
+        ids,
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
+    )
     gap = _gap(ids)
-    readiness = _readiness(ids, model_id=model.model_revision_id, open_gap_ids=(gap.gap_id,))
+    readiness = _readiness(
+        ids, model_id=model.model_revision_id, open_gap_ids=(gap.gap_id,)
+    )
 
     result = service.onboard(
         model=model,
@@ -348,9 +520,10 @@ def test_onboard_persists_intelligence_without_mission_or_run() -> None:
     assert service.get_source(source.source_id) is not None
     assert service.get_context_module(module.module_id) is not None
     assert service.get_knowledge_gap(gap.gap_id) is not None
-    assert service.get_latest_readiness(
-        ids.workspace_alpha_1, tenant_id=ids.tenant_alpha
-    ) is not None
+    assert (
+        service.get_latest_readiness(ids.workspace_alpha_1, tenant_id=ids.tenant_alpha)
+        is not None
+    )
     events = {
         str(row[0])
         for row in conn.execute("SELECT event_type FROM gov_domain_events").fetchall()
@@ -360,12 +533,18 @@ def test_onboard_persists_intelligence_without_mission_or_run() -> None:
     assert M2_EVENT_SOURCE_REGISTERED in events
     assert M2_EVENT_KNOWLEDGE_GAP_CREATED in events
     assert M2_EVENT_READINESS_ASSESSED in events
-    assert conn.execute(
-        "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Mission'"
-    ).fetchone()[0] == 0
-    assert conn.execute(
-        "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Run'"
-    ).fetchone()[0] == 0
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Mission'"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM gov_objects WHERE object_type = 'Run'"
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_untrusted_source_cannot_silently_become_instruction_authority() -> None:
@@ -516,7 +695,12 @@ def test_context_module_rejects_unknown_item_and_source_ids() -> None:
 def test_mark_source_stale_only_affects_dependent_modules() -> None:
     conn, service, ids, _ = _service()
     source = _source(ids)
-    dependent = _module(ids, key="architecture", source_ids=(source.source_id,), observation_ids=(source.current_observation_id,))
+    dependent = _module(
+        ids,
+        key="architecture",
+        source_ids=(source.source_id,),
+        observation_ids=(source.current_observation_id,),
+    )
     unrelated = _module(ids, key="domain-language")
     service.register_source(source)
     service.save_context_module(dependent)
@@ -530,8 +714,12 @@ def test_mark_source_stale_only_affects_dependent_modules() -> None:
         at=NOW,
     )
     assert service.get_source(source.source_id).stale_status is StaleStatus.STALE
-    assert service.get_context_module(dependent.module_id).freshness is StaleStatus.STALE
-    assert service.get_context_module(unrelated.module_id).freshness is StaleStatus.FRESH
+    assert (
+        service.get_context_module(dependent.module_id).freshness is StaleStatus.STALE
+    )
+    assert (
+        service.get_context_module(unrelated.module_id).freshness is StaleStatus.FRESH
+    )
     events = [
         str(row[0])
         for row in conn.execute("SELECT event_type FROM gov_domain_events").fetchall()
@@ -554,7 +742,10 @@ def test_contradiction_remains_open_until_resolved() -> None:
         created_by_actor_id=ids.human_owner,
     )
     service.save_contradiction(contra)
-    assert service.get_contradiction(contra.contradiction_id).status is ContradictionStatus.OPEN
+    assert (
+        service.get_contradiction(contra.contradiction_id).status
+        is ContradictionStatus.OPEN
+    )
     resolution = generate_uuidv7()
     # resolution_reference_id must exist in gov_external_references for FK/trigger.
     conn = _conn
@@ -565,7 +756,13 @@ def test_contradiction_remains_open_until_resolved() -> None:
             locator, observed_at, created_at, created_by_actor_id, schema_version
         ) VALUES (?, ?, 'memory', 'decision', 'res-1', 'memory://res-1', ?, ?, ?, 'm1.external_reference.v1')
         """,
-        (resolution, ids.tenant_alpha, NOW.isoformat(), NOW.isoformat(), ids.system_service),
+        (
+            resolution,
+            ids.tenant_alpha,
+            NOW.isoformat(),
+            NOW.isoformat(),
+            ids.system_service,
+        ),
     )
     conn.commit()
     resolved = service.resolve_contradiction(
@@ -579,7 +776,9 @@ def test_contradiction_remains_open_until_resolved() -> None:
     assert resolved.resolution_reference_id == resolution
 
 
-def test_readiness_governed_with_open_gaps_rejected_and_prior_revisions_queryable() -> None:
+def test_readiness_governed_with_open_gaps_rejected_and_prior_revisions_queryable() -> (
+    None
+):
     _conn, service, ids, _ = _service()
     first = _model(ids, revision=1)
     service.save_model_revision(first)
@@ -717,7 +916,8 @@ def test_module_rejects_nonexistent_and_wrong_source_observation_ids() -> None:
             )
         )
     with pytest.raises(
-        MalformedCommandError, match="observation_id does not belong to module source_ids"
+        MalformedCommandError,
+        match="observation_id does not belong to module source_ids",
     ):
         service.save_context_module(
             _module(

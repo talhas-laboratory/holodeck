@@ -475,16 +475,19 @@ class CodeGraphQueryService:
                 CodeGraphReason.QUERY_LIMIT,
                 "changed_paths must be non-empty for change neighborhood",
             )
-        path_omissions: list[str] = []
-        bounded_paths = tuple(
+        # Preserve caller order after dedupe for auditability.
+        original_paths = tuple(
             dict.fromkeys(path.strip() for path in changed_paths if path.strip())
         )
-        if len(bounded_paths) > budget.max_visited_nodes:
-            bounded_paths = bounded_paths[: budget.max_visited_nodes]
+        path_omissions: list[str] = []
+        # Deterministic load truncation when the visit budget cannot cover every path.
+        load_paths = original_paths
+        if len(original_paths) > budget.max_visited_nodes:
+            load_paths = tuple(sorted(original_paths))[: budget.max_visited_nodes]
             path_omissions.append("changed_paths_budget")
         snapshot, run = self._resolve_snapshot(scope, require_active=False)
         entities, relations, load_omissions = self._load_change_neighborhood_facts(
-            scope, snapshot, changed_paths=bounded_paths, budget=budget
+            scope, snapshot, changed_paths=load_paths, budget=budget
         )
         (
             reextract,
@@ -494,7 +497,7 @@ class CodeGraphQueryService:
             notes,
             omissions,
         ) = change_neighborhood_paths(
-            changed_paths=bounded_paths,
+            changed_paths=load_paths,
             entities=entities,
             relations=relations,
             budget=budget,
@@ -508,14 +511,26 @@ class CodeGraphQueryService:
                 )
             )
         )
-        if load_omissions.reasons:
+        incomplete = bool(path_omissions) or bool(load_omissions.reasons)
+        if incomplete:
             fallback_full = True
-            notes = tuple(dict.fromkeys((*notes, "impact_neighborhood_incomplete")))
+            # Do not return a usable incremental re-extraction plan when the
+            # complete change set could not be established.
+            reextract = ()
+            notes = tuple(
+                dict.fromkeys(
+                    (
+                        *notes,
+                        "impact_neighborhood_incomplete",
+                        "incremental_plan_unusable",
+                    )
+                )
+            )
             merged_reasons = tuple(
                 dict.fromkeys((*merged_reasons, "impact_neighborhood_incomplete"))
             )
         return ChangeNeighborhoodResult(
-            changed_paths=bounded_paths,
+            changed_paths=original_paths,
             reextract_paths=reextract,
             entities=neighborhood_entities,
             relations=neighborhood_relations,
@@ -863,11 +878,15 @@ class CodeGraphQueryService:
             entities, relations = self._load_facts_under_budget(scope, snapshot)
             return entities, relations, QueryOmissions()
 
-        seed_paths = {
-            normalize_repository_relative_path(path.strip())
-            for path in changed_paths
-            if path.strip()
-        }
+        seed_paths = tuple(
+            sorted(
+                {
+                    normalize_repository_relative_path(path.strip())
+                    for path in changed_paths
+                    if path.strip()
+                }
+            )
+        )
         entities_by_id: dict[str, CodeEntityFact] = {}
         relations_by_id: dict[str, CodeRelationFact] = {}
         reasons: list[str] = []
@@ -878,24 +897,40 @@ class CodeGraphQueryService:
             truncated = True
             reasons.extend(reason)
 
+        def _remaining_nodes() -> int:
+            return max(0, budget.max_visited_nodes - len(entities_by_id))
+
+        def _absorb_entities(
+            batch: tuple[CodeEntityFact, ...] | list[CodeEntityFact],
+            *,
+            allowed: int,
+        ) -> None:
+            for entity in batch[:allowed]:
+                entities_by_id[entity.entity_fact_id] = entity
+
         for path in seed_paths:
+            remaining = _remaining_nodes()
+            if remaining <= 0:
+                _mark("max_visited_nodes")
+                break
             batch = self._graphs.find_snapshot_entities(
                 snapshot.snapshot_id,
                 tenant_id=scope.tenant_id,
                 repository_relative_path=path,
-                limit=budget.max_visited_nodes + 1,
+                limit=remaining + 1,
             )
-            if len(batch) > budget.max_visited_nodes:
+            if len(batch) > remaining:
                 _mark("max_visited_nodes")
-                batch = batch[: budget.max_visited_nodes]
-            for entity in batch:
-                entities_by_id[entity.entity_fact_id] = entity
+                _absorb_entities(batch, allowed=remaining)
+                break
+            _absorb_entities(batch, allowed=remaining)
 
         frontier_paths = set(seed_paths)
         all_paths = set(seed_paths)
         depth_exhausted = False
         for depth in range(MAX_INCREMENTAL_IMPACT_DEPTH):
-            if len(entities_by_id) >= budget.max_visited_nodes:
+            remaining = _remaining_nodes()
+            if remaining <= 0:
                 _mark("max_visited_nodes")
                 break
             frontier_ids = tuple(
@@ -922,33 +957,46 @@ class CodeGraphQueryService:
                 relations_by_id[relation.relation_fact_id] = relation
                 needed.add(relation.source_entity_fact_id)
                 needed.add(relation.target_entity_fact_id)
-            missing = tuple(eid for eid in needed if eid not in entities_by_id)
+            missing = tuple(sorted(eid for eid in needed if eid not in entities_by_id))
             if missing:
-                loaded = self._graphs.find_snapshot_entities(
-                    snapshot.snapshot_id,
-                    tenant_id=scope.tenant_id,
-                    entity_fact_ids=missing,
-                    limit=len(missing),
-                )
-                loaded_ids = {entity.entity_fact_id for entity in loaded}
-                if len(loaded_ids) < len(missing):
-                    _mark("unresolved_endpoints")
-                for entity in loaded:
-                    entities_by_id[entity.entity_fact_id] = entity
-                    if entity.repository_relative_path not in all_paths:
-                        new_paths.add(entity.repository_relative_path)
-            for path in tuple(new_paths):
+                remaining = _remaining_nodes()
+                if remaining <= 0:
+                    _mark("max_visited_nodes", "unresolved_endpoints")
+                else:
+                    loaded = self._graphs.find_snapshot_entities(
+                        snapshot.snapshot_id,
+                        tenant_id=scope.tenant_id,
+                        entity_fact_ids=missing,
+                        limit=remaining + 1,
+                    )
+                    if len(loaded) > remaining:
+                        _mark("max_visited_nodes", "unresolved_endpoints")
+                        loaded = loaded[:remaining]
+                    loaded_ids = {entity.entity_fact_id for entity in loaded}
+                    if len(loaded_ids) < len(missing):
+                        # Either unresolved endpoints or budget stopped the load.
+                        if len(loaded) <= remaining:
+                            _mark("unresolved_endpoints")
+                    for entity in loaded:
+                        entities_by_id[entity.entity_fact_id] = entity
+                        if entity.repository_relative_path not in all_paths:
+                            new_paths.add(entity.repository_relative_path)
+            for path in sorted(new_paths):
+                remaining = _remaining_nodes()
+                if remaining <= 0:
+                    _mark("max_visited_nodes")
+                    break
                 path_batch = self._graphs.find_snapshot_entities(
                     snapshot.snapshot_id,
                     tenant_id=scope.tenant_id,
                     repository_relative_path=path,
-                    limit=budget.max_visited_nodes + 1,
+                    limit=remaining + 1,
                 )
-                if len(path_batch) > budget.max_visited_nodes:
+                if len(path_batch) > remaining:
                     _mark("max_visited_nodes")
-                    path_batch = path_batch[: budget.max_visited_nodes]
-                for entity in path_batch:
-                    entities_by_id[entity.entity_fact_id] = entity
+                    _absorb_entities(path_batch, allowed=remaining)
+                    break
+                _absorb_entities(path_batch, allowed=remaining)
             if not new_paths:
                 break
             all_paths |= new_paths

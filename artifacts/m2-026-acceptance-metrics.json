@@ -18,7 +18,7 @@
     "Partial coverage cannot activate until a durable policy-decision seam exists.",
     "GitNexus remains research-only (PolyForm NC); not a production dependency."
   ],
-  "schema_version": 24,
+  "schema_version": 25,
   "steps": {
     "build_rev_a": {
       "entity_count": 43,

@@ -45,6 +45,7 @@ def test_migration_creates_code_graph_tables_and_active_index() -> None:
 def test_migration_24_is_additive_from_v23_baseline() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
+    rollback_governance_migration(conn, 25)
     rollback_governance_migration(conn, 24)
     assert governance_schema_version(conn) == 23
     assert "gov_code_graph_build_claims" not in {

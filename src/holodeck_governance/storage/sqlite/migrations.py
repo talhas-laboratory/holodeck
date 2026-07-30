@@ -7,11 +7,21 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from holodeck_governance.storage.sqlite.migrate_v5 import upgrade_command_path_tables
-from holodeck_governance.storage.sqlite.migrate_v6 import upgrade_record_family_alignment
-from holodeck_governance.storage.sqlite.migrate_v7 import upgrade_enforcement_and_envelopes
-from holodeck_governance.storage.sqlite.migrate_v8 import upgrade_tenant_coupled_ownership
-from holodeck_governance.storage.sqlite.migrate_v9 import upgrade_tenant_coupled_authority
-from holodeck_governance.storage.sqlite.migrate_v10 import upgrade_authority_issuance_basis
+from holodeck_governance.storage.sqlite.migrate_v6 import (
+    upgrade_record_family_alignment,
+)
+from holodeck_governance.storage.sqlite.migrate_v7 import (
+    upgrade_enforcement_and_envelopes,
+)
+from holodeck_governance.storage.sqlite.migrate_v8 import (
+    upgrade_tenant_coupled_ownership,
+)
+from holodeck_governance.storage.sqlite.migrate_v9 import (
+    upgrade_tenant_coupled_authority,
+)
+from holodeck_governance.storage.sqlite.migrate_v10 import (
+    upgrade_authority_issuance_basis,
+)
 from holodeck_governance.storage.sqlite.migrate_v11 import (
     upgrade_collaboration_bindings_and_receipts,
 )
@@ -53,6 +63,9 @@ from holodeck_governance.storage.sqlite.migrate_v23 import (
 from holodeck_governance.storage.sqlite.migrate_v24 import (
     CODE_GRAPH_BUILD_CLAIM_TABLES,
     upgrade_code_graph_foundation_hardening,
+)
+from holodeck_governance.storage.sqlite.migrate_v25 import (
+    upgrade_legacy_source_observation_backfill,
 )
 
 Migration = tuple[int, str, Callable[[sqlite3.Connection], None]]
@@ -364,10 +377,18 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (8, "tenant_coupled_ownership", upgrade_tenant_coupled_ownership),
     (9, "tenant_coupled_authority", upgrade_tenant_coupled_authority),
     (10, "authority_issuance_basis", upgrade_authority_issuance_basis),
-    (11, "collaboration_bindings_and_receipts", upgrade_collaboration_bindings_and_receipts),
+    (
+        11,
+        "collaboration_bindings_and_receipts",
+        upgrade_collaboration_bindings_and_receipts,
+    ),
     (12, "task_origins", upgrade_task_origins),
     (13, "collaboration_tenant_coupling", upgrade_collaboration_tenant_coupling),
-    (14, "accepted_intake_mapping_attribution", upgrade_accepted_intake_mapping_attribution),
+    (
+        14,
+        "accepted_intake_mapping_attribution",
+        upgrade_accepted_intake_mapping_attribution,
+    ),
     (15, "outbound_collaboration_messages", upgrade_outbound_collaboration_messages),
     (16, "workspace_bindings", upgrade_workspace_bindings),
     (17, "workspace_genesis_proposals", upgrade_workspace_genesis_proposals),
@@ -375,9 +396,18 @@ GOVERNANCE_MIGRATIONS: list[Migration] = [
     (19, "workspace_intelligence", upgrade_workspace_intelligence),
     (20, "source_promotion_decision", upgrade_source_promotion_decision),
     (21, "source_observations", upgrade_source_observations),
-    (22, "readiness_auth_observation_coupling", upgrade_readiness_auth_and_observation_coupling),
+    (
+        22,
+        "readiness_auth_observation_coupling",
+        upgrade_readiness_auth_and_observation_coupling,
+    ),
     (23, "code_graph_persistence", upgrade_code_graph_persistence),
     (24, "code_graph_foundation_hardening", upgrade_code_graph_foundation_hardening),
+    (
+        25,
+        "legacy_source_observation_backfill",
+        upgrade_legacy_source_observation_backfill,
+    ),
 ]
 
 
@@ -390,7 +420,9 @@ def governance_schema_version(conn: sqlite3.Connection) -> int:
         )
         """
     )
-    row = conn.execute("SELECT COALESCE(MAX(version), 0) FROM gov_schema_migrations").fetchone()
+    row = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) FROM gov_schema_migrations"
+    ).fetchone()
     return int(row[0])
 
 
@@ -400,6 +432,12 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
     Additive M1 rollback is explicit and version-scoped. It does not rewrite M0 tables.
     """
 
+    if version == 25:
+        # Data backfill only; rolling back removes the version marker.
+        # Observation rows created by the backfill remain (immutable history).
+        conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
+        conn.commit()
+        return
     if version == 24:
         for table in CODE_GRAPH_BUILD_CLAIM_TABLES:
             conn.execute(f"DROP TABLE IF EXISTS {table}")
@@ -569,4 +607,6 @@ def rollback_governance_migration(conn: sqlite3.Connection, version: int) -> Non
         conn.execute("DELETE FROM gov_schema_migrations WHERE version = ?", (version,))
         conn.commit()
         return
-    raise ValueError(f"rollback not supported for governance migration version {version}")
+    raise ValueError(
+        f"rollback not supported for governance migration version {version}"
+    )

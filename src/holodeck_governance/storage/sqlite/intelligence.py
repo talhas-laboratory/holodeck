@@ -1056,7 +1056,6 @@ class SqliteWorkspaceIntelligenceRepository:
                 SELECT * FROM gov_workspace_sources
                 WHERE tenant_id = ? AND workspace_object_id = ?
                   AND stale_status != ?
-                  AND current_observation_id IS NOT NULL
                 ORDER BY created_at, source_id
                 """,
                 (tenant_id, workspace_object_id, StaleStatus.STAGED.value),

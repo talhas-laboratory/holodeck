@@ -1406,3 +1406,64 @@ def test_get_sources_for_facts_bounds_ids_before_sql() -> None:
     )
     assert "max_visited_nodes" in result.omissions.reasons
     assert len(result.provenance) <= tiny.max_results
+
+
+def test_changed_paths_budget_forces_full_fallback() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="paths-budget-a",
+    )
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    # Unmatched paths: no loader overflow can hide the path-budget omission.
+    changed = ("unknown-a.py", "unknown-b.py")
+    tiny = QueryBudget(max_depth=1, max_results=50, max_visited_nodes=1)
+    result = queries.get_change_neighborhood(scope, changed, budget=tiny)
+    assert result.changed_paths == changed
+    assert result.fallback_full is True
+    assert "changed_paths_budget" in result.omissions.reasons
+    assert "impact_neighborhood_incomplete" in result.omissions.reasons
+    assert result.reextract_paths == ()
+    assert "incremental_plan_unusable" in result.notes
+
+
+def test_change_neighborhood_aggregate_entity_budget_bounds_storage() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="agg-budget-a",
+    )
+    assert rev_a.entity_count > 20
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    seed_paths = (
+        "sample_app/api.py",
+        "sample_app/base.py",
+        "sample_app/service.py",
+        "sample_app/store.py",
+        "sample_app/schema.py",
+    )
+    budget = QueryBudget(max_depth=2, max_results=50, max_visited_nodes=5)
+    graphs.entities_rows_fetched = 0
+    result = queries.get_change_neighborhood(scope, seed_paths, budget=budget)
+    # Aggregate remaining+1 probes: at most one overflow row beyond the budget.
+    assert graphs.entities_rows_fetched <= budget.max_visited_nodes + 1
+    assert result.fallback_full is True
+    assert "impact_neighborhood_incomplete" in result.omissions.reasons

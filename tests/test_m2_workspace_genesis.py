@@ -210,7 +210,7 @@ def _open_proposal(
 def test_migrate_v17_creates_genesis_table() -> None:
     conn = sqlite3.connect(":memory:")
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     tables = {
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")

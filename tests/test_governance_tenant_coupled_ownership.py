@@ -91,7 +91,7 @@ def _seed_two_tenants(conn: sqlite3.Connection) -> dict[str, str]:
 def test_fresh_migrate_applies_through_v8_and_installs_identity_triggers() -> None:
     conn = _connect()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     triggers = {
         str(row[0])
         for row in conn.execute(
@@ -142,7 +142,7 @@ def test_v7_database_upgrades_to_v8_preserving_valid_rows() -> None:
     )
     conn.commit()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM gov_workspaces WHERE object_id = ?", (obj,)
@@ -854,4 +854,4 @@ def test_v8_upgrade_function_is_idempotent() -> None:
     migrate_governance(conn)
     upgrade_tenant_coupled_ownership(conn)
     upgrade_tenant_coupled_ownership(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25

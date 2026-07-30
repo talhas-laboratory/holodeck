@@ -103,12 +103,19 @@ def test_representative_m0_sqlite_upgrade_preserves_ids_gs014(tmp_path) -> None:
     assert imported[0].provenance_kind == "legacy_import"
     tables = {
         str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
     }
     if "gov_command_receipts" in tables:
-        assert conn.execute("SELECT COUNT(*) FROM gov_command_receipts").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM gov_command_receipts").fetchone()[0] == 0
+        )
     refreshed = Store(db).tasks("ws-alpha")
-    assert any(item["task_id"] == "task-1" and item["status"] == "in-progress" for item in refreshed)
+    assert any(
+        item["task_id"] == "task-1" and item["status"] == "in-progress"
+        for item in refreshed
+    )
 
 
 def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
@@ -127,7 +134,7 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
     conn.row_factory = sqlite3.Row
     ids = FixtureIds()
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     report = import_legacy_database(
         conn, tenant_id=ids.tenant_alpha, actor_id=ids.system_service
     )
@@ -143,16 +150,24 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
         conn, tenant_id=ids.tenant_alpha, actor_id=ids.system_service
     )
     assert len(again.tasks) == 1
-    assert conn.execute("SELECT COUNT(*) FROM gov_legacy_task_imports").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT COUNT(*) FROM gov_legacy_task_imports").fetchone()[0] == 1
+    )
     # INSERT OR IGNORE leaves one row; re-import report still echoes mapped facts
     assert again.tasks[0].legacy_task_id == "task-1"
     tables = {
         str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
     }
     if "gov_command_receipts" in tables:
-        assert conn.execute("SELECT COUNT(*) FROM gov_command_receipts").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT COUNT(*) FROM gov_command_receipts").fetchone()[0] == 0
+        )
     # Rollback of additive migrations leaves earlier gov schema intact
+    rollback_governance_migration(conn, 25)
+    assert governance_schema_version(conn) == 24
     rollback_governance_migration(conn, 24)
     assert governance_schema_version(conn) == 23
     rollback_governance_migration(conn, 23)
@@ -195,17 +210,21 @@ def test_legacy_upgrade_rollback_and_api_matrix_gs014(tmp_path) -> None:
     assert governance_schema_version(conn) == 4
     tables = {
         str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
     }
     assert "gov_command_receipts" not in tables
     assert "gov_tenants" in tables
     assert "tasks" in tables
     # Re-upgrade restores command-path tables
     migrate_governance(conn)
-    assert governance_schema_version(conn) == 24
+    assert governance_schema_version(conn) == 25
     assert "gov_command_receipts" in {
         str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
     }
     # M0 HTTP-facing store API remains compatible after upgrade/rollback/re-upgrade
     refreshed = Store(db)

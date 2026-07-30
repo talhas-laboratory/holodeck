@@ -139,10 +139,9 @@ def source_is_live(source: WorkspaceSource) -> bool:
     """True when a source is visible to ordinary workspace-intelligence reads.
 
     Staged sources exist only so graph-fact FKs can resolve before activation;
-    they must not appear as current/fresh workspace knowledge.
+    they must not appear as current/fresh workspace knowledge. Legacy sources
+    upgraded from pre-observation schemas may temporarily lack a pointer until
+    backfill runs; those remain live and report missing provenance honestly.
     """
 
-    return (
-        source.stale_status is not StaleStatus.STAGED
-        and source.current_observation_id is not None
-    )
+    return source.stale_status is not StaleStatus.STAGED
