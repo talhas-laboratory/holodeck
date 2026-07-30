@@ -530,7 +530,75 @@ def _upgrade_workspace_fk_and_claim_safeguards(conn: sqlite3.Connection) -> None
     conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _upgrade_governed_missions(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE workspace_sources (
+            source_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+            revision TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE curator_proposals (
+            proposal_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('delegation_contract', 'requirement')),
+            status TEXT NOT NULL CHECK (status IN ('proposed', 'approved', 'rejected')),
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            decided_at TEXT,
+            FOREIGN KEY (workspace_id, task_id) REFERENCES tasks(workspace_id, task_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE missions (
+            mission_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('ready', 'accepted', 'rejected')),
+            packet_hash TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (workspace_id, task_id) REFERENCES tasks(workspace_id, task_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE mission_evidence (
+            evidence_id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL REFERENCES missions(mission_id),
+            requirement_id TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE acceptance_decisions (
+            decision_id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL UNIQUE REFERENCES missions(mission_id),
+            decision TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected')),
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX curator_proposals_task ON curator_proposals(workspace_id, task_id, status)")
+    conn.execute("CREATE INDEX mission_evidence_mission ON mission_evidence(mission_id, requirement_id)")
+
+
 MIGRATIONS: list[Migration] = [
     (1, "relational_integrity", _upgrade_relational_integrity),
     (2, "workspace_fk_and_claim_safeguards", _upgrade_workspace_fk_and_claim_safeguards),
+    (3, "governed_missions", _upgrade_governed_missions),
 ]

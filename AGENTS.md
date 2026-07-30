@@ -1,5 +1,22 @@
 # Holodeck agent direction
 
+## Required product context
+
+Before making a product, architecture, integration, or execution-model decision, read:
+
+1. `docs/product-vision/README.md`
+2. `docs/product-vision/PRODUCT_VISION.md`
+3. `docs/product-vision/DECISION_GUIDE.md`
+
+When the work touches human/agent collaboration platforms, external event
+ingress, agent launching, project or repository bindings, or signed approvals,
+also read `docs/product-vision/BUZZ_INTEGRATION_STRATEGY.md`.
+
+Treat the product vision as durable direction, not as proof that a capability
+already exists. Verify current behavior in source and tests. If an implementation
+choice conflicts with the product vision, record the conflict and rationale
+before proceeding.
+
 ## Design principles
 
 - Anything we build must be thought through elegantly. Prefer the most elegant solution to the problem at the current stage — not the most elaborate, and not a premature abstraction for a later stage we have not reached.

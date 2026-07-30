@@ -4,6 +4,19 @@ Holodeck is a local-first, self-hosted control plane for bounded autonomous deve
 
 It is deliberately independent of OpenClaw, Telegram, and any hosted control plane. The included Compose file is a reference deployment only.
 
+## Product direction
+
+The durable product vision and decision rules live in
+[docs/product-vision/](docs/product-vision/README.md). They describe Holodeck as
+the governed execution kernel behind collaboration surfaces such as Block's
+Buzz: humans initiate work in the platform they already use, while Holodeck
+compiles intent into bounded missions, provisions execution workspaces,
+coordinates agents, and controls evidence-based acceptance.
+
+Implementation specifications and historical work remain under
+[docs/work-to-be-done/](docs/work-to-be-done/README.md); they do not replace the
+product vision.
+
 ## Install and run locally
 
 Install the published package (once a release is available) into a virtual environment:

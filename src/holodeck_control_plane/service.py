@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable
 
 from .api import api_config_section
-from .errors import HolodeckError
+from .errors import HolodeckError, ValidationError
 from .http_request import http_status_for_error, read_json_object, validate_bind_host, validate_identifier
 from .http_server import create_http_server
 from .project import DEFAULT_POLICY
@@ -52,6 +52,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _run_id(self, parts: list[str], index: int) -> str:
         return validate_identifier(parts[index], "run_id")
+
+    def _proposal_id(self, parts: list[str], index: int) -> str:
+        return validate_identifier(parts[index], "proposal_id")
+
+    def _mission_id(self, parts: list[str], index: int) -> str:
+        return validate_identifier(parts[index], "mission_id")
 
     def _asset(self, name: str) -> None:
         root = files("holodeck_control_plane").joinpath("frontend")
@@ -118,11 +124,35 @@ class Handler(BaseHTTPRequestHandler):
                             {"id": "runs", "label": "Agent runs and path claims", "status": "available"},
                             {"id": "overlap", "label": "Overlapping path protection", "status": "available"},
                             {"id": "policy", "label": "Advisory project onboarding policy", "status": "available"},
+                            {"id": "governance_commands", "label": "M1 governed command boundary", "status": "available"},
                             {"id": "evidence", "label": "Verification evidence", "status": "planned"},
                             {"id": "handoffs", "label": "Agent handoffs", "status": "planned"},
                             {"id": "adapters", "label": "Repository, agent, and CI adapters", "status": "planned"},
                         ],
                     },
+                )
+            if len(parts) == 5 and parts[:3] == ["api", "governance", "commands"] and parts[4] == "reconstruction":
+                from holodeck_control_plane.governance_commands import (
+                    reconstruct_governance_decision,
+                )
+
+                command_id = validate_identifier(parts[3], "command_id")
+                query = self.path.split("?", 1)
+                params = {}
+                if len(query) == 2:
+                    from urllib.parse import parse_qs
+
+                    params = {k: v[0] for k, v in parse_qs(query[1]).items() if v}
+                tenant_id = params.get("tenant_id")
+                if not tenant_id:
+                    raise ValidationError("tenant_id query parameter is required")
+                return self._send(
+                    HTTPStatus.OK,
+                    reconstruct_governance_decision(
+                        self.store.database,
+                        tenant_id=tenant_id,
+                        command_id=command_id,
+                    ),
                 )
             if parts == ["api", "workspaces"]:
                 return self._send(HTTPStatus.OK, {"workspaces": self.store.catalog()})
@@ -135,6 +165,17 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "workspaces"] and parts[3] == "claims":
                 workspace_id = self._workspace_id(parts, 2)
                 return self._send(HTTPStatus.OK, {"claims": self.store.claims(workspace_id)})
+            if len(parts) == 4 and parts[:2] == ["api", "workspaces"] and parts[3] == "sources":
+                workspace_id = self._workspace_id(parts, 2)
+                return self._send(HTTPStatus.OK, {"sources": self.store.sources(workspace_id)})
+            if len(parts) == 6 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "missions":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.OK, {"missions": self.store.missions(workspace_id, task_id)})
+            if len(parts) == 7 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "missions":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.OK, self.store.mission(workspace_id, task_id, self._mission_id(parts, 6)))
             if len(parts) == 3 and parts[:2] == ["api", "workspaces"]:
                 workspace_id = self._workspace_id(parts, 2)
                 return self._send(HTTPStatus.OK, self.store.workspace(workspace_id))
@@ -163,8 +204,23 @@ class Handler(BaseHTTPRequestHandler):
 
         def action() -> None:
             payload = self._json()
+            if parts == ["api", "governance", "commands"]:
+                from holodeck_control_plane.governance_commands import (
+                    submit_governance_command_request,
+                )
+
+                result = submit_governance_command_request(self.store.database, payload)
+                status = (
+                    HTTPStatus.CREATED
+                    if result["receipt"]["outcome"] == "accepted"
+                    else HTTPStatus.OK
+                )
+                return self._send(status, result)
             if parts == ["api", "workspaces"]:
                 return self._send(HTTPStatus.CREATED, self.store.create_workspace(payload))
+            if len(parts) == 4 and parts[:2] == ["api", "workspaces"] and parts[3] == "sources":
+                workspace_id = self._workspace_id(parts, 2)
+                return self._send(HTTPStatus.CREATED, self.store.create_source(workspace_id, payload))
             if len(parts) == 4 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks":
                 workspace_id = self._workspace_id(parts, 2)
                 return self._send(HTTPStatus.CREATED, self.store.create_task(workspace_id, payload))
@@ -175,6 +231,26 @@ class Handler(BaseHTTPRequestHandler):
                 workspace_id = self._workspace_id(parts, 2)
                 run_id = self._run_id(parts, 4)
                 return self._send(HTTPStatus.OK, self.store.complete_run(workspace_id, run_id, payload))
+            if len(parts) == 6 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "curator-proposals":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.CREATED, self.store.propose(workspace_id, task_id, payload))
+            if len(parts) == 8 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "curator-proposals" and parts[7] == "approve":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.OK, self.store.approve_proposal(workspace_id, task_id, self._proposal_id(parts, 6)))
+            if len(parts) == 6 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "missions":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.CREATED, self.store.compile_mission(workspace_id, task_id, payload))
+            if len(parts) == 8 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "missions" and parts[7] == "evidence":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.CREATED, self.store.add_evidence(workspace_id, task_id, self._mission_id(parts, 6), payload))
+            if len(parts) == 8 and parts[:2] == ["api", "workspaces"] and parts[3] == "tasks" and parts[5] == "missions" and parts[7] == "accept":
+                workspace_id = self._workspace_id(parts, 2)
+                task_id = self._task_id(parts, 4)
+                return self._send(HTTPStatus.OK, self.store.accept_mission(workspace_id, task_id, self._mission_id(parts, 6)))
             self._send(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
         self._handle(action)

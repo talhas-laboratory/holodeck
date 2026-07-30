@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 
 from .service import serve
 from .project import initialize_project, policy_decision
@@ -34,6 +35,23 @@ def main() -> None:
         default="http://127.0.0.1:8787",
         help="Base URL of a running Holodeck HTTP runtime",
     )
+    gov_parser = commands.add_parser(
+        "governance-command",
+        help="Submit an M1 governed command through the command boundary",
+    )
+    gov_parser.add_argument("--database", default="holodeck.db")
+    gov_parser.add_argument(
+        "--request-json",
+        required=True,
+        help="Path to JSON request with command + actor_tenant_id fields",
+    )
+    recon_parser = commands.add_parser(
+        "governance-reconstruct",
+        help="Reconstruct an M1 decision from a command receipt",
+    )
+    recon_parser.add_argument("--database", default="holodeck.db")
+    recon_parser.add_argument("--tenant-id", required=True)
+    recon_parser.add_argument("--command-id", required=True)
     args = parser.parse_args()
     if args.command == "init":
         result = initialize_project(args.path, force=args.force)
@@ -46,5 +64,31 @@ def main() -> None:
         from holodeck_control_plane.mcp_server import run_mcp
 
         run_mcp(base_url=args.base_url)
+        return
+    if args.command == "governance-command":
+        from holodeck_control_plane.governance_commands import (
+            load_governance_command_json,
+            submit_governance_command_request,
+        )
+
+        payload = load_governance_command_json(args.request_json)
+        print(json.dumps(submit_governance_command_request(args.database, payload), indent=2))
+        return
+    if args.command == "governance-reconstruct":
+        from holodeck_control_plane.governance_commands import (
+            reconstruct_governance_decision,
+        )
+
+        print(
+            json.dumps(
+                reconstruct_governance_decision(
+                    args.database,
+                    tenant_id=args.tenant_id,
+                    command_id=args.command_id,
+                ),
+                indent=2,
+                default=str,
+            )
+        )
         return
     serve(database=args.database, host=args.host, port=args.port, insecure_bind=args.insecure_bind)

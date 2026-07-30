@@ -1,0 +1,50 @@
+{
+  "calls": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "configures": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "contains": {
+    "precision": 0.1,
+    "recall": 1.0
+  },
+  "defines": {
+    "precision": 0.0625,
+    "recall": 1.0
+  },
+  "exposes": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "handles": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "imports": {
+    "precision": 0.2857142857142857,
+    "recall": 1.0
+  },
+  "inherits": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "migrates": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "reads": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "tests": {
+    "precision": 1.0,
+    "recall": 1.0
+  },
+  "writes": {
+    "precision": 1.0,
+    "recall": 1.0
+  }
+}

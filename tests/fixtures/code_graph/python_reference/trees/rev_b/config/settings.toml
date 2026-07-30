@@ -1,0 +1,4 @@
+# Application runtime settings for the factual graph fixture.
+[app]
+greeting = "hello"
+store_path = "data/items.json"
