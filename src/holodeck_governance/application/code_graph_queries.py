@@ -475,9 +475,16 @@ class CodeGraphQueryService:
                 CodeGraphReason.QUERY_LIMIT,
                 "changed_paths must be non-empty for change neighborhood",
             )
+        path_omissions: list[str] = []
+        bounded_paths = tuple(
+            dict.fromkeys(path.strip() for path in changed_paths if path.strip())
+        )
+        if len(bounded_paths) > budget.max_visited_nodes:
+            bounded_paths = bounded_paths[: budget.max_visited_nodes]
+            path_omissions.append("changed_paths_budget")
         snapshot, run = self._resolve_snapshot(scope, require_active=False)
-        entities, relations = self._load_change_neighborhood_facts(
-            scope, snapshot, changed_paths=tuple(changed_paths), budget=budget
+        entities, relations, load_omissions = self._load_change_neighborhood_facts(
+            scope, snapshot, changed_paths=bounded_paths, budget=budget
         )
         (
             reextract,
@@ -487,22 +494,35 @@ class CodeGraphQueryService:
             notes,
             omissions,
         ) = change_neighborhood_paths(
-            changed_paths=tuple(changed_paths),
+            changed_paths=bounded_paths,
             entities=entities,
             relations=relations,
             budget=budget,
         )
+        merged_reasons = tuple(
+            dict.fromkeys(
+                (
+                    *path_omissions,
+                    *load_omissions.reasons,
+                    *omissions.reasons,
+                )
+            )
+        )
+        if load_omissions.reasons:
+            fallback_full = True
+            notes = tuple(dict.fromkeys((*notes, "impact_neighborhood_incomplete")))
+            merged_reasons = tuple(
+                dict.fromkeys((*merged_reasons, "impact_neighborhood_incomplete"))
+            )
         return ChangeNeighborhoodResult(
-            changed_paths=tuple(
-                sorted({path.strip() for path in changed_paths if path.strip()})
-            ),
+            changed_paths=bounded_paths,
             reextract_paths=reextract,
             entities=neighborhood_entities,
             relations=neighborhood_relations,
             fallback_full=fallback_full,
             notes=notes,
             coverage=self._coverage(snapshot),
-            omissions=omissions,
+            omissions=QueryOmissions(reasons=merged_reasons),
             diagnostics=_diagnostic_summary(run),
         )
 
@@ -518,6 +538,16 @@ class CodeGraphQueryService:
         snapshot, run = self._resolve_snapshot(scope, require_active=False)
         entity_ids = tuple(dict.fromkeys(entity_fact_ids))
         relation_ids = tuple(dict.fromkeys(relation_fact_ids))
+        omission_reasons: list[str] = []
+        visit_budget = budget.max_visited_nodes
+        # Apply visit budget across entity + relation identifiers before SQL.
+        if len(entity_ids) + len(relation_ids) > visit_budget:
+            entity_keep = min(len(entity_ids), visit_budget)
+            relation_keep = max(0, visit_budget - entity_keep)
+            if entity_keep < len(entity_ids) or relation_keep < len(relation_ids):
+                omission_reasons.append("max_visited_nodes")
+            entity_ids = entity_ids[:entity_keep]
+            relation_ids = relation_ids[:relation_keep]
         entities: tuple[CodeEntityFact, ...] = ()
         if entity_ids:
             entities = self._graphs.find_snapshot_entities(
@@ -540,14 +570,13 @@ class CodeGraphQueryService:
             entity_fact_ids=entity_ids,
             relation_fact_ids=relation_ids,
         )
-        omissions = QueryOmissions()
         if len(provenance) > budget.max_results:
             provenance = provenance[: budget.max_results]
-            omissions = QueryOmissions(reasons=("max_results",))
+            omission_reasons.append("max_results")
         return SourcesForFactsResult(
             provenance=provenance,
             coverage=self._coverage(snapshot),
-            omissions=omissions,
+            omissions=QueryOmissions(reasons=tuple(dict.fromkeys(omission_reasons))),
             diagnostics=_diagnostic_summary(run),
         )
 
@@ -652,30 +681,54 @@ class CodeGraphQueryService:
                 omissions=QueryOmissions(reasons=("max_visited_nodes",)),
                 diagnostics=_diagnostic_summary(run),
             )
+        omission_reasons: list[str] = []
+        bounded_paths = tuple(
+            dict.fromkeys(path.strip() for path in changed_paths if path.strip())
+        )
+        bounded_prefixes = tuple(
+            dict.fromkeys(p.strip() for p in sensitive_path_prefixes if p.strip())
+        )
+        bounded_symbols = tuple(
+            dict.fromkeys(s.strip() for s in sensitive_symbols if s.strip())
+        )
+        ingress_total = (
+            len(bounded_paths) + len(bounded_prefixes) + len(bounded_symbols)
+        )
+        if ingress_total > budget.max_visited_nodes:
+            # Prefer paths, then prefixes, then symbols under the visit budget.
+            keep = budget.max_visited_nodes
+            path_keep = min(len(bounded_paths), keep)
+            keep -= path_keep
+            prefix_keep = min(len(bounded_prefixes), keep)
+            keep -= prefix_keep
+            symbol_keep = min(len(bounded_symbols), keep)
+            bounded_paths = bounded_paths[:path_keep]
+            bounded_prefixes = bounded_prefixes[:prefix_keep]
+            bounded_symbols = bounded_symbols[:symbol_keep]
+            omission_reasons.append("max_visited_nodes")
         entities, relations = self._load_sentinel_facts(
             scope,
             snapshot,
-            changed_paths=tuple(changed_paths),
-            sensitive_path_prefixes=tuple(sensitive_path_prefixes),
+            changed_paths=bounded_paths,
+            sensitive_path_prefixes=bounded_prefixes,
             budget=budget,
         )
         findings = evaluate_sentinels(
             entities=entities,
             relations=relations,
             coverage_status=snapshot.coverage_status,
-            changed_paths=tuple(changed_paths),
+            changed_paths=bounded_paths,
             ownership_tags=tuple(ownership_tags),
-            sensitive_path_prefixes=tuple(sensitive_path_prefixes),
-            sensitive_symbols=tuple(sensitive_symbols),
+            sensitive_path_prefixes=bounded_prefixes,
+            sensitive_symbols=bounded_symbols,
         )
-        omissions = QueryOmissions()
         if len(findings) > budget.max_results:
             findings = findings[: budget.max_results]
-            omissions = QueryOmissions(reasons=("max_results",))
+            omission_reasons.append("max_results")
         return SentinelEvaluationResult(
             findings=findings,
             coverage=self._coverage(snapshot),
-            omissions=omissions,
+            omissions=QueryOmissions(reasons=tuple(dict.fromkeys(omission_reasons))),
             diagnostics=_diagnostic_summary(run),
         )
 
@@ -799,11 +852,16 @@ class CodeGraphQueryService:
         *,
         changed_paths: tuple[str, ...],
         budget: QueryBudget,
-    ) -> tuple[tuple[CodeEntityFact, ...], tuple[CodeRelationFact, ...]]:
+    ) -> tuple[
+        tuple[CodeEntityFact, ...],
+        tuple[CodeRelationFact, ...],
+        QueryOmissions,
+    ]:
         """Load only changed-path entities and impact-expanded neighbors."""
 
         if _snapshot_fact_count(snapshot) <= budget.max_visited_nodes:
-            return self._load_facts_under_budget(scope, snapshot)
+            entities, relations = self._load_facts_under_budget(scope, snapshot)
+            return entities, relations, QueryOmissions()
 
         seed_paths = {
             normalize_repository_relative_path(path.strip())
@@ -812,20 +870,33 @@ class CodeGraphQueryService:
         }
         entities_by_id: dict[str, CodeEntityFact] = {}
         relations_by_id: dict[str, CodeRelationFact] = {}
+        reasons: list[str] = []
+        truncated = False
+
+        def _mark(*reason: str) -> None:
+            nonlocal truncated
+            truncated = True
+            reasons.extend(reason)
+
         for path in seed_paths:
-            for entity in self._graphs.find_snapshot_entities(
+            batch = self._graphs.find_snapshot_entities(
                 snapshot.snapshot_id,
                 tenant_id=scope.tenant_id,
                 repository_relative_path=path,
                 limit=budget.max_visited_nodes + 1,
-            ):
+            )
+            if len(batch) > budget.max_visited_nodes:
+                _mark("max_visited_nodes")
+                batch = batch[: budget.max_visited_nodes]
+            for entity in batch:
                 entities_by_id[entity.entity_fact_id] = entity
 
         frontier_paths = set(seed_paths)
         all_paths = set(seed_paths)
-        overflow = False
-        for _depth in range(MAX_INCREMENTAL_IMPACT_DEPTH):
+        depth_exhausted = False
+        for depth in range(MAX_INCREMENTAL_IMPACT_DEPTH):
             if len(entities_by_id) >= budget.max_visited_nodes:
+                _mark("max_visited_nodes")
                 break
             frontier_ids = tuple(
                 entity.entity_fact_id
@@ -834,13 +905,17 @@ class CodeGraphQueryService:
             )
             if not frontier_ids:
                 break
+            relation_limit = budget.max_visited_nodes + 1
             batch = self._graphs.find_snapshot_relations(
                 snapshot.snapshot_id,
                 tenant_id=scope.tenant_id,
                 relation_kinds=_IMPACT_RELATION_KIND_VALUES,
                 either_entity_fact_ids=frontier_ids,
-                limit=budget.max_visited_nodes + 1,
+                limit=relation_limit,
             )
+            if len(batch) >= relation_limit:
+                _mark("max_results")
+                batch = batch[: budget.max_visited_nodes]
             new_paths: set[str] = set()
             needed: set[str] = set()
             for relation in batch:
@@ -849,28 +924,41 @@ class CodeGraphQueryService:
                 needed.add(relation.target_entity_fact_id)
             missing = tuple(eid for eid in needed if eid not in entities_by_id)
             if missing:
-                for entity in self._graphs.find_snapshot_entities(
+                loaded = self._graphs.find_snapshot_entities(
                     snapshot.snapshot_id,
                     tenant_id=scope.tenant_id,
                     entity_fact_ids=missing,
                     limit=len(missing),
-                ):
+                )
+                loaded_ids = {entity.entity_fact_id for entity in loaded}
+                if len(loaded_ids) < len(missing):
+                    _mark("unresolved_endpoints")
+                for entity in loaded:
                     entities_by_id[entity.entity_fact_id] = entity
                     if entity.repository_relative_path not in all_paths:
                         new_paths.add(entity.repository_relative_path)
             for path in tuple(new_paths):
-                for entity in self._graphs.find_snapshot_entities(
+                path_batch = self._graphs.find_snapshot_entities(
                     snapshot.snapshot_id,
                     tenant_id=scope.tenant_id,
                     repository_relative_path=path,
                     limit=budget.max_visited_nodes + 1,
-                ):
+                )
+                if len(path_batch) > budget.max_visited_nodes:
+                    _mark("max_visited_nodes")
+                    path_batch = path_batch[: budget.max_visited_nodes]
+                for entity in path_batch:
                     entities_by_id[entity.entity_fact_id] = entity
             if not new_paths:
                 break
             all_paths |= new_paths
             frontier_paths = new_paths
+            if depth + 1 >= MAX_INCREMENTAL_IMPACT_DEPTH:
+                depth_exhausted = True
         else:
+            depth_exhausted = True
+
+        if depth_exhausted and frontier_paths:
             frontier_ids = tuple(
                 entity.entity_fact_id
                 for entity in entities_by_id.values()
@@ -884,6 +972,10 @@ class CodeGraphQueryService:
                     either_entity_fact_ids=frontier_ids,
                     limit=budget.max_visited_nodes + 1,
                 )
+                if batch:
+                    # Depth budget exhausted while frontier still has edges —
+                    # neighborhood cannot be proven complete.
+                    _mark("impact_depth_exhausted")
                 for relation in batch:
                     relations_by_id[relation.relation_fact_id] = relation
                     for endpoint in (
@@ -891,17 +983,16 @@ class CodeGraphQueryService:
                         relation.target_entity_fact_id,
                     ):
                         if endpoint not in entities_by_id:
-                            overflow = True
-                            break
-                    if overflow:
-                        break
+                            _mark("unresolved_endpoints")
 
-        if overflow:
-            # Domain planner would fallback_full; load under budget is impossible.
-            # Return collected subset — change_neighborhood_paths may under-expand.
-            pass
+        if truncated and "impact_neighborhood_incomplete" not in reasons:
+            reasons.append("impact_neighborhood_incomplete")
 
-        return tuple(entities_by_id.values()), tuple(relations_by_id.values())
+        return (
+            tuple(entities_by_id.values()),
+            tuple(relations_by_id.values()),
+            QueryOmissions(reasons=tuple(dict.fromkeys(reasons))),
+        )
 
     def _load_sentinel_facts(
         self,

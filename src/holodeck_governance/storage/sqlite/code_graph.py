@@ -91,6 +91,24 @@ def _sql_in_placeholders(count: int) -> str:
     return ",".join("?" * count)
 
 
+# Stay under common SQLITE_MAX_VARIABLE_NUMBER builds (often 999).
+# either_entity_fact_ids doubles placeholders, so chunk that list smaller.
+SQL_IN_CHUNK_SIZE = 400
+SQL_IN_EITHER_CHUNK_SIZE = 200
+
+
+def _escape_like(value: str) -> str:
+    """Escape ``\\``, ``%``, and ``_`` for SQLite LIKE with ``ESCAPE '\\'``."""
+
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _chunked(values: tuple[str, ...] | list[str], size: int) -> list[tuple[str, ...]]:
+    if not values:
+        return []
+    return [tuple(values[i : i + size]) for i in range(0, len(values), size)]
+
+
 class SqliteCodeGraphRepository:
     """Tenant-safe immutable store for factual code-graph snapshots."""
 
@@ -832,6 +850,56 @@ class SqliteCodeGraphRepository:
         if entity_kinds is not None and not entity_kinds:
             return ()
 
+        id_chunks: list[tuple[str, ...] | None]
+        if entity_fact_ids is None:
+            id_chunks = [None]
+        else:
+            id_chunks = _chunked(entity_fact_ids, SQL_IN_CHUNK_SIZE)
+
+        collected: list[CodeEntityFact] = []
+        seen: set[str] = set()
+        for id_chunk in id_chunks:
+            remaining = None if limit is None else max(limit - len(collected), 0)
+            if limit is not None and remaining == 0:
+                break
+            batch = self._find_snapshot_entities_chunk(
+                snapshot_id,
+                tenant_id=tenant_id,
+                entity_kind=entity_kind,
+                entity_kinds=entity_kinds,
+                language=language,
+                qualified_name=qualified_name,
+                qualified_name_exact=qualified_name_exact,
+                entity_fact_ids=id_chunk,
+                repository_relative_path=repository_relative_path,
+                path_prefix=path_prefix,
+                limit=remaining,
+            )
+            for entity in batch:
+                if entity.entity_fact_id in seen:
+                    continue
+                seen.add(entity.entity_fact_id)
+                collected.append(entity)
+        collected.sort(key=lambda entity: entity.entity_key)
+        if limit is not None:
+            collected = collected[:limit]
+        return tuple(collected)
+
+    def _find_snapshot_entities_chunk(
+        self,
+        snapshot_id: str,
+        *,
+        tenant_id: str,
+        entity_kind: str | None,
+        entity_kinds: tuple[str, ...] | None,
+        language: str | None,
+        qualified_name: str | None,
+        qualified_name_exact: bool,
+        entity_fact_ids: tuple[str, ...] | None,
+        repository_relative_path: str | None,
+        path_prefix: str | None,
+        limit: int | None,
+    ) -> tuple[CodeEntityFact, ...]:
         clauses = ["m.snapshot_id = ?", "m.tenant_id = ?"]
         params: list[object] = [snapshot_id, tenant_id]
         if entity_kinds is not None:
@@ -850,11 +918,7 @@ class SqliteCodeGraphRepository:
                 clauses.append("f.qualified_name = ?")
                 params.append(qualified_name)
             else:
-                escaped = (
-                    qualified_name.replace("\\", "\\\\")
-                    .replace("%", "\\%")
-                    .replace("_", "\\_")
-                )
+                escaped = _escape_like(qualified_name)
                 clauses.append("f.qualified_name LIKE ? ESCAPE '\\'")
                 params.append(f"%{escaped}%")
         if entity_fact_ids is not None:
@@ -866,11 +930,13 @@ class SqliteCodeGraphRepository:
             clauses.append("f.repository_relative_path = ?")
             params.append(repository_relative_path)
         if path_prefix is not None and path_prefix != ".":
+            escaped_descendants = _escape_like(path_prefix.rstrip("/") + "/") + "%"
             clauses.append(
-                "(f.repository_relative_path = ? OR f.repository_relative_path LIKE ?)"
+                "(f.repository_relative_path = ? OR "
+                "f.repository_relative_path LIKE ? ESCAPE '\\')"
             )
             params.append(path_prefix)
-            params.append(path_prefix.rstrip("/") + "/%")
+            params.append(escaped_descendants)
         sql = f"""
             SELECT f.* FROM gov_code_entity_facts f
             JOIN gov_code_graph_snapshot_entities m
@@ -945,6 +1011,74 @@ class SqliteCodeGraphRepository:
         if either_entity_fact_ids is not None and not either_entity_fact_ids:
             return ()
 
+        # Chunk the largest caller-controlled IN lists beneath the backend limit.
+        fact_id_chunks: list[tuple[str, ...] | None]
+        if relation_fact_ids is None:
+            fact_id_chunks = [None]
+        else:
+            fact_id_chunks = _chunked(relation_fact_ids, SQL_IN_CHUNK_SIZE)
+
+        either_chunks: list[tuple[str, ...] | None]
+        if either_entity_fact_ids is None:
+            either_chunks = [None]
+        else:
+            either_chunks = _chunked(either_entity_fact_ids, SQL_IN_EITHER_CHUNK_SIZE)
+
+        source_chunks: list[tuple[str, ...] | None]
+        if source_entity_fact_ids is None:
+            source_chunks = [None]
+        else:
+            source_chunks = _chunked(source_entity_fact_ids, SQL_IN_CHUNK_SIZE)
+
+        target_chunks: list[tuple[str, ...] | None]
+        if target_entity_fact_ids is None:
+            target_chunks = [None]
+        else:
+            target_chunks = _chunked(target_entity_fact_ids, SQL_IN_CHUNK_SIZE)
+
+        collected: list[CodeRelationFact] = []
+        seen: set[str] = set()
+        for fact_chunk in fact_id_chunks:
+            for either_chunk in either_chunks:
+                for source_chunk in source_chunks:
+                    for target_chunk in target_chunks:
+                        remaining = (
+                            None if limit is None else max(limit - len(collected), 0)
+                        )
+                        if limit is not None and remaining == 0:
+                            break
+                        batch = self._find_snapshot_relations_chunk(
+                            snapshot_id,
+                            tenant_id=tenant_id,
+                            relation_kinds=relation_kinds,
+                            relation_fact_ids=fact_chunk,
+                            source_entity_fact_ids=source_chunk,
+                            target_entity_fact_ids=target_chunk,
+                            either_entity_fact_ids=either_chunk,
+                            limit=remaining,
+                        )
+                        for relation in batch:
+                            if relation.relation_fact_id in seen:
+                                continue
+                            seen.add(relation.relation_fact_id)
+                            collected.append(relation)
+        collected.sort(key=lambda rel: (rel.relation_kind.value, rel.relation_fact_id))
+        if limit is not None:
+            collected = collected[:limit]
+        return tuple(collected)
+
+    def _find_snapshot_relations_chunk(
+        self,
+        snapshot_id: str,
+        *,
+        tenant_id: str,
+        relation_kinds: tuple[str, ...] | None,
+        relation_fact_ids: tuple[str, ...] | None,
+        source_entity_fact_ids: tuple[str, ...] | None,
+        target_entity_fact_ids: tuple[str, ...] | None,
+        either_entity_fact_ids: tuple[str, ...] | None,
+        limit: int | None,
+    ) -> tuple[CodeRelationFact, ...]:
         clauses = ["m.snapshot_id = ?", "m.tenant_id = ?"]
         params: list[object] = [snapshot_id, tenant_id]
         if relation_kinds is not None:

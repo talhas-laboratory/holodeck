@@ -684,9 +684,10 @@ class SqliteWorkspaceIntelligenceRepository:
     ) -> None:
         """Insert immutable source/observation rows without flipping current pointers.
 
-        New sources are registered with ``current_observation_id=None`` so a later
-        activation transaction owns the pointer update. Existing sources keep
-        their current observation and freshness until activation.
+        New sources are registered as ``STAGED`` with ``current_observation_id=None``
+        so ordinary workspace reads exclude them until activation promotes the
+        pointer. Existing live sources keep their current observation and
+        freshness until activation.
         """
 
         existing = self.get_source_by_locator(
@@ -711,7 +712,7 @@ class SqliteWorkspaceIntelligenceRepository:
                     sensitivity="public",
                     refresh_policy="on_revision_change",
                     observed_at=at,
-                    stale_status=StaleStatus.FRESH,
+                    stale_status=StaleStatus.STAGED,
                     created_at=at,
                     created_by_actor_id=actor_id,
                     current_observation_id=None,
@@ -810,13 +811,16 @@ class SqliteWorkspaceIntelligenceRepository:
         )
         previous = self._begin_write()
         try:
+            # Promote STAGED → FRESH atomically with the observation pointer.
+            # A later pointer-change may mark the source STALE for dependents.
             self._conn.execute(
                 """
                 UPDATE gov_workspace_sources
                 SET current_observation_id = ?,
                     observed_revision = ?,
                     content_hash = COALESCE(?, content_hash),
-                    observed_at = ?
+                    observed_at = ?,
+                    stale_status = ?
                 WHERE source_id = ?
                 """,
                 (
@@ -824,6 +828,7 @@ class SqliteWorkspaceIntelligenceRepository:
                     observed_revision,
                     observation.content_hash,
                     at.isoformat(),
+                    StaleStatus.FRESH.value,
                     source_id,
                 ),
             )
@@ -1024,17 +1029,102 @@ class SqliteWorkspaceIntelligenceRepository:
         return None if row is None else self._source_from_row(row)
 
     def list_sources(
-        self, workspace_object_id: str, *, tenant_id: str
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        include_staged: bool = False,
     ) -> list[WorkspaceSource]:
-        rows = self._conn.execute(
-            """
-            SELECT * FROM gov_workspace_sources
-            WHERE tenant_id = ? AND workspace_object_id = ?
-            ORDER BY created_at, source_id
-            """,
-            (tenant_id, workspace_object_id),
-        ).fetchall()
+        """List workspace sources.
+
+        By default, staged (pre-activation) sources are excluded so failed graph
+        builds never appear as current/fresh workspace intelligence.
+        """
+
+        if include_staged:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM gov_workspace_sources
+                WHERE tenant_id = ? AND workspace_object_id = ?
+                ORDER BY created_at, source_id
+                """,
+                (tenant_id, workspace_object_id),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM gov_workspace_sources
+                WHERE tenant_id = ? AND workspace_object_id = ?
+                  AND stale_status != ?
+                  AND current_observation_id IS NOT NULL
+                ORDER BY created_at, source_id
+                """,
+                (tenant_id, workspace_object_id, StaleStatus.STAGED.value),
+            ).fetchall()
         return [self._source_from_row(row) for row in rows]
+
+    def discard_unactivated_staged_sources(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        source_ids: Sequence[str],
+    ) -> int:
+        """Remove staged sources that never activated and have no fact references.
+
+        Sources still referenced by graph facts are retained as internal
+        diagnostic evidence (``STAGED``, no current observation) and stay
+        excluded from ordinary workspace-intelligence reads.
+        """
+
+        deleted = 0
+        previous = self._begin_write()
+        try:
+            for source_id in source_ids:
+                row = self._conn.execute(
+                    """
+                    SELECT source_id FROM gov_workspace_sources
+                    WHERE source_id = ?
+                      AND tenant_id = ?
+                      AND workspace_object_id = ?
+                      AND stale_status = ?
+                      AND current_observation_id IS NULL
+                    """,
+                    (
+                        source_id,
+                        tenant_id,
+                        workspace_object_id,
+                        StaleStatus.STAGED.value,
+                    ),
+                ).fetchone()
+                if row is None:
+                    continue
+                referenced = self._conn.execute(
+                    """
+                    SELECT 1 FROM gov_code_entity_facts WHERE source_id = ?
+                    UNION ALL
+                    SELECT 1 FROM gov_code_relation_facts
+                    WHERE evidence_source_id = ?
+                    LIMIT 1
+                    """,
+                    (source_id, source_id),
+                ).fetchone()
+                if referenced is not None:
+                    continue
+                self._conn.execute(
+                    "DELETE FROM gov_workspace_source_observations WHERE source_id = ?",
+                    (source_id,),
+                )
+                self._conn.execute(
+                    "DELETE FROM gov_workspace_sources WHERE source_id = ?",
+                    (source_id,),
+                )
+                deleted += 1
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+        return deleted
 
     def update_source_trust(
         self,

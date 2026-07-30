@@ -53,6 +53,7 @@ from holodeck_governance.domain.workspace.intelligence.refresh import (
 from holodeck_governance.domain.workspace.intelligence.sources import (
     SourceObservation,
     WorkspaceSource,
+    source_is_live,
     workspace_source_dedupe_key,
 )
 from holodeck_governance.domain.workspace.intelligence.trust import (

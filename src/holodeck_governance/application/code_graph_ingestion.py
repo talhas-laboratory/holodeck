@@ -7,11 +7,12 @@ is data only — it never grants instruction authority or raises readiness.
 
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Iterator, Protocol
+from typing import Callable, Iterator, Protocol, Sequence
 
 from holodeck_governance.application.repository_extractor import (
     ExtractionCoverage,
@@ -80,6 +81,8 @@ M2_CODE_GRAPH_EVENT_SCHEMA_VERSION = "m2.workspace.code_graph.event.v1"
 _RECEIPT_SNAPSHOT_PREFIX = "snapshot:"
 _RECEIPT_RUN_PREFIX = "run:"
 _RECEIPT_STATUS_PREFIX = "status:"
+_RECEIPT_RESULT_PREFIX = "graph_build_result_v1:"
+_GRAPH_BUILD_RESULT_PAYLOAD_VERSION = 1
 _PARTIAL_POLICY_NOTE = (
     "partial coverage cannot activate until a durable policy-decision seam exists"
 )
@@ -267,6 +270,14 @@ class IntelligenceSourcePort(Protocol):
         actor_id: str,
         at: datetime,
     ) -> None: ...
+
+    def discard_unactivated_staged_sources(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        source_ids: Sequence[str],
+    ) -> int: ...
 
     def get_source_by_locator(
         self,
@@ -874,12 +885,29 @@ class CodeGraphIngestionService:
                 entities=extraction.candidate_entities,
                 relations=extraction.candidate_relations,
             )
+            staged_source_ids = tuple(
+                source_id
+                for source_id, _observation_id, _locator in self._collect_source_keys(
+                    entities=extraction.candidate_entities,
+                    relations=extraction.candidate_relations,
+                )
+            )
             self._stage_sources_for_facts(
                 request=request,
                 entities=extraction.candidate_entities,
                 relations=extraction.candidate_relations,
             )
         except Exception as exc:
+            self._discard_staged_sources(
+                request=request,
+                source_ids=tuple(
+                    source_id
+                    for source_id, _observation_id, _locator in self._collect_source_keys(
+                        entities=extraction.candidate_entities,
+                        relations=extraction.candidate_relations,
+                    )
+                ),
+            )
             event_types.append(
                 self._append_event(
                     tenant_id=request.tenant_id,
@@ -927,6 +955,12 @@ class CodeGraphIngestionService:
 
         entities = extraction.candidate_entities
         relations = extraction.candidate_relations
+        staged_source_ids = tuple(
+            source_id
+            for source_id, _observation_id, _locator in self._collect_source_keys(
+                entities=entities, relations=relations
+            )
+        )
         coverage = extraction.coverage
         run_status = (
             ExtractionRunStatus.PARTIAL
@@ -1017,6 +1051,9 @@ class CodeGraphIngestionService:
                     )
                 )
                 self._commit()
+                self._discard_staged_sources(
+                    request=request, source_ids=staged_source_ids
+                )
                 result = GraphBuildResult(
                     snapshot_id=snapshot_id,
                     extraction_run_id=extraction_run_id,
@@ -1052,6 +1089,9 @@ class CodeGraphIngestionService:
                 entities=entities,
                 relations=relations,
             )
+            pending_result_holder: list[GraphBuildResult] = []
+            activation_events: list[str] = []
+            deletion_notes: list[str] = []
             try:
                 source_keys = self._collect_source_keys(
                     entities=entities, relations=relations
@@ -1067,16 +1107,12 @@ class CodeGraphIngestionService:
                             at=request.at,
                         )
 
-                deletion_notes: list[str] = []
-
                 def _record_deletions() -> None:
                     notes = self._invalidate_deleted_sources(
                         request=request,
                         deleted_paths=deleted_paths,
                     )
                     deletion_notes.extend(notes)
-
-                activation_events: list[str] = []
 
                 def _append_activation_events() -> None:
                     completed_event = (
@@ -1117,34 +1153,35 @@ class CodeGraphIngestionService:
                         )
                     )
 
-                pending_result = GraphBuildResult(
-                    snapshot_id=snapshot_id,
-                    extraction_run_id=extraction_run_id,
-                    status=SnapshotStatus.ACTIVE,
-                    coverage_status=coverage.status,
-                    entity_count=len(entities),
-                    relation_count=len(relations),
-                    actual_revision=extraction.actual_revision,
-                    event_types=(),
-                    replayed=False,
-                    coverage_notes=coverage.notes,
-                    diagnostics=tuple(d.code for d in extraction.diagnostics),
-                    reused_entity_count=stats.reused_entities,
-                    rebuilt_entity_count=stats.rebuilt_entities,
-                    reused_relation_count=stats.reused_relations,
-                    rebuilt_relation_count=stats.rebuilt_relations,
-                    incremental=incremental,
-                    fallback_full=fallback_full,
-                )
-
                 def _save_success_receipt() -> None:
-                    # Receipt is finalized after notes are known; placeholder
-                    # identity is enough inside the txn — see post-activate.
+                    # Finalize after deletions and activation events are known.
+                    finalized = GraphBuildResult(
+                        snapshot_id=snapshot_id,
+                        extraction_run_id=extraction_run_id,
+                        status=SnapshotStatus.ACTIVE,
+                        coverage_status=coverage.status,
+                        entity_count=len(entities),
+                        relation_count=len(relations),
+                        actual_revision=extraction.actual_revision,
+                        event_types=tuple((*event_types, *activation_events)),
+                        replayed=False,
+                        coverage_notes=tuple(
+                            dict.fromkeys((*coverage.notes, *deletion_notes))
+                        ),
+                        diagnostics=tuple(d.code for d in extraction.diagnostics),
+                        reused_entity_count=stats.reused_entities,
+                        rebuilt_entity_count=stats.rebuilt_entities,
+                        reused_relation_count=stats.reused_relations,
+                        rebuilt_relation_count=stats.rebuilt_relations,
+                        incremental=incremental,
+                        fallback_full=fallback_full,
+                    )
+                    pending_result_holder.append(finalized)
                     self._save_receipt(
                         request=request,
                         command_id=command_id,
                         fingerprint=fingerprint,
-                        result=pending_result,
+                        result=finalized,
                         outcome="accepted",
                         error_code=None,
                         commit=False,
@@ -1168,6 +1205,9 @@ class CodeGraphIngestionService:
             except ContentionError as exc:
                 if str(exc) != _BASE_SNAPSHOT_NOT_CURRENT:
                     raise
+                self._discard_staged_sources(
+                    request=request, source_ids=staged_source_ids
+                )
                 self._graphs.mark_snapshot_failed(
                     snapshot_id,
                     tenant_id=request.tenant_id,
@@ -1220,6 +1260,7 @@ class CodeGraphIngestionService:
         except ContentionError:
             raise
         except Exception as exc:
+            self._discard_staged_sources(request=request, source_ids=staged_source_ids)
             try:
                 self._graphs.mark_snapshot_failed(
                     snapshot_id,
@@ -1273,6 +1314,8 @@ class CodeGraphIngestionService:
             )
             return result
 
+        if pending_result_holder:
+            return pending_result_holder[0]
         event_types.extend(activation_events)
         coverage_notes = tuple(
             dict.fromkeys((*activated.coverage_notes, *deletion_notes))
@@ -1428,6 +1471,27 @@ class CodeGraphIngestionService:
             }
         )
 
+    def _discard_staged_sources(
+        self,
+        *,
+        request: GraphBuildRequest,
+        source_ids: Sequence[str],
+    ) -> None:
+        """Drop unactivated staged sources left behind by a failed build."""
+
+        if not source_ids:
+            return
+        discard = getattr(
+            self._intelligence, "discard_unactivated_staged_sources", None
+        )
+        if discard is None:
+            return
+        discard(
+            tenant_id=request.tenant_id,
+            workspace_object_id=request.workspace_object_id,
+            source_ids=tuple(dict.fromkeys(source_ids)),
+        )
+
     def _save_receipt(
         self,
         *,
@@ -1448,6 +1512,7 @@ class CodeGraphIngestionService:
                 f"{_RECEIPT_SNAPSHOT_PREFIX}{result.snapshot_id}",
                 f"{_RECEIPT_RUN_PREFIX}{result.extraction_run_id}",
                 f"{_RECEIPT_STATUS_PREFIX}{result.status.value}",
+                self._encode_result_payload(result),
             ),
             error_code=error_code,
             created_at=request.at,
@@ -1460,19 +1525,89 @@ class CodeGraphIngestionService:
         if commit:
             self._commit()
 
+    def _encode_result_payload(self, result: GraphBuildResult) -> str:
+        payload = {
+            "v": _GRAPH_BUILD_RESULT_PAYLOAD_VERSION,
+            "snapshot_id": result.snapshot_id,
+            "extraction_run_id": result.extraction_run_id,
+            "status": result.status.value,
+            "coverage_status": result.coverage_status.value,
+            "entity_count": result.entity_count,
+            "relation_count": result.relation_count,
+            "actual_revision": result.actual_revision,
+            "event_types": list(result.event_types),
+            "coverage_notes": list(result.coverage_notes),
+            "diagnostics": list(result.diagnostics),
+            "reused_entity_count": result.reused_entity_count,
+            "rebuilt_entity_count": result.rebuilt_entity_count,
+            "reused_relation_count": result.reused_relation_count,
+            "rebuilt_relation_count": result.rebuilt_relation_count,
+            "incremental": result.incremental,
+            "fallback_full": result.fallback_full,
+        }
+        return _RECEIPT_RESULT_PREFIX + json.dumps(
+            payload, separators=(",", ":"), sort_keys=True
+        )
+
     def _result_from_receipt(
         self, receipt: CommandReceipt, *, replayed: bool
     ) -> GraphBuildResult:
         snapshot_id = None
         run_id = None
         status = SnapshotStatus.FAILED
+        payload: dict[str, object] | None = None
         for code in receipt.reason_codes:
-            if code.startswith(_RECEIPT_SNAPSHOT_PREFIX):
+            if code.startswith(_RECEIPT_RESULT_PREFIX):
+                try:
+                    loaded = json.loads(code.removeprefix(_RECEIPT_RESULT_PREFIX))
+                except json.JSONDecodeError as exc:
+                    raise MalformedCommandError(
+                        "graph-build receipt result payload is not valid JSON"
+                    ) from exc
+                if not isinstance(loaded, dict):
+                    raise MalformedCommandError(
+                        "graph-build receipt result payload must be an object"
+                    )
+                payload = loaded
+            elif code.startswith(_RECEIPT_SNAPSHOT_PREFIX):
                 snapshot_id = code.removeprefix(_RECEIPT_SNAPSHOT_PREFIX)
             elif code.startswith(_RECEIPT_RUN_PREFIX):
                 run_id = code.removeprefix(_RECEIPT_RUN_PREFIX)
             elif code.startswith(_RECEIPT_STATUS_PREFIX):
                 status = SnapshotStatus(code.removeprefix(_RECEIPT_STATUS_PREFIX))
+        if payload is not None:
+            version = payload.get("v")
+            if version != _GRAPH_BUILD_RESULT_PAYLOAD_VERSION:
+                # Unknown future versions fall back to snapshot reconstruction.
+                payload = None
+            else:
+                return GraphBuildResult(
+                    snapshot_id=str(payload["snapshot_id"]),
+                    extraction_run_id=str(payload["extraction_run_id"]),
+                    status=SnapshotStatus(str(payload["status"])),
+                    coverage_status=CoverageStatus(str(payload["coverage_status"])),
+                    entity_count=int(payload["entity_count"]),  # type: ignore[arg-type]
+                    relation_count=int(payload["relation_count"]),  # type: ignore[arg-type]
+                    actual_revision=str(payload["actual_revision"]),
+                    event_types=tuple(str(v) for v in payload.get("event_types", ())),  # type: ignore[union-attr]
+                    replayed=replayed,
+                    coverage_notes=tuple(
+                        str(v)
+                        for v in payload.get("coverage_notes", ())  # type: ignore[union-attr]
+                    ),
+                    diagnostics=tuple(
+                        str(v)
+                        for v in payload.get("diagnostics", ())  # type: ignore[union-attr]
+                    ),
+                    reused_entity_count=int(payload.get("reused_entity_count", 0)),  # type: ignore[arg-type]
+                    rebuilt_entity_count=int(payload.get("rebuilt_entity_count", 0)),  # type: ignore[arg-type]
+                    reused_relation_count=int(payload.get("reused_relation_count", 0)),  # type: ignore[arg-type]
+                    rebuilt_relation_count=int(
+                        payload.get("rebuilt_relation_count", 0)  # type: ignore[arg-type]
+                    ),
+                    incremental=bool(payload.get("incremental", False)),
+                    fallback_full=bool(payload.get("fallback_full", False)),
+                )
         if snapshot_id is None or run_id is None:
             raise MalformedCommandError("graph-build receipt missing snapshot identity")
         snapshot = self._graphs.get_snapshot(snapshot_id)
@@ -1489,6 +1624,7 @@ class CodeGraphIngestionService:
                 replayed=replayed,
                 coverage_notes=("replay of failed build with no persisted snapshot",),
             )
+        # Legacy receipts without a versioned payload reconstruct identity fields only.
         return GraphBuildResult(
             snapshot_id=snapshot.snapshot_id,
             extraction_run_id=snapshot.extraction_run_id,

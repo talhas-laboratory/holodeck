@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -263,8 +264,8 @@ def test_idempotent_replay_returns_original_result() -> None:
     first = service.build_graph(_request(ids, binding_id, idempotency_key="same-key"))
     second = service.build_graph(_request(ids, binding_id, idempotency_key="same-key"))
     assert second.replayed is True
-    assert second.snapshot_id == first.snapshot_id
-    assert second.status is SnapshotStatus.ACTIVE
+    assert first.replayed is False
+    assert second == replace(first, replayed=True)
 
 
 def test_conflicting_idempotency_key_is_rejected() -> None:

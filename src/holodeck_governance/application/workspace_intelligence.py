@@ -153,8 +153,20 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
     ) -> WorkspaceSource | None: ...
 
     def list_sources(
-        self, workspace_object_id: str, *, tenant_id: str
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        include_staged: bool = False,
     ) -> list[WorkspaceSource]: ...
+
+    def discard_unactivated_staged_sources(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        source_ids: Sequence[str],
+    ) -> int: ...
 
     def list_source_observations(
         self, source_id: str, *, tenant_id: str
@@ -192,9 +204,7 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
         workspace_object_id: str,
         *,
         tenant_id: str,
-        refreshes: Sequence[
-            tuple[str, str, str | None, tuple[str, ...]]
-        ],
+        refreshes: Sequence[tuple[str, str, str | None, tuple[str, ...]]],
         actor_id: str,
         at: datetime,
     ) -> tuple[tuple[str, ...], tuple[str, ...]]: ...
@@ -258,9 +268,7 @@ class WorkspaceIntelligenceRepositoryPort(Protocol):
 
     def save_workspace_decision(self, decision: WorkspaceDecision) -> None: ...
 
-    def get_workspace_decision(
-        self, decision_id: str
-    ) -> WorkspaceDecision | None: ...
+    def get_workspace_decision(self, decision_id: str) -> WorkspaceDecision | None: ...
 
     def save_readiness_assessment(
         self, assessment: WorkspaceReadinessAssessment
@@ -473,20 +481,24 @@ class WorkspaceIntelligenceApplicationService:
         return self.repository.get_source(source_id)
 
     def list_sources(
-        self, workspace_object_id: str, *, tenant_id: str
+        self,
+        workspace_object_id: str,
+        *,
+        tenant_id: str,
+        include_staged: bool = False,
     ) -> list[WorkspaceSource]:
-        return self.repository.list_sources(workspace_object_id, tenant_id=tenant_id)
+        return self.repository.list_sources(
+            workspace_object_id,
+            tenant_id=tenant_id,
+            include_staged=include_staged,
+        )
 
     def list_source_observations(
         self, source_id: str, *, tenant_id: str
     ) -> list[SourceObservation]:
-        return self.repository.list_source_observations(
-            source_id, tenant_id=tenant_id
-        )
+        return self.repository.list_source_observations(source_id, tenant_id=tenant_id)
 
-    def get_source_observation(
-        self, observation_id: str
-    ) -> SourceObservation | None:
+    def get_source_observation(self, observation_id: str) -> SourceObservation | None:
         return self.repository.get_source_observation(observation_id)
 
     def update_source_trust(
@@ -614,9 +626,7 @@ class WorkspaceIntelligenceApplicationService:
             if source.observed_revision == observation.new_observed_revision:
                 skipped.append(source.source_id)
                 continue
-            dependent_ids = module_ids_depending_on_source(
-                modules, source.source_id
-            )
+            dependent_ids = module_ids_depending_on_source(modules, source.source_id)
             refreshes.append(
                 (
                     source.source_id,
@@ -652,9 +662,7 @@ class WorkspaceIntelligenceApplicationService:
         if observation.source_id is not None:
             source = self.repository.get_source(observation.source_id)
             if source is None:
-                raise NotFoundGovernanceError(
-                    f"unknown source {observation.source_id}"
-                )
+                raise NotFoundGovernanceError(f"unknown source {observation.source_id}")
             if source.tenant_id != tenant_id:
                 raise CrossTenantAccessError("source tenant mismatch")
             if source.workspace_object_id != workspace_object_id:
@@ -693,9 +701,7 @@ class WorkspaceIntelligenceApplicationService:
             revisions, model_revision_id=model_revision_id
         )
         if model_revision_id is not None and model is None:
-            raise NotFoundGovernanceError(
-                f"unknown model revision {model_revision_id}"
-            )
+            raise NotFoundGovernanceError(f"unknown model revision {model_revision_id}")
         sources = tuple(
             self.repository.list_sources(workspace_object_id, tenant_id=tenant_id)
         )
@@ -825,15 +831,11 @@ class WorkspaceIntelligenceApplicationService:
             at=at,
         )
 
-    def save_workspace_decision(
-        self, decision: WorkspaceDecision
-    ) -> WorkspaceDecision:
+    def save_workspace_decision(self, decision: WorkspaceDecision) -> WorkspaceDecision:
         self.repository.save_workspace_decision(decision)
         return decision
 
-    def get_workspace_decision(
-        self, decision_id: str
-    ) -> WorkspaceDecision | None:
+    def get_workspace_decision(self, decision_id: str) -> WorkspaceDecision | None:
         return self.repository.get_workspace_decision(decision_id)
 
     def save_readiness_assessment(
@@ -903,9 +905,7 @@ class WorkspaceIntelligenceApplicationService:
         for promotion in proposal.trust_promotions:
             source = self.repository.get_source(promotion.source_id)
             if source is None:
-                raise NotFoundGovernanceError(
-                    f"unknown source {promotion.source_id}"
-                )
+                raise NotFoundGovernanceError(f"unknown source {promotion.source_id}")
             if source.tenant_id != proposal.tenant_id:
                 raise CrossTenantAccessError("source tenant mismatch")
             if source.workspace_object_id != proposal.workspace_object_id:
@@ -1033,8 +1033,7 @@ class WorkspaceIntelligenceApplicationService:
             trust_after.setdefault(source_id, source.trust_class)
 
         has_ia = any(
-            trust is TrustClass.INSTRUCTION_AUTHORITY
-            for trust in trust_after.values()
+            trust is TrustClass.INSTRUCTION_AUTHORITY for trust in trust_after.values()
         )
         has_authority_module = any(
             module.module_key in AUTHORITY_COVERING_MODULE_KEYS

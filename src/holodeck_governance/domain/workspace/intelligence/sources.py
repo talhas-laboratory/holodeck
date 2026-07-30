@@ -71,7 +71,10 @@ class WorkspaceSource:
         for tag in self.module_tags:
             if not tag.strip():
                 raise MalformedCommandError("module_tags entries must be non-empty")
-        if self.instruction_authority and self.trust_class is not TrustClass.INSTRUCTION_AUTHORITY:
+        if (
+            self.instruction_authority
+            and self.trust_class is not TrustClass.INSTRUCTION_AUTHORITY
+        ):
             raise MalformedCommandError(
                 "instruction_authority flag requires trust_class=instruction_authority"
             )
@@ -130,3 +133,16 @@ class SourceObservation:
             raise MalformedCommandError("observed_revision is required")
         if self.content_hash is not None and not self.content_hash.strip():
             raise MalformedCommandError("content_hash must be non-empty when set")
+
+
+def source_is_live(source: WorkspaceSource) -> bool:
+    """True when a source is visible to ordinary workspace-intelligence reads.
+
+    Staged sources exist only so graph-fact FKs can resolve before activation;
+    they must not appear as current/fresh workspace knowledge.
+    """
+
+    return (
+        source.stale_status is not StaleStatus.STAGED
+        and source.current_observation_id is not None
+    )

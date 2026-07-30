@@ -116,6 +116,8 @@ class StaleStatus(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
     UNKNOWN = "unknown"
+    # Registered for fact FKs before graph activation; excluded from live reads.
+    STAGED = "staged"
 
 
 class ContextItemType(StrEnum):

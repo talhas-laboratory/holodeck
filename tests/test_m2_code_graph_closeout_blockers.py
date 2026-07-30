@@ -1130,7 +1130,7 @@ def test_failed_cas_leaves_source_observations_and_receipts_unchanged() -> None:
 
 
 def test_activation_fault_after_point_sources_rolls_back() -> None:
-    conn, service, ids, binding_id, intel, graphs, _queries = _service()
+    _conn, service, ids, binding_id, intel, graphs, _queries = _service()
     rev_a = _build(
         service,
         ids,
@@ -1141,13 +1141,9 @@ def test_activation_fault_after_point_sources_rolls_back() -> None:
         idempotency_key="fault-a",
     )
     before = {
-        str(row["locator"]): str(row["observed_revision"])
-        for row in conn.execute(
-            """
-            SELECT locator, observed_revision FROM gov_workspace_sources
-            WHERE tenant_id = ? AND workspace_object_id = ?
-            """,
-            (ids.tenant_alpha, ids.workspace_alpha_1),
+        source.locator: source.observed_revision
+        for source in intel.list_sources(
+            ids.workspace_alpha_1, tenant_id=ids.tenant_alpha
         )
     }
     service._activation_fault_before = "after:point_sources"
@@ -1169,17 +1165,51 @@ def test_activation_fault_after_point_sources_rolls_back() -> None:
         repository_binding_id=binding_id,
     )
     assert active is not None and active.snapshot_id == rev_a.snapshot_id
-    after = {
-        str(row["locator"]): str(row["observed_revision"])
-        for row in conn.execute(
-            """
-            SELECT locator, observed_revision FROM gov_workspace_sources
-            WHERE tenant_id = ? AND workspace_object_id = ?
-            """,
-            (ids.tenant_alpha, ids.workspace_alpha_1),
+    live_sources = intel.list_sources(ids.workspace_alpha_1, tenant_id=ids.tenant_alpha)
+    live = {source.locator: source.observed_revision for source in live_sources}
+    assert live == before
+    assert all(revision == REV_A for revision in live.values())
+    for source in live_sources:
+        assert source.stale_status is not StaleStatus.STAGED
+        assert source.current_observation_id is not None
+        assert source.observed_revision != REV_B
+
+
+def test_failed_initial_activation_excludes_staged_sources() -> None:
+    conn, service, ids, binding_id, intel, graphs, _queries = _service()
+    service._activation_fault_before = "point_sources"
+    failed = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="fault-initial",
+    )
+    assert failed.status is SnapshotStatus.FAILED
+    assert (
+        graphs.get_active_snapshot(
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
         )
-    }
-    assert after == before
+        is None
+    )
+    assert intel.list_sources(ids.workspace_alpha_1, tenant_id=ids.tenant_alpha) == []
+    staged_rows = conn.execute(
+        """
+        SELECT stale_status, current_observation_id, observed_revision
+        FROM gov_workspace_sources
+        WHERE tenant_id = ? AND workspace_object_id = ?
+        """,
+        (ids.tenant_alpha, ids.workspace_alpha_1),
+    ).fetchall()
+    assert staged_rows
+    for row in staged_rows:
+        assert str(row["stale_status"]) == StaleStatus.STAGED.value
+        assert row["current_observation_id"] is None
+        assert str(row["observed_revision"]) == REV_A
 
 
 def test_entity_only_budget_excludes_contains_and_reads() -> None:
@@ -1239,3 +1269,140 @@ def test_bounded_find_entities_does_not_scan_entire_synthetic_graph() -> None:
     # Storage fetches limit+1 rows — never the full snapshot entity set.
     assert graphs.entities_rows_fetched <= 6
     assert graphs.entities_rows_fetched < rev_a.entity_count
+
+
+def test_change_neighborhood_marks_incomplete_when_visit_budget_truncates() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="nb-trunc-a",
+    )
+    assert rev_a.entity_count > 5
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    # Force the storage-bounded loader path with a tiny visit budget.
+    tiny = QueryBudget(max_depth=2, max_results=50, max_visited_nodes=2)
+    result = queries.get_change_neighborhood(
+        scope,
+        ("sample_app/service.py",),
+        budget=tiny,
+    )
+    assert result.fallback_full is True
+    assert "impact_neighborhood_incomplete" in result.omissions.reasons
+    assert "impact_neighborhood_incomplete" in result.notes
+
+
+def test_path_prefix_like_escapes_wildcards() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="like-a",
+    )
+    entities = graphs.list_snapshot_entities(
+        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
+    )
+    # Plant a sibling path that would match an unescaped underscore wildcard.
+    donor = entities[0]
+    wildcard_path = "pkgXa/two.py"
+    literal_dir = "pkg_a"
+    planted = CodeEntityFact(
+        entity_fact_id=generate_uuidv7(),
+        tenant_id=donor.tenant_id,
+        workspace_object_id=donor.workspace_object_id,
+        repository_binding_id=donor.repository_binding_id,
+        entity_key=build_entity_key(
+            entity_kind=EntityKind.FILE,
+            repository_relative_path=wildcard_path,
+            qualified_name=wildcard_path,
+        ),
+        entity_kind=EntityKind.FILE,
+        repository_relative_path=wildcard_path,
+        source_id=donor.source_id,
+        source_observation_id=donor.source_observation_id,
+        observation_method=ObservationMethod.DIRECT_PARSE,
+        created_at=NOW,
+        language="python",
+        qualified_name=wildcard_path,
+    )
+    graphs.insert_entity_fact(planted)
+    graphs.add_snapshot_entity_memberships(
+        snapshot_id=rev_a.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        entity_fact_ids=(planted.entity_fact_id,),
+    )
+    literal = CodeEntityFact(
+        entity_fact_id=generate_uuidv7(),
+        tenant_id=donor.tenant_id,
+        workspace_object_id=donor.workspace_object_id,
+        repository_binding_id=donor.repository_binding_id,
+        entity_key=build_entity_key(
+            entity_kind=EntityKind.FILE,
+            repository_relative_path=f"{literal_dir}/one.py",
+            qualified_name=f"{literal_dir}/one.py",
+        ),
+        entity_kind=EntityKind.FILE,
+        repository_relative_path=f"{literal_dir}/one.py",
+        source_id=donor.source_id,
+        source_observation_id=donor.source_observation_id,
+        observation_method=ObservationMethod.DIRECT_PARSE,
+        created_at=NOW,
+        language="python",
+        qualified_name=f"{literal_dir}/one.py",
+    )
+    graphs.insert_entity_fact(literal)
+    graphs.add_snapshot_entity_memberships(
+        snapshot_id=rev_a.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        entity_fact_ids=(literal.entity_fact_id,),
+    )
+    hits = graphs.find_snapshot_entities(
+        rev_a.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        path_prefix=literal_dir,
+        limit=50,
+    )
+    paths = {entity.repository_relative_path for entity in hits}
+    assert f"{literal_dir}/one.py" in paths
+    assert wildcard_path not in paths
+
+
+def test_get_sources_for_facts_bounds_ids_before_sql() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="prov-bound-a",
+    )
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    # Far beyond typical SQLITE_MAX_VARIABLE_NUMBER; must not raise.
+    huge_ids = tuple(generate_uuidv7() for _ in range(40_000))
+    tiny = QueryBudget(max_depth=1, max_results=3, max_visited_nodes=5)
+    result = queries.get_sources_for_facts(
+        scope,
+        entity_fact_ids=huge_ids,
+        relation_fact_ids=huge_ids,
+        budget=tiny,
+    )
+    assert "max_visited_nodes" in result.omissions.reasons
+    assert len(result.provenance) <= tiny.max_results
