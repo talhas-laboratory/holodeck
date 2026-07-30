@@ -1,7 +1,7 @@
 # M2-026 — Factual code-graph acceptance evidence
 
 **Task:** M2-026
-**Commit:** `PENDING_TIP_STAMP`
+**Commit:** `9d57207fbeb9c28b2aa0e5cd7e55f5f9efa446f1`
 **Date:** 2026-07-30
 **Metrics:** `artifacts/m2-026-acceptance-metrics.json` (stable golden; regenerate via `scripts/generate_m2_code_graph_acceptance_artifacts.py`)
 
