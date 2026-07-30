@@ -872,7 +872,13 @@ class CodeGraphQueryService:
         tuple[CodeRelationFact, ...],
         QueryOmissions,
     ]:
-        """Load only changed-path entities and impact-expanded neighbors."""
+        """Load only changed-path entities and impact-expanded neighbors.
+
+        Visit budget accounts for raw storage rows returned (before dedupe), so
+        endpoint loads plus full-path expansion cannot multiply work past
+        ``max_visited_nodes + 1``. Relation expansion never re-queries entity
+        IDs already seen as relation endpoints.
+        """
 
         if _snapshot_fact_count(snapshot) <= budget.max_visited_nodes:
             entities, relations = self._load_facts_under_budget(scope, snapshot)
@@ -891,112 +897,120 @@ class CodeGraphQueryService:
         relations_by_id: dict[str, CodeRelationFact] = {}
         reasons: list[str] = []
         truncated = False
+        entity_rows_consumed = 0
+        relation_rows_consumed = 0
+        relation_endpoints_seen: set[str] = set()
 
         def _mark(*reason: str) -> None:
             nonlocal truncated
             truncated = True
             reasons.extend(reason)
 
-        def _remaining_nodes() -> int:
-            return max(0, budget.max_visited_nodes - len(entities_by_id))
+        def _remaining_entity_rows() -> int:
+            return max(0, budget.max_visited_nodes - entity_rows_consumed)
 
-        def _absorb_entities(
-            batch: tuple[CodeEntityFact, ...] | list[CodeEntityFact],
-            *,
-            allowed: int,
-        ) -> None:
-            for entity in batch[:allowed]:
-                entities_by_id[entity.entity_fact_id] = entity
+        def _remaining_relation_rows() -> int:
+            return max(0, budget.max_visited_nodes - relation_rows_consumed)
 
-        for path in seed_paths:
-            remaining = _remaining_nodes()
+        def _fetch_entities(**filters: object) -> tuple[CodeEntityFact, ...]:
+            nonlocal entity_rows_consumed
+            remaining = _remaining_entity_rows()
             if remaining <= 0:
                 _mark("max_visited_nodes")
-                break
+                return ()
             batch = self._graphs.find_snapshot_entities(
                 snapshot.snapshot_id,
                 tenant_id=scope.tenant_id,
-                repository_relative_path=path,
                 limit=remaining + 1,
+                **filters,  # type: ignore[arg-type]
             )
+            # Count every returned row before dedupe / truncation.
+            entity_rows_consumed += len(batch)
             if len(batch) > remaining:
                 _mark("max_visited_nodes")
-                _absorb_entities(batch, allowed=remaining)
+                return tuple(batch[:remaining])
+            return batch
+
+        def _absorb_entities(batch: tuple[CodeEntityFact, ...]) -> None:
+            for entity in batch:
+                entities_by_id[entity.entity_fact_id] = entity
+
+        def _fetch_relations(
+            *,
+            either_entity_fact_ids: tuple[str, ...],
+        ) -> tuple[CodeRelationFact, ...]:
+            nonlocal relation_rows_consumed
+            remaining = _remaining_relation_rows()
+            if remaining <= 0:
+                _mark("max_results")
+                return ()
+            batch = self._graphs.find_snapshot_relations(
+                snapshot.snapshot_id,
+                tenant_id=scope.tenant_id,
+                relation_kinds=_IMPACT_RELATION_KIND_VALUES,
+                either_entity_fact_ids=either_entity_fact_ids,
+                limit=remaining + 1,
+            )
+            relation_rows_consumed += len(batch)
+            if len(batch) > remaining:
+                _mark("max_results")
+                return tuple(batch[:remaining])
+            return batch
+
+        for path in seed_paths:
+            if _remaining_entity_rows() <= 0:
+                _mark("max_visited_nodes")
                 break
-            _absorb_entities(batch, allowed=remaining)
+            _absorb_entities(_fetch_entities(repository_relative_path=path))
 
         frontier_paths = set(seed_paths)
         all_paths = set(seed_paths)
         depth_exhausted = False
         for depth in range(MAX_INCREMENTAL_IMPACT_DEPTH):
-            remaining = _remaining_nodes()
-            if remaining <= 0:
-                _mark("max_visited_nodes")
-                break
             frontier_ids = tuple(
-                entity.entity_fact_id
-                for entity in entities_by_id.values()
-                if entity.repository_relative_path in frontier_paths
+                sorted(
+                    entity.entity_fact_id
+                    for entity in entities_by_id.values()
+                    if entity.repository_relative_path in frontier_paths
+                    and entity.entity_fact_id not in relation_endpoints_seen
+                )
             )
             if not frontier_ids:
                 break
-            relation_limit = budget.max_visited_nodes + 1
-            batch = self._graphs.find_snapshot_relations(
-                snapshot.snapshot_id,
-                tenant_id=scope.tenant_id,
-                relation_kinds=_IMPACT_RELATION_KIND_VALUES,
-                either_entity_fact_ids=frontier_ids,
-                limit=relation_limit,
-            )
-            if len(batch) >= relation_limit:
-                _mark("max_results")
-                batch = batch[: budget.max_visited_nodes]
+            batch = _fetch_relations(either_entity_fact_ids=frontier_ids)
             new_paths: set[str] = set()
             needed: set[str] = set()
             for relation in batch:
                 relations_by_id[relation.relation_fact_id] = relation
+                relation_endpoints_seen.add(relation.source_entity_fact_id)
+                relation_endpoints_seen.add(relation.target_entity_fact_id)
                 needed.add(relation.source_entity_fact_id)
                 needed.add(relation.target_entity_fact_id)
+            # Frontier IDs are covered even when they produced no rows.
+            relation_endpoints_seen.update(frontier_ids)
             missing = tuple(sorted(eid for eid in needed if eid not in entities_by_id))
             if missing:
-                remaining = _remaining_nodes()
-                if remaining <= 0:
+                if _remaining_entity_rows() <= 0:
                     _mark("max_visited_nodes", "unresolved_endpoints")
                 else:
-                    loaded = self._graphs.find_snapshot_entities(
-                        snapshot.snapshot_id,
-                        tenant_id=scope.tenant_id,
-                        entity_fact_ids=missing,
-                        limit=remaining + 1,
-                    )
-                    if len(loaded) > remaining:
-                        _mark("max_visited_nodes", "unresolved_endpoints")
-                        loaded = loaded[:remaining]
+                    loaded = _fetch_entities(entity_fact_ids=missing)
                     loaded_ids = {entity.entity_fact_id for entity in loaded}
                     if len(loaded_ids) < len(missing):
-                        # Either unresolved endpoints or budget stopped the load.
-                        if len(loaded) <= remaining:
-                            _mark("unresolved_endpoints")
+                        _mark("unresolved_endpoints")
                     for entity in loaded:
                         entities_by_id[entity.entity_fact_id] = entity
                         if entity.repository_relative_path not in all_paths:
                             new_paths.add(entity.repository_relative_path)
-            for path in sorted(new_paths):
-                remaining = _remaining_nodes()
-                if remaining <= 0:
+            paths_pending = tuple(sorted(new_paths))
+            for index, path in enumerate(paths_pending):
+                if _remaining_entity_rows() <= 0:
                     _mark("max_visited_nodes")
+                    if index < len(paths_pending):
+                        _mark("impact_neighborhood_incomplete")
                     break
-                path_batch = self._graphs.find_snapshot_entities(
-                    snapshot.snapshot_id,
-                    tenant_id=scope.tenant_id,
-                    repository_relative_path=path,
-                    limit=remaining + 1,
-                )
-                if len(path_batch) > remaining:
-                    _mark("max_visited_nodes")
-                    _absorb_entities(path_batch, allowed=remaining)
-                    break
-                _absorb_entities(path_batch, allowed=remaining)
+                _absorb_entities(_fetch_entities(repository_relative_path=path))
+            if truncated:
+                break
             if not new_paths:
                 break
             all_paths |= new_paths
@@ -1008,21 +1022,16 @@ class CodeGraphQueryService:
 
         if depth_exhausted and frontier_paths:
             frontier_ids = tuple(
-                entity.entity_fact_id
-                for entity in entities_by_id.values()
-                if entity.repository_relative_path in frontier_paths
+                sorted(
+                    entity.entity_fact_id
+                    for entity in entities_by_id.values()
+                    if entity.repository_relative_path in frontier_paths
+                    and entity.entity_fact_id not in relation_endpoints_seen
+                )
             )
             if frontier_ids:
-                batch = self._graphs.find_snapshot_relations(
-                    snapshot.snapshot_id,
-                    tenant_id=scope.tenant_id,
-                    relation_kinds=_IMPACT_RELATION_KIND_VALUES,
-                    either_entity_fact_ids=frontier_ids,
-                    limit=budget.max_visited_nodes + 1,
-                )
+                batch = _fetch_relations(either_entity_fact_ids=frontier_ids)
                 if batch:
-                    # Depth budget exhausted while frontier still has edges —
-                    # neighborhood cannot be proven complete.
                     _mark("impact_depth_exhausted")
                 for relation in batch:
                     relations_by_id[relation.relation_fact_id] = relation

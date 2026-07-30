@@ -1467,3 +1467,112 @@ def test_change_neighborhood_aggregate_entity_budget_bounds_storage() -> None:
     assert graphs.entities_rows_fetched <= budget.max_visited_nodes + 1
     assert result.fallback_full is True
     assert "impact_neighborhood_incomplete" in result.omissions.reasons
+
+
+def test_change_neighborhood_counts_repeated_expansion_rows() -> None:
+    """Raw storage rows from endpoint + path expansion share one visit budget."""
+
+    conn, service, ids, binding_id, intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="raw-rows-a",
+    )
+    donor = graphs.list_snapshot_entities(
+        rev_a.snapshot_id, tenant_id=ids.tenant_alpha
+    )[0]
+
+    def _synth(path: str, *, kind: EntityKind = EntityKind.FUNCTION) -> CodeEntityFact:
+        return CodeEntityFact(
+            entity_fact_id=generate_uuidv7(),
+            tenant_id=ids.tenant_alpha,
+            workspace_object_id=ids.workspace_alpha_1,
+            repository_binding_id=binding_id,
+            entity_key=build_entity_key(
+                entity_kind=kind,
+                repository_relative_path=path,
+                qualified_name=path,
+            ),
+            entity_kind=kind,
+            repository_relative_path=path,
+            source_id=donor.source_id,
+            source_observation_id=donor.source_observation_id,
+            observation_method=ObservationMethod.DIRECT_PARSE,
+            created_at=NOW,
+            language="python",
+            qualified_name=path,
+        )
+
+    seed = _synth("seed/caller.py")
+    targets = tuple(_synth(f"targets/t{i}.py") for i in range(6))
+    entities = (seed, *targets)
+    relations = tuple(
+        _relation(kind=RelationKind.CALLS, source=seed, target=target)
+        for target in targets
+    )
+    # Pad with extra unused entities so snapshot exceeds the visit budget and
+    # forces the storage-bounded loader path.
+    padding = tuple(_synth(f"pad/p{i}.py") for i in range(20))
+    all_entities = (*entities, *padding)
+    run_id = generate_uuidv7()
+    snap_id = generate_uuidv7()
+    snapshot = RepositoryGraphSnapshot(
+        snapshot_id=snap_id,
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+        repository_revision=REV_A,
+        extraction_run_id=run_id,
+        status=SnapshotStatus.BUILDING,
+        created_at=NOW,
+        created_by_actor_id=ids.human_owner,
+        coverage_status=CoverageStatus.COMPLETE,
+        entity_count=len(all_entities),
+        relation_count=len(relations),
+        coverage_notes=("raw-row budget fixture",),
+    )
+    run = RepositoryExtractionRun(
+        extraction_run_id=run_id,
+        snapshot_id=snap_id,
+        provider_key="fake",
+        provider_version="1",
+        provider_schema_version="m2.fake.v1",
+        configuration_hash="cfg",
+        requested_revision=REV_A,
+        actual_revision=REV_A,
+        started_at=NOW,
+        completed_at=NOW,
+        status=ExtractionRunStatus.SUCCEEDED,
+        created_by_actor_id=ids.human_owner,
+        limits=ExtractionLimits(max_files=100),
+    )
+    graphs.persist_building_graph(
+        snapshot=snapshot,
+        run=run,
+        entities=all_entities,
+        relations=relations,
+    )
+    graphs.activate_snapshot(
+        snap_id,
+        tenant_id=ids.tenant_alpha,
+        activated_at=NOW,
+        expected_active_snapshot_id=rev_a.snapshot_id,
+    )
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    budget = QueryBudget(max_depth=2, max_results=50, max_visited_nodes=10)
+    graphs.entities_rows_fetched = 0
+    graphs.relations_rows_fetched = 0
+    result = queries.get_change_neighborhood(scope, ("seed/caller.py",), budget=budget)
+    assert len(result.entities) <= budget.max_visited_nodes
+    assert graphs.entities_rows_fetched <= budget.max_visited_nodes + 1
+    assert graphs.relations_rows_fetched <= budget.max_visited_nodes + 1
+    assert result.fallback_full is True
+    assert "impact_neighborhood_incomplete" in result.omissions.reasons
