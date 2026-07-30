@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timedelta
+from typing import Callable
 
 from holodeck_governance.domain.errors import (
     ContentionError,
@@ -86,6 +87,10 @@ def _limits_from_json(raw: object) -> ExtractionLimits:
     )
 
 
+def _sql_in_placeholders(count: int) -> str:
+    return ",".join("?" * count)
+
+
 class SqliteCodeGraphRepository:
     """Tenant-safe immutable store for factual code-graph snapshots."""
 
@@ -93,6 +98,9 @@ class SqliteCodeGraphRepository:
         self._conn = conn
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # Optional read accounting for storage-bounded query tests.
+        self.entities_rows_fetched = 0
+        self.relations_rows_fetched = 0
 
     def _commit_write(self) -> None:
         self._conn.commit()
@@ -549,21 +557,60 @@ class SqliteCodeGraphRepository:
         tenant_id: str,
         activated_at: datetime,
         expected_active_snapshot_id: str | None = None,
+        expect_no_active_snapshot: bool = False,
     ) -> RepositoryGraphSnapshot:
         """Atomically activate a building snapshot; supersede any prior active.
 
-        When ``expected_active_snapshot_id`` is set, activation is a compare-and-
-        set against the binding's current active snapshot (CAS). A mismatch or
-        missing active raises ``ContentionError("base_snapshot_not_current")``.
+        Activation always applies an explicit CAS precondition:
+        - ``expect_no_active_snapshot=True`` requires no current active snapshot
+        - otherwise ``expected_active_snapshot_id`` must match the current active
 
-        Partial coverage never activates in M2.  A future milestone may add a
-        durable, policy-checked exception rather than a caller-controlled flag.
+        ``None`` never means “skip comparison.”
         """
+
+        return self.run_activation_unit_of_work(
+            snapshot_id=snapshot_id,
+            tenant_id=tenant_id,
+            activated_at=activated_at,
+            expected_active_snapshot_id=expected_active_snapshot_id,
+            expect_no_active_snapshot=expect_no_active_snapshot,
+            steps=(),
+        )
+
+    def run_activation_unit_of_work(
+        self,
+        *,
+        snapshot_id: str,
+        tenant_id: str,
+        activated_at: datetime,
+        expected_active_snapshot_id: str | None,
+        expect_no_active_snapshot: bool,
+        steps: tuple[tuple[str, Callable[[], None]], ...] = (),
+        fault_before: str | None = None,
+    ) -> RepositoryGraphSnapshot:
+        """Activate under one BEGIN IMMEDIATE with optional post-activate steps.
+
+        All steps share the transaction. Any failure rolls back activation,
+        source pointer updates, events, and receipts written by the steps.
+        """
+
+        if expect_no_active_snapshot and expected_active_snapshot_id is not None:
+            raise MalformedCommandError(
+                "expect_no_active_snapshot cannot be combined with "
+                "expected_active_snapshot_id"
+            )
+        if not expect_no_active_snapshot and expected_active_snapshot_id is None:
+            raise MalformedCommandError(
+                "activation requires expected_active_snapshot_id or "
+                "expect_no_active_snapshot=True"
+            )
 
         previous = self._conn.isolation_level
         self._conn.isolation_level = None
         try:
             self._conn.execute("BEGIN IMMEDIATE")
+            if fault_before == "cas":
+                raise RuntimeError("injected fault before cas")
             snapshot = self.require_snapshot(snapshot_id, tenant_id=tenant_id)
             if snapshot.status is not SnapshotStatus.BUILDING:
                 raise MalformedCommandError("only building snapshots can activate")
@@ -601,17 +648,22 @@ class SqliteCodeGraphRepository:
                 snapshot, entities=entities, relations=relations
             )
 
-            if expected_active_snapshot_id is not None:
-                current_active = self.get_active_snapshot(
-                    tenant_id=tenant_id,
-                    workspace_object_id=snapshot.workspace_object_id,
-                    repository_binding_id=snapshot.repository_binding_id,
-                )
-                if (
-                    current_active is None
-                    or current_active.snapshot_id != expected_active_snapshot_id
-                ):
+            current_active = self.get_active_snapshot(
+                tenant_id=tenant_id,
+                workspace_object_id=snapshot.workspace_object_id,
+                repository_binding_id=snapshot.repository_binding_id,
+            )
+            if expect_no_active_snapshot:
+                if current_active is not None:
                     raise ContentionError("base_snapshot_not_current")
+            elif (
+                current_active is None
+                or current_active.snapshot_id != expected_active_snapshot_id
+            ):
+                raise ContentionError("base_snapshot_not_current")
+
+            if fault_before == "activate":
+                raise RuntimeError("injected fault before activate")
 
             self._conn.execute(
                 """
@@ -653,6 +705,14 @@ class SqliteCodeGraphRepository:
             )
             if cursor.rowcount != 1:
                 raise ContentionError("snapshot activation lost a race")
+
+            for name, step in steps:
+                if fault_before == name:
+                    raise RuntimeError(f"injected fault before {name}")
+                step()
+                if fault_before == f"after:{name}":
+                    raise RuntimeError(f"injected fault after {name}")
+
             self._conn.execute("COMMIT")
         except Exception:
             self._conn.execute("ROLLBACK")
@@ -747,6 +807,7 @@ class SqliteCodeGraphRepository:
             """,
             (snapshot_id, tenant_id),
         ).fetchall()
+        self.entities_rows_fetched += len(rows)
         return tuple(self._entity_from_row(row) for row in rows)
 
     def find_snapshot_entities(
@@ -755,17 +816,52 @@ class SqliteCodeGraphRepository:
         *,
         tenant_id: str,
         entity_kind: str | None = None,
+        entity_kinds: tuple[str, ...] | None = None,
+        language: str | None = None,
+        qualified_name: str | None = None,
+        qualified_name_exact: bool = False,
+        entity_fact_ids: tuple[str, ...] | None = None,
         repository_relative_path: str | None = None,
         path_prefix: str | None = None,
         limit: int | None = None,
     ) -> tuple[CodeEntityFact, ...]:
         """Bounded entity lookup using ``gov_code_entity_facts_lookup`` columns."""
 
+        if entity_fact_ids is not None and not entity_fact_ids:
+            return ()
+        if entity_kinds is not None and not entity_kinds:
+            return ()
+
         clauses = ["m.snapshot_id = ?", "m.tenant_id = ?"]
         params: list[object] = [snapshot_id, tenant_id]
-        if entity_kind is not None:
+        if entity_kinds is not None:
+            clauses.append(
+                f"f.entity_kind IN ({_sql_in_placeholders(len(entity_kinds))})"
+            )
+            params.extend(entity_kinds)
+        elif entity_kind is not None:
             clauses.append("f.entity_kind = ?")
             params.append(entity_kind)
+        if language is not None:
+            clauses.append("f.language = ?")
+            params.append(language)
+        if qualified_name is not None:
+            if qualified_name_exact:
+                clauses.append("f.qualified_name = ?")
+                params.append(qualified_name)
+            else:
+                escaped = (
+                    qualified_name.replace("\\", "\\\\")
+                    .replace("%", "\\%")
+                    .replace("_", "\\_")
+                )
+                clauses.append("f.qualified_name LIKE ? ESCAPE '\\'")
+                params.append(f"%{escaped}%")
+        if entity_fact_ids is not None:
+            clauses.append(
+                f"f.entity_fact_id IN ({_sql_in_placeholders(len(entity_fact_ids))})"
+            )
+            params.extend(entity_fact_ids)
         if repository_relative_path is not None:
             clauses.append("f.repository_relative_path = ?")
             params.append(repository_relative_path)
@@ -786,7 +882,27 @@ class SqliteCodeGraphRepository:
             sql += " LIMIT ?"
             params.append(limit)
         rows = self._conn.execute(sql, params).fetchall()
+        self.entities_rows_fetched += len(rows)
         return tuple(self._entity_from_row(row) for row in rows)
+
+    def get_snapshot_entity(
+        self, snapshot_id: str, entity_fact_id: str, *, tenant_id: str
+    ) -> CodeEntityFact | None:
+        """Membership-checked single entity fetch for a snapshot."""
+
+        row = self._conn.execute(
+            """
+            SELECT f.* FROM gov_code_entity_facts f
+            JOIN gov_code_graph_snapshot_entities m
+              ON m.entity_fact_id = f.entity_fact_id
+            WHERE m.snapshot_id = ? AND m.tenant_id = ? AND f.entity_fact_id = ?
+            """,
+            (snapshot_id, tenant_id, entity_fact_id),
+        ).fetchone()
+        if row is None:
+            return None
+        self.entities_rows_fetched += 1
+        return self._entity_from_row(row)
 
     def list_snapshot_relations(
         self, snapshot_id: str, *, tenant_id: str
@@ -801,6 +917,78 @@ class SqliteCodeGraphRepository:
             """,
             (snapshot_id, tenant_id),
         ).fetchall()
+        self.relations_rows_fetched += len(rows)
+        return tuple(self._relation_from_row(row) for row in rows)
+
+    def find_snapshot_relations(
+        self,
+        snapshot_id: str,
+        *,
+        tenant_id: str,
+        relation_kinds: tuple[str, ...] | None = None,
+        relation_fact_ids: tuple[str, ...] | None = None,
+        source_entity_fact_ids: tuple[str, ...] | None = None,
+        target_entity_fact_ids: tuple[str, ...] | None = None,
+        either_entity_fact_ids: tuple[str, ...] | None = None,
+        limit: int | None = None,
+    ) -> tuple[CodeRelationFact, ...]:
+        """Bounded relation lookup using ``gov_code_relation_facts_expand`` columns."""
+
+        if relation_kinds is not None and not relation_kinds:
+            return ()
+        if relation_fact_ids is not None and not relation_fact_ids:
+            return ()
+        if source_entity_fact_ids is not None and not source_entity_fact_ids:
+            return ()
+        if target_entity_fact_ids is not None and not target_entity_fact_ids:
+            return ()
+        if either_entity_fact_ids is not None and not either_entity_fact_ids:
+            return ()
+
+        clauses = ["m.snapshot_id = ?", "m.tenant_id = ?"]
+        params: list[object] = [snapshot_id, tenant_id]
+        if relation_kinds is not None:
+            clauses.append(
+                f"f.relation_kind IN ({_sql_in_placeholders(len(relation_kinds))})"
+            )
+            params.extend(relation_kinds)
+        if relation_fact_ids is not None:
+            clauses.append(
+                f"f.relation_fact_id IN ({_sql_in_placeholders(len(relation_fact_ids))})"
+            )
+            params.extend(relation_fact_ids)
+        if source_entity_fact_ids is not None:
+            clauses.append(
+                "f.source_entity_fact_id IN "
+                f"({_sql_in_placeholders(len(source_entity_fact_ids))})"
+            )
+            params.extend(source_entity_fact_ids)
+        if target_entity_fact_ids is not None:
+            clauses.append(
+                "f.target_entity_fact_id IN "
+                f"({_sql_in_placeholders(len(target_entity_fact_ids))})"
+            )
+            params.extend(target_entity_fact_ids)
+        if either_entity_fact_ids is not None:
+            placeholders = _sql_in_placeholders(len(either_entity_fact_ids))
+            clauses.append(
+                f"(f.source_entity_fact_id IN ({placeholders}) "
+                f"OR f.target_entity_fact_id IN ({placeholders}))"
+            )
+            params.extend(either_entity_fact_ids)
+            params.extend(either_entity_fact_ids)
+        sql = f"""
+            SELECT f.* FROM gov_code_relation_facts f
+            JOIN gov_code_graph_snapshot_relations m
+              ON m.relation_fact_id = f.relation_fact_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY f.relation_kind, f.relation_fact_id
+        """
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
+        self.relations_rows_fetched += len(rows)
         return tuple(self._relation_from_row(row) for row in rows)
 
     def get_entity_fact(self, entity_fact_id: str) -> CodeEntityFact | None:
@@ -808,14 +996,20 @@ class SqliteCodeGraphRepository:
             "SELECT * FROM gov_code_entity_facts WHERE entity_fact_id = ?",
             (entity_fact_id,),
         ).fetchone()
-        return None if row is None else self._entity_from_row(row)
+        if row is None:
+            return None
+        self.entities_rows_fetched += 1
+        return self._entity_from_row(row)
 
     def get_relation_fact(self, relation_fact_id: str) -> CodeRelationFact | None:
         row = self._conn.execute(
             "SELECT * FROM gov_code_relation_facts WHERE relation_fact_id = ?",
             (relation_fact_id,),
         ).fetchone()
-        return None if row is None else self._relation_from_row(row)
+        if row is None:
+            return None
+        self.relations_rows_fetched += 1
+        return self._relation_from_row(row)
 
     def _insert_snapshot(self, snapshot: RepositoryGraphSnapshot) -> None:
         _insert_immutable(
