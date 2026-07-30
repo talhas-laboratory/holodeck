@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 
 from holodeck_governance.domain.authority.actors import Actor, ActorKind
@@ -105,6 +106,10 @@ class SqliteWorkspaceIntelligenceRepository:
             self._conn.commit()
 
     def _begin_write(self) -> str | None:
+        if self._tx_depth > 0:
+            # Nested participation in an outer BEGIN IMMEDIATE.
+            self._tx_depth += 1
+            return None
         previous = self._conn.isolation_level
         self._conn.isolation_level = None
         self._conn.execute("BEGIN IMMEDIATE")
@@ -112,14 +117,30 @@ class SqliteWorkspaceIntelligenceRepository:
         return previous
 
     def _commit_txn(self, previous: str | None) -> None:
+        if previous is None and self._tx_depth > 1:
+            self._tx_depth -= 1
+            return
         self._conn.execute("COMMIT")
         self._tx_depth = max(0, self._tx_depth - 1)
         self._conn.isolation_level = previous
 
     def _rollback_txn(self, previous: str | None) -> None:
+        if previous is None and self._tx_depth > 1:
+            self._tx_depth -= 1
+            return
         self._conn.execute("ROLLBACK")
         self._tx_depth = max(0, self._tx_depth - 1)
         self._conn.isolation_level = previous
+
+    @contextmanager
+    def participate_in_external_transaction(self) -> Iterator[None]:
+        """Join an outer BEGIN IMMEDIATE without opening a nested transaction."""
+
+        self._tx_depth += 1
+        try:
+            yield
+        finally:
+            self._tx_depth = max(0, self._tx_depth - 1)
 
     # -- authority / tenant guards -------------------------------------------
 
@@ -648,6 +669,220 @@ class SqliteWorkspaceIntelligenceRepository:
             raise MalformedCommandError(
                 f"observation {observation_id} workspace does not match request"
             )
+
+    def stage_repository_file_source_observation(
+        self,
+        *,
+        source_id: str,
+        observation_id: str,
+        tenant_id: str,
+        workspace_object_id: str,
+        locator: str,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> None:
+        """Insert immutable source/observation rows without flipping current pointers.
+
+        New sources are registered with ``current_observation_id=None`` so a later
+        activation transaction owns the pointer update. Existing sources keep
+        their current observation and freshness until activation.
+        """
+
+        existing = self.get_source_by_locator(
+            tenant_id=tenant_id,
+            workspace_object_id=workspace_object_id,
+            locator=locator,
+        )
+        if existing is None:
+            self.require_workspace_object(workspace_object_id, tenant_id=tenant_id)
+            self._require_actor(actor_id, tenant_id=tenant_id)
+            self._require_curate(actor_id, tenant_id=tenant_id, at=at)
+            self._insert_source(
+                WorkspaceSource(
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                    source_type=SourceType.REPOSITORY_FILE,
+                    locator=locator,
+                    observed_revision=observed_revision,
+                    trust_class=TrustClass.ORDINARY_REFERENCE,
+                    owner_actor_id=actor_id,
+                    sensitivity="public",
+                    refresh_policy="on_revision_change",
+                    observed_at=at,
+                    stale_status=StaleStatus.FRESH,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
+                    current_observation_id=None,
+                )
+            )
+            self._commit_write()
+            # Observation row for FK resolution; pointer remains unset until activate.
+            previous = self._begin_write()
+            try:
+                self._insert_source_observation_only(
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                    observed_revision=observed_revision,
+                    content_hash=None,
+                    observed_at=at,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
+                    observation_id=observation_id,
+                )
+                self._commit_txn(previous)
+            except Exception:
+                self._rollback_txn(previous)
+                raise
+            return
+
+        if existing.source_id != source_id:
+            raise IdempotencyConflictError(
+                f"source locator {locator!r} is already registered under a "
+                "different source_id"
+            )
+
+        observation = self.get_source_observation(observation_id)
+        if observation is None:
+            previous = self._begin_write()
+            try:
+                self._insert_source_observation_only(
+                    source_id=source_id,
+                    tenant_id=tenant_id,
+                    workspace_object_id=workspace_object_id,
+                    observed_revision=observed_revision,
+                    content_hash=None,
+                    observed_at=at,
+                    created_at=at,
+                    created_by_actor_id=actor_id,
+                    observation_id=observation_id,
+                )
+                self._commit_txn(previous)
+            except Exception:
+                self._rollback_txn(previous)
+                raise
+            return
+
+        if observation.source_id != source_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} does not belong to source {source_id}"
+            )
+        if observation.tenant_id != tenant_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} tenant does not match request"
+            )
+        if observation.workspace_object_id != workspace_object_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} workspace does not match request"
+            )
+
+    def activate_source_observation_pointer(
+        self,
+        *,
+        source_id: str,
+        observation_id: str,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> None:
+        """Point a source at a staged observation and stale dependents if changed.
+
+        Caller may own the surrounding transaction via
+        ``participate_in_external_transaction``.
+        """
+
+        source = self.get_source(source_id)
+        if source is None:
+            raise NotFoundGovernanceError(f"unknown source {source_id}")
+        observation = self.get_source_observation(observation_id)
+        if observation is None:
+            raise NotFoundGovernanceError(f"unknown observation {observation_id}")
+        if observation.source_id != source_id:
+            raise MalformedCommandError(
+                f"observation {observation_id} does not belong to source {source_id}"
+            )
+
+        pointer_changed = (
+            source.current_observation_id is not None
+            and source.current_observation_id != observation_id
+        )
+        previous = self._begin_write()
+        try:
+            self._conn.execute(
+                """
+                UPDATE gov_workspace_sources
+                SET current_observation_id = ?,
+                    observed_revision = ?,
+                    content_hash = COALESCE(?, content_hash),
+                    observed_at = ?
+                WHERE source_id = ?
+                """,
+                (
+                    observation_id,
+                    observed_revision,
+                    observation.content_hash,
+                    at.isoformat(),
+                    source_id,
+                ),
+            )
+            if pointer_changed:
+                modules = self.list_context_modules(
+                    source.workspace_object_id, tenant_id=source.tenant_id
+                )
+                dependent_ids = module_ids_depending_on_source(modules, source_id)
+                dependent_modules = self._load_dependent_modules(
+                    dependent_ids,
+                    tenant_id=source.tenant_id,
+                    workspace_object_id=source.workspace_object_id,
+                )
+                self._mark_source_and_modules_stale_in_txn(
+                    source,
+                    modules=dependent_modules,
+                    actor_id=actor_id,
+                    at=at,
+                )
+            self._commit_txn(previous)
+        except Exception:
+            self._rollback_txn(previous)
+            raise
+
+    def _insert_source_observation_only(
+        self,
+        *,
+        source_id: str,
+        tenant_id: str,
+        workspace_object_id: str,
+        observed_revision: str,
+        content_hash: str | None,
+        observed_at: datetime,
+        created_at: datetime,
+        created_by_actor_id: str,
+        observation_id: str,
+    ) -> str:
+        self._conn.execute(
+            """
+            INSERT INTO gov_workspace_source_observations(
+                observation_id, source_id, tenant_id, workspace_object_id,
+                observed_revision, content_hash, observed_at, created_at,
+                created_by_actor_id, schema_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                observation_id,
+                source_id,
+                tenant_id,
+                workspace_object_id,
+                observed_revision,
+                content_hash,
+                observed_at.isoformat(),
+                created_at.isoformat(),
+                created_by_actor_id,
+                "m2.workspace_source_observation.v1",
+            ),
+        )
+        return observation_id
 
     def _insert_source(self, source: WorkspaceSource) -> None:
         _insert_immutable(

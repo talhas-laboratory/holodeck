@@ -60,9 +60,8 @@ domain boundary — no generic escape hatch.
 `GraphBuildRequest` fields: `tenant_id`, `workspace_object_id`,
 `repository_binding_id`, `repository_path`, `requested_revision`, `actor_id`,
 `idempotency_key`, `limits` (`ExtractionLimits`), `at`, optional
-`base_snapshot_id`, `path_includes`, `path_excludes`, `changed_paths`.
-**`changed_paths` require `base_snapshot_id`.** Activation is CAS when
-`base_snapshot_id` is set (`expected_active_snapshot_id`).
+`base_snapshot_id`, `expected_active_snapshot_id` / `expect_no_active_snapshot`, `path_includes`, `path_excludes`, `changed_paths`.
+**`changed_paths` require `base_snapshot_id`.** Activation always applies explicit CAS via `expected_active_snapshot_id` or `expect_no_active_snapshot=True` (never skip comparison).
 
 `GraphBuildResult` fields: `snapshot_id`, `extraction_run_id`, `status`,
 `coverage_status`, `entity_count`, `relation_count`, `actual_revision`,

@@ -71,7 +71,9 @@ CODE_GRAPH_DOMAIN = (
     / "intelligence"
     / "code_graph"
 )
-DESIGN = ROOT / "docs" / "plans" / "2026-07-29-persistent-codebase-factual-graph-design.md"
+DESIGN = (
+    ROOT / "docs" / "plans" / "2026-07-29-persistent-codebase-factual-graph-design.md"
+)
 
 TENANT = "01900000-0000-7000-8000-00000000a001"
 WORKSPACE = "01900000-0000-7000-8000-00000000a002"
@@ -181,8 +183,7 @@ def test_mutable_revisions_rejected(revision: str) -> None:
 def test_hex_and_fixture_revisions_accepted() -> None:
     assert require_immutable_repository_revision("abc1234") == "abc1234"
     assert (
-        require_immutable_repository_revision("fixture:abcd1234")
-        == "fixture:abcd1234"
+        require_immutable_repository_revision("fixture:abcd1234") == "fixture:abcd1234"
     )
 
 
@@ -385,9 +386,7 @@ def test_active_snapshot_requires_activation_and_known_coverage() -> None:
 
 def test_fixture_revisions_are_stable_content_identities() -> None:
     manifest = write_revisions_manifest()
-    on_disk = json.loads(
-        (FIXTURE_ROOT / "revisions.json").read_text(encoding="utf-8")
-    )
+    on_disk = json.loads((FIXTURE_ROOT / "revisions.json").read_text(encoding="utf-8"))
     assert on_disk == manifest
     rev_a = manifest["revisions"]["rev_a"]["repository_revision"]
     rev_b = manifest["revisions"]["rev_b"]["repository_revision"]
@@ -399,9 +398,10 @@ def test_fixture_revisions_are_stable_content_identities() -> None:
     assert set(manifest["revisions"]["rev_b"]["changed_paths_from_rev_a"]) == set(
         changed_paths(TREES_ROOT / "rev_a", TREES_ROOT / "rev_b")
     )
-    assert "sample_app/service.py" in manifest["revisions"]["rev_b"][
-        "changed_paths_from_rev_a"
-    ]
+    assert (
+        "sample_app/service.py"
+        in manifest["revisions"]["rev_b"]["changed_paths_from_rev_a"]
+    )
 
 
 def test_golden_facts_cover_relation_catalog_or_mark_deferred() -> None:
@@ -412,7 +412,9 @@ def test_golden_facts_cover_relation_catalog_or_mark_deferred() -> None:
         entities=entities, relations=relations, diagnostics=diagnostics
     )
     covered = relation_kinds_covered(relations)
-    missing = INITIAL_RELATION_KINDS - covered - DEFERRED_RELATION_KINDS_FROM_PYTHON_FIXTURE
+    missing = (
+        INITIAL_RELATION_KINDS - covered - DEFERRED_RELATION_KINDS_FROM_PYTHON_FIXTURE
+    )
     assert not missing
     assert DEFERRED_RELATION_KINDS_FROM_PYTHON_FIXTURE.isdisjoint(covered)
 
@@ -420,9 +422,7 @@ def test_golden_facts_cover_relation_catalog_or_mark_deferred() -> None:
 def test_unresolved_dynamic_call_is_diagnostic_not_edge() -> None:
     diagnostics = golden_diagnostics_rev_a()
     assert any(item.code == UNRESOLVED_DYNAMIC_CALL for item in diagnostics)
-    assert all(
-        isinstance(item, ExtractionDiagnostic) for item in diagnostics
-    )
+    assert all(isinstance(item, ExtractionDiagnostic) for item in diagnostics)
     relations = golden_relations_rev_a()
     invoke = next(
         entity
@@ -448,9 +448,7 @@ def test_golden_paths_are_non_empty_evidence_chains() -> None:
         if entity.qualified_name is not None
     }
     # File path used as terminal evidence may be a qualified_name on FILE entities.
-    entities |= {
-        entity.repository_relative_path for entity in golden_entities_rev_a()
-    }
+    entities |= {entity.repository_relative_path for entity in golden_entities_rev_a()}
     for path in paths:
         assert len(path) >= 2
         for step in path:

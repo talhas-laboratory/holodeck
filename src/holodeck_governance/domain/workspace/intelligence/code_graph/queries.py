@@ -102,18 +102,22 @@ class QueryBudget:
 
 
 def _traversal_budget(budget: QueryBudget) -> QueryBudget:
-    """Apply the default safe relation profile when both allowlists are empty."""
+    """Apply safe defaults for any omitted traversal allowlist independently.
 
-    if budget.entity_kinds or budget.relation_kinds:
-        return budget
+    An empty ``relation_kinds`` never means “all relation kinds.” Entity-only
+    budgets still receive the default relation profile.
+    """
+
     from dataclasses import replace
 
-    return replace(
-        budget,
-        relation_kinds=tuple(
+    relation_kinds = budget.relation_kinds
+    if not relation_kinds:
+        relation_kinds = tuple(
             sorted(DEFAULT_TRAVERSAL_RELATION_KINDS, key=lambda k: k.value)
-        ),
-    )
+        )
+    if relation_kinds == budget.relation_kinds:
+        return budget
+    return replace(budget, relation_kinds=relation_kinds)
 
 
 @dataclass(frozen=True, slots=True)

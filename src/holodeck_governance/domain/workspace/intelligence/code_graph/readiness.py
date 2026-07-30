@@ -35,9 +35,9 @@ def evaluate_factual_graph_readiness(
 ) -> FactualGraphReadiness:
     """Pure readiness evaluation for an active graph snapshot.
 
-    ``COMPLETE_FOR_SUPPORTED_SCOPE`` is returned for complete coverage whether
-    or not unresolved diagnostics (e.g. unresolved_dynamic_call) are present —
-    Holodeck never claims a universally complete model of the repository.
+    ``COMPLETE_FOR_SUPPORTED_SCOPE`` requires knowing the authoritative
+    repository head and confirming it matches the active snapshot revision.
+    Unknown head returns ``UNRESOLVED`` rather than claiming completeness.
     """
 
     if active_snapshot is None:
@@ -57,6 +57,8 @@ def evaluate_factual_graph_readiness(
         return FactualGraphReadiness.PARTIAL
 
     if coverage is CoverageStatus.COMPLETE:
+        if binding_repository_revision is None:
+            return FactualGraphReadiness.UNRESOLVED
         # Unresolved diagnostics do not lower this dimension below supported-scope
         # complete; they remain visible on the run diagnostics separately.
         return FactualGraphReadiness.COMPLETE_FOR_SUPPORTED_SCOPE

@@ -211,6 +211,7 @@ def test_failed_rebuild_preserves_prior_active_snapshot() -> None:
             idempotency_key="build-success",
             limits=ExtractionLimits(max_files=200, max_entities=5000),
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
     assert first.status is SnapshotStatus.ACTIVE
@@ -227,6 +228,8 @@ def test_failed_rebuild_preserves_prior_active_snapshot() -> None:
             idempotency_key="build-fail",
             limits=ExtractionLimits(max_files=200, max_entities=5000),
             at=NOW,
+            expected_active_snapshot_id=first.snapshot_id,
+            expect_no_active_snapshot=False,
         )
     )
     assert failed.status is SnapshotStatus.FAILED

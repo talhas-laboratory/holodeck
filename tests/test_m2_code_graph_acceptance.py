@@ -8,6 +8,7 @@ handoff. Does not complete M2-011 consolidation.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -88,7 +89,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (
+from python_reference import (  # noqa: E402
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -274,7 +275,17 @@ def _build(
     base_snapshot_id: str | None = None,
     changed_paths: tuple[str, ...] = (),
     limits: ExtractionLimits = LIMITS,
+    expected_active_snapshot_id: str | None = None,
+    expect_no_active_snapshot: bool | None = None,
 ) -> object:
+    if expect_no_active_snapshot is None and expected_active_snapshot_id is None:
+        if base_snapshot_id is not None:
+            expected_active_snapshot_id = base_snapshot_id
+            expect_no_active_snapshot = False
+        else:
+            expect_no_active_snapshot = True
+    elif expect_no_active_snapshot is None:
+        expect_no_active_snapshot = False
     return ingestion.build_graph(
         GraphBuildRequest(
             tenant_id=ids.tenant_alpha,
@@ -287,6 +298,8 @@ def _build(
             limits=limits,
             at=NOW,
             base_snapshot_id=base_snapshot_id,
+            expected_active_snapshot_id=expected_active_snapshot_id,
+            expect_no_active_snapshot=bool(expect_no_active_snapshot),
             changed_paths=changed_paths,
         )
     )
@@ -312,7 +325,7 @@ def _event_payloads(
     ]
 
 
-def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
+def test_m2_026_factual_graph_lifecycle_acceptance(tmp_path: Path) -> None:
     conn, ingestion, queries, ids, binding_id, intel, graphs = _world()
     changed = _changed_paths_rev_b()
     metrics: dict[str, object] = {
@@ -451,7 +464,7 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
     conn_full, ingestion_full, queries_full, ids_full, binding_full, _, graphs_full = (
         _world()
     )
-    _build(
+    base_for_full = _build(
         ingestion_full,
         ids_full,
         binding_full,
@@ -467,6 +480,7 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
         revision=REV_B,
         tree="rev_b",
         idempotency_key="m2-026-rev-b-full",
+        expected_active_snapshot_id=base_for_full.snapshot_id,
     )
     full_seconds = time.perf_counter() - started_full
     assert full_b.status is SnapshotStatus.ACTIVE
@@ -712,13 +726,45 @@ def test_m2_026_factual_graph_lifecycle_acceptance() -> None:
         "GitNexus remains research-only (PolyForm NC); not a production dependency.",
     ]
 
-    artifact = ROOT / "artifacts" / "m2-026-acceptance-metrics.json"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    artifact.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    run_artifact = tmp_path / "m2-026-acceptance-metrics.run.json"
+    run_artifact.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    golden = ROOT / "artifacts" / "m2-026-acceptance-metrics.json"
+    if os.environ.get("HOLODECK_UPDATE_ACCEPTANCE_ARTIFACTS") == "1":
+        golden.parent.mkdir(parents=True, exist_ok=True)
+        golden.write_text(
+            json.dumps(_stable_acceptance_metrics(metrics), indent=2, sort_keys=True)
+            + "\n"
+        )
+    else:
+        assert golden.is_file(), "committed golden acceptance metrics missing"
+        golden_payload = json.loads(golden.read_text())
+        assert _stable_acceptance_metrics(metrics) == _stable_acceptance_metrics(
+            golden_payload
+        )
     conn_full.close()
     conn_stale.close()
     conn_partial.close()
     conn_mismatch.close()
+
+
+def _stable_acceptance_metrics(payload: object) -> object:
+    """Drop volatile timings and snapshot ids from acceptance metrics."""
+
+    if isinstance(payload, dict):
+        skip = {
+            "seconds",
+            "snapshot_id",
+            "full_seconds",
+            "incremental_seconds",
+        }
+        return {
+            key: _stable_acceptance_metrics(value)
+            for key, value in payload.items()
+            if key not in skip
+        }
+    if isinstance(payload, list):
+        return [_stable_acceptance_metrics(item) for item in payload]
+    return payload
 
 
 def test_m2_026_concurrent_activation_keeps_single_active(tmp_path: Path) -> None:
@@ -930,7 +976,10 @@ def test_m2_026_concurrent_activation_keeps_single_active(tmp_path: Path) -> Non
         try:
             barrier.wait(timeout=5)
             repo.activate_snapshot(
-                snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+                snapshot_id,
+                tenant_id=ids.tenant_alpha,
+                activated_at=NOW,
+                expect_no_active_snapshot=True,
             )
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
@@ -1012,6 +1061,11 @@ class _PersistThenFailActivate:
             raise RuntimeError("simulated activate failure after persist")
         return self._inner.activate_snapshot(*args, **kwargs)
 
+    def run_activation_unit_of_work(self, *args, **kwargs):
+        if self.fail_activate:
+            raise RuntimeError("simulated activate failure after persist")
+        return self._inner.run_activation_unit_of_work(*args, **kwargs)
+
 
 def test_m2_026_timeout_extractor_fails_closed() -> None:
     conn, _ingestion, _queries, ids, binding_id, _intel, graphs = _world()
@@ -1044,6 +1098,7 @@ def test_m2_026_timeout_extractor_fails_closed() -> None:
             idempotency_key="m2-026-timeout",
             limits=LIMITS,
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
     assert result.status is SnapshotStatus.FAILED
@@ -1087,6 +1142,7 @@ def test_m2_026_malformed_fact_extractor_fails_closed() -> None:
             idempotency_key="m2-026-malformed",
             limits=LIMITS,
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
     assert result.status is SnapshotStatus.FAILED
@@ -1168,6 +1224,7 @@ def test_m2_026_persist_then_fail_before_activate_retains_prior() -> None:
             idempotency_key="m2-026-prior",
             limits=LIMITS,
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
     assert first.status is SnapshotStatus.ACTIVE
@@ -1185,6 +1242,8 @@ def test_m2_026_persist_then_fail_before_activate_retains_prior() -> None:
             at=NOW,
             base_snapshot_id=first.snapshot_id,
             changed_paths=_changed_paths_rev_b(),
+            expected_active_snapshot_id=first.snapshot_id,
+            expect_no_active_snapshot=False,
         )
     )
     assert failed.status is SnapshotStatus.FAILED

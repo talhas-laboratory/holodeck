@@ -360,7 +360,10 @@ def test_facts_are_immutable_and_memberships_reuse_content() -> None:
         entity_fact_ids=(entity.entity_fact_id,),
     )
     activated = graph.activate_snapshot(
-        snap_a.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+        snap_a.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        activated_at=NOW,
+        expect_no_active_snapshot=True,
     )
     assert activated.status is SnapshotStatus.ACTIVE
 
@@ -393,7 +396,11 @@ def test_facts_are_immutable_and_memberships_reuse_content() -> None:
         entity_fact_ids=(entity.entity_fact_id,),
     )
     graph.activate_snapshot(
-        snap_b.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+        snap_b.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        activated_at=NOW,
+        expected_active_snapshot_id=snap_a.snapshot_id,
+        expect_no_active_snapshot=False,
     )
     prior = graph.require_snapshot(snap_a.snapshot_id, tenant_id=ids.tenant_alpha)
     assert prior.status is SnapshotStatus.SUPERSEDED
@@ -539,7 +546,10 @@ def test_failed_activation_preserves_previous_active() -> None:
         entity_fact_ids=(entity.entity_fact_id,),
     )
     graph.activate_snapshot(
-        snap.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+        snap.snapshot_id,
+        tenant_id=ids.tenant_alpha,
+        activated_at=NOW,
+        expect_no_active_snapshot=True,
     )
 
     bad_run = generate_uuidv7()
@@ -572,7 +582,10 @@ def test_failed_activation_preserves_previous_active() -> None:
     )
     with pytest.raises(MalformedCommandError):
         graph.activate_snapshot(
-            bad.snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+            bad.snapshot_id,
+            tenant_id=ids.tenant_alpha,
+            activated_at=NOW,
+            expect_no_active_snapshot=True,
         )
     active = graph.get_active_snapshot(
         tenant_id=ids.tenant_alpha,
@@ -811,7 +824,10 @@ def test_concurrent_activation_keeps_single_active(tmp_path: Path) -> None:
         try:
             barrier.wait(timeout=5)
             local.activate_snapshot(
-                snapshot_id, tenant_id=ids.tenant_alpha, activated_at=NOW
+                snapshot_id,
+                tenant_id=ids.tenant_alpha,
+                activated_at=NOW,
+                expect_no_active_snapshot=True,
             )
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)

@@ -65,7 +65,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (
+from python_reference import (  # noqa: E402
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -245,6 +245,7 @@ def _build_rev_a(
             idempotency_key=idempotency_key,
             limits=LIMITS,
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
 
@@ -256,7 +257,11 @@ def _build_rev_b(
     *,
     idempotency_key: str = "rev-b",
     base_snapshot_id: str | None = None,
+    expected_active_snapshot_id: str | None = None,
 ) -> object:
+    if expected_active_snapshot_id is None:
+        expected_active_snapshot_id = base_snapshot_id
+    expect_none = expected_active_snapshot_id is None
     return ingestion.build_graph(
         GraphBuildRequest(
             tenant_id=ids.tenant_alpha,
@@ -269,6 +274,8 @@ def _build_rev_b(
             limits=LIMITS,
             at=NOW,
             base_snapshot_id=base_snapshot_id,
+            expected_active_snapshot_id=expected_active_snapshot_id,
+            expect_no_active_snapshot=expect_none,
             changed_paths=_changed_paths_rev_b() if base_snapshot_id else (),
         )
     )
@@ -387,7 +394,13 @@ def test_change_neighborhood_includes_service_paths() -> None:
 def test_compare_snapshots_rev_a_vs_rev_b_shows_diffs() -> None:
     _conn, ingestion, queries, ids, binding_id, _graphs = _harness()
     rev_a = _build_rev_a(ingestion, ids, binding_id)
-    rev_b = _build_rev_b(ingestion, ids, binding_id, idempotency_key="rev-b-full")
+    rev_b = _build_rev_b(
+        ingestion,
+        ids,
+        binding_id,
+        idempotency_key="rev-b-full",
+        expected_active_snapshot_id=rev_a.snapshot_id,
+    )
     assert rev_a.status is SnapshotStatus.ACTIVE or rev_a.snapshot_id
     assert rev_b.status is SnapshotStatus.ACTIVE
     scope = _scope(ids, binding_id)
@@ -464,7 +477,13 @@ def test_historical_get_snapshot_after_supersede() -> None:
     _conn, ingestion, queries, ids, binding_id, graphs = _harness()
     rev_a = _build_rev_a(ingestion, ids, binding_id)
     first_id = rev_a.snapshot_id
-    _build_rev_b(ingestion, ids, binding_id, idempotency_key="rev-b-hist")
+    _build_rev_b(
+        ingestion,
+        ids,
+        binding_id,
+        idempotency_key="rev-b-hist",
+        expected_active_snapshot_id=first_id,
+    )
     active = queries.get_active_snapshot(_scope(ids, binding_id))
     assert active.snapshot_id != first_id
     historical = queries.get_snapshot(_scope(ids, binding_id, snapshot_id=first_id))

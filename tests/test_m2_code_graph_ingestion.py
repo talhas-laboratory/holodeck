@@ -68,14 +68,12 @@ NOW = datetime(2026, 7, 29, 16, 0, tzinfo=UTC)
 REV_A = fixture_revision_id("rev_a")
 
 
-def _service() -> (
-    tuple[
-        sqlite3.Connection,
-        CodeGraphIngestionService,
-        FixtureIds,
-        str,
-    ]
-):
+def _service() -> tuple[
+    sqlite3.Connection,
+    CodeGraphIngestionService,
+    FixtureIds,
+    str,
+]:
     ids = FixtureIds()
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -201,6 +199,8 @@ def _request(
     idempotency_key: str = "graph-build-1",
     revision: str = REV_A,
     actor_id: str | None = None,
+    expected_active_snapshot_id: str | None = None,
+    expect_no_active_snapshot: bool = True,
 ) -> GraphBuildRequest:
     return GraphBuildRequest(
         tenant_id=ids.tenant_alpha,
@@ -212,6 +212,8 @@ def _request(
         idempotency_key=idempotency_key,
         limits=ExtractionLimits(max_files=200, max_entities=5000, max_relations=20000),
         at=NOW,
+        expected_active_snapshot_id=expected_active_snapshot_id,
+        expect_no_active_snapshot=expect_no_active_snapshot,
     )
 
 
@@ -332,6 +334,8 @@ def test_second_revision_rebuild_succeeds_with_stable_sources() -> None:
                 max_files=200, max_entities=5000, max_relations=20000
             ),
             at=NOW,
+            expected_active_snapshot_id=first.snapshot_id,
+            expect_no_active_snapshot=False,
         )
     )
     assert second.status is SnapshotStatus.ACTIVE
@@ -380,6 +384,7 @@ def test_partial_build_never_activates_without_a_durable_policy_seam() -> None:
             idempotency_key="partial-default",
             limits=ExtractionLimits(max_files=1, max_entities=5000),
             at=NOW,
+            expect_no_active_snapshot=True,
         )
     )
     assert rejected.status is SnapshotStatus.FAILED

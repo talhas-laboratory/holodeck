@@ -33,10 +33,10 @@ Issues = "https://github.com/talhas-laboratory/holodeck/issues"
 
 [project.optional-dependencies]
 mcp = ["mcp>=1.6,<2"]
-dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8"]
+dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8", "ruff>=0.12"]
 
 [dependency-groups]
-dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8"]
+dev = ["build>=1", "mcp>=1.6,<2", "pytest>=8", "ruff>=0.12"]
 
 [tool.uv]
 default-groups = ["dev"]

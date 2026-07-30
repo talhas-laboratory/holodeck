@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  lint-code-graph:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Ruff check/format for code-graph surfaces
+        run: |
+          python -m pip install -U pip ruff
+          PATHS=(
+            src/holodeck_governance/application/code_graph_ingestion.py
+            src/holodeck_governance/application/code_graph_queries.py
+            src/holodeck_governance/storage/sqlite/code_graph.py
+            src/holodeck_governance/storage/sqlite/intelligence.py
+            src/holodeck_governance/domain/workspace/intelligence/code_graph
+            tests/test_m2_code_graph_*.py
+            scripts/generate_m2_code_graph_acceptance_artifacts.py
+          )
+          python -m ruff check --select E402 "${PATHS[@]}"
+          python -m ruff format --check "${PATHS[@]}"
+
   test-pip:
     runs-on: ubuntu-latest
     steps:

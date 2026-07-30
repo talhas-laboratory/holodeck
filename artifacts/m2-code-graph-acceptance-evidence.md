@@ -1,9 +1,9 @@
 # M2-026 — Factual code-graph acceptance evidence
 
 **Task:** M2-026
-**Commit:** `97fc031c245afb26d1f4472c8dd014abcdca9489`
-**Date:** 2026-07-29
-**Metrics:** `artifacts/m2-026-acceptance-metrics.json`
+**Commit:** `PENDING_TIP_STAMP`
+**Date:** 2026-07-30
+**Metrics:** `artifacts/m2-026-acceptance-metrics.json` (stable golden; regenerate via `scripts/generate_m2_code_graph_acceptance_artifacts.py`)
 
 ## Scenario steps (pass/fail)
 
@@ -28,7 +28,11 @@
 | Closeout: `changed_paths` without base rejected; fallback full ≡ standalone | **pass** (`tests/test_m2_code_graph_closeout_blockers.py`) |
 | Closeout: CAS activation (A→B ok; stale A fails; same-base race → one active) | **pass** |
 | Closeout: impact depth >8 → `fallback_full`; deleted source stales dependents | **pass** |
-| Closeout: `FactualGraphReadiness` absent/partial/supported-scope/stale | **pass** |
+| Closeout: `FactualGraphReadiness` absent/partial/supported-scope/stale/unresolved-without-head | **pass** |
+| Closeout: full rebuild requires `expected_active_snapshot_id` / `expect_no_active_snapshot` | **pass** |
+| Closeout: activation UoW rolls back sources/events/receipt on fault; failed CAS leaves pointers unchanged | **pass** |
+| Closeout: storage-bounded find uses `limit+1` (no full snapshot load) | **pass** |
+| Closeout: entity-only traversal budget applies safe relation default (excludes CONTAINS/READS) | **pass** |
 
 ## Precision / recall (honest)
 

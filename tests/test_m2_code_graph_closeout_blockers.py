@@ -85,7 +85,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (
+from python_reference import (  # noqa: E402
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -248,11 +248,33 @@ def _build(
     revision: str,
     tree: str | Path,
     idempotency_key: str,
+    graphs: object,
     base_snapshot_id: str | None = None,
     changed_paths: tuple[str, ...] = (),
     path_includes: tuple[str, ...] = (),
+    expected_active_snapshot_id: str | None = None,
+    expect_no_active_snapshot: bool | None = None,
 ) -> object:
     path = Path(tree) if isinstance(tree, Path) else TREES_ROOT / tree
+    if expect_no_active_snapshot is None and expected_active_snapshot_id is None:
+        if base_snapshot_id is not None:
+            # Incremental/replacement CAS names the claimed base, not whatever is
+            # currently active — stale bases must fail closed.
+            expected_active_snapshot_id = base_snapshot_id
+            expect_no_active_snapshot = False
+        else:
+            active = graphs.get_active_snapshot(
+                tenant_id=ids.tenant_alpha,
+                workspace_object_id=ids.workspace_alpha_1,
+                repository_binding_id=binding_id,
+            )
+            if active is None:
+                expect_no_active_snapshot = True
+            else:
+                expected_active_snapshot_id = active.snapshot_id
+                expect_no_active_snapshot = False
+    elif expect_no_active_snapshot is None:
+        expect_no_active_snapshot = False
     return service.build_graph(
         GraphBuildRequest(
             tenant_id=ids.tenant_alpha,
@@ -265,6 +287,8 @@ def _build(
             limits=LIMITS,
             at=NOW,
             base_snapshot_id=base_snapshot_id,
+            expected_active_snapshot_id=expected_active_snapshot_id,
+            expect_no_active_snapshot=bool(expect_no_active_snapshot),
             changed_paths=changed_paths,
             path_includes=path_includes,
         )
@@ -338,6 +362,7 @@ def test_full_build_with_changed_paths_and_no_base_rejected() -> None:
             idempotency_key="bad",
             limits=LIMITS,
             at=NOW,
+            expect_no_active_snapshot=True,
             changed_paths=("sample_app/service.py",),
         )
 
@@ -345,13 +370,20 @@ def test_full_build_with_changed_paths_and_no_base_rejected() -> None:
 def test_fallback_full_extract_equals_standalone_full_on_golden() -> None:
     _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
     rev_a = _build(
-        service, ids, binding_id, revision=REV_A, tree="rev_a", idempotency_key="p0-a"
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="p0-a",
     )
     # Force fallback by empty changed_paths with base (still allowed).
     fallback = _build(
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="p0-fallback",
@@ -371,6 +403,7 @@ def test_fallback_full_extract_equals_standalone_full_on_golden() -> None:
         service2,
         ids2,
         binding_id2,
+        graphs=graphs2,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="p0-standalone",
@@ -407,13 +440,20 @@ def test_fallback_full_extract_equals_standalone_full_on_golden() -> None:
 def test_cas_activation_a_to_b_ok_then_stale_a_fails() -> None:
     _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
     rev_a = _build(
-        service, ids, binding_id, revision=REV_A, tree="rev_a", idempotency_key="cas-a"
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="cas-a",
     )
     assert rev_a.status is SnapshotStatus.ACTIVE
     rev_b = _build(
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="cas-b",
@@ -433,6 +473,7 @@ def test_cas_activation_a_to_b_ok_then_stale_a_fails() -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="cas-stale-a",
@@ -451,14 +492,21 @@ def test_cas_activation_a_to_b_ok_then_stale_a_fails() -> None:
 
 
 def test_cas_two_same_base_race_one_active() -> None:
-    _conn, service, ids, binding_id, _intel, _graphs, _queries = _service()
+    _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
     rev_a = _build(
-        service, ids, binding_id, revision=REV_A, tree="rev_a", idempotency_key="race-a"
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="race-a",
     )
     first = _build(
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="race-b1",
@@ -469,6 +517,7 @@ def test_cas_two_same_base_race_one_active() -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="race-b2",
@@ -497,6 +546,7 @@ def test_activate_snapshot_cas_raises_contention_directly() -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_A,
         tree="rev_a",
         idempotency_key="direct-a",
@@ -619,6 +669,7 @@ def test_deleted_source_stales_dependent_module(tmp_path: Path) -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=rev_hash_a,
         tree=tree_a,
         idempotency_key="del-a",
@@ -683,6 +734,7 @@ def test_deleted_source_stales_dependent_module(tmp_path: Path) -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=rev_hash_b,
         tree=tree_b,
         idempotency_key="del-b",
@@ -726,6 +778,7 @@ def test_factual_graph_readiness_absent_partial_supported_stale() -> None:
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_A,
         tree="rev_a",
         idempotency_key="ready-a",
@@ -736,10 +789,26 @@ def test_factual_graph_readiness_absent_partial_supported_stale() -> None:
         workspace_object_id=ids.workspace_alpha_1,
         repository_binding_id=binding_id,
     )
+    assert status.factual_graph_readiness is FactualGraphReadiness.UNRESOLVED
+
+    status_complete = service.get_status(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+        observed_repository_revision=REV_A,
+    )
     assert (
-        status.factual_graph_readiness
+        status_complete.factual_graph_readiness
         is FactualGraphReadiness.COMPLETE_FOR_SUPPORTED_SCOPE
     )
+
+    status_stale = service.get_status(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+        observed_repository_revision=REV_B,
+    )
+    assert status_stale.factual_graph_readiness is FactualGraphReadiness.STALE
 
     snap = graphs.require_snapshot(rev_a.snapshot_id, tenant_id=ids.tenant_alpha)
     run = graphs.get_extraction_run(snap.extraction_run_id)
@@ -779,14 +848,21 @@ def test_factual_graph_readiness_absent_partial_supported_stale() -> None:
 
 
 def test_compare_snapshots_budget_omissions_fire() -> None:
-    _conn, service, ids, binding_id, _intel, _graphs, queries = _service()
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
     rev_a = _build(
-        service, ids, binding_id, revision=REV_A, tree="rev_a", idempotency_key="omit-a"
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="omit-a",
     )
     rev_b = _build(
         service,
         ids,
         binding_id,
+        graphs=graphs,
         revision=REV_B,
         tree="rev_b",
         idempotency_key="omit-b",
@@ -823,3 +899,343 @@ def test_test_sentinel_preserves_related_unchanged_tests() -> None:
     assoc = next(f for f in findings if f.kind is SentinelKind.TEST_ASSOCIATION)
     assert test.entity_fact_id in assoc.entity_fact_ids
     assert "related_test" in assoc.evidence_notes
+
+
+# --- Closeout re-review: activation CAS / atomicity / bounded queries ---
+
+
+def test_full_rebuild_of_a_rejected_when_b_is_active() -> None:
+    _conn, service, ids, binding_id, intel, graphs, _queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="full-a1",
+    )
+    rev_b = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_B,
+        tree="rev_b",
+        idempotency_key="full-b1",
+        base_snapshot_id=rev_a.snapshot_id,
+        changed_paths=_changed_paths_rev_b(),
+    )
+    assert rev_b.status is SnapshotStatus.ACTIVE
+
+    # Stale expected active (A) while B is current — rejected.
+    rejected = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="full-a-stale",
+        expected_active_snapshot_id=rev_a.snapshot_id,
+        expect_no_active_snapshot=False,
+    )
+    assert rejected.status is SnapshotStatus.FAILED
+    assert "base_snapshot_not_current" in rejected.coverage_notes
+    active = graphs.get_active_snapshot(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert active is not None
+    assert active.snapshot_id == rev_b.snapshot_id
+
+    # Sources must remain pointed at B's revision, not the failed rebuild of A.
+    for row in _conn.execute(
+        """
+        SELECT observed_revision FROM gov_workspace_sources
+        WHERE tenant_id = ? AND workspace_object_id = ?
+          AND locator LIKE 'sample_app/%.py'
+        """,
+        (ids.tenant_alpha, ids.workspace_alpha_1),
+    ):
+        assert row["observed_revision"] == REV_B
+
+
+def test_two_full_builds_same_expected_active_only_one_activates() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
+    first = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="init-a",
+    )
+    assert first.status is SnapshotStatus.ACTIVE
+    one = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_B,
+        tree="rev_b",
+        idempotency_key="full-race-1",
+        expected_active_snapshot_id=first.snapshot_id,
+    )
+    two = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_B,
+        tree="rev_b",
+        idempotency_key="full-race-2",
+        expected_active_snapshot_id=first.snapshot_id,
+    )
+    assert one.status is SnapshotStatus.ACTIVE
+    assert two.status is SnapshotStatus.FAILED
+    actives = _conn.execute(
+        """
+        SELECT COUNT(*) AS n FROM gov_code_graph_snapshots
+        WHERE repository_binding_id = ? AND status = ?
+        """,
+        (binding_id, SnapshotStatus.ACTIVE.value),
+    ).fetchone()["n"]
+    assert actives == 1
+
+
+def test_initial_build_requires_expect_no_active_snapshot() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, _queries = _service()
+    ok = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="init-ok",
+        expect_no_active_snapshot=True,
+    )
+    assert ok.status is SnapshotStatus.ACTIVE
+    contested = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="init-contested",
+        expect_no_active_snapshot=True,
+    )
+    assert contested.status is SnapshotStatus.FAILED
+    assert "base_snapshot_not_current" in contested.coverage_notes
+
+
+def test_failed_cas_leaves_source_observations_and_receipts_unchanged() -> None:
+    conn, service, ids, binding_id, intel, graphs, _queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="atom-a",
+    )
+    rev_b = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_B,
+        tree="rev_b",
+        idempotency_key="atom-b",
+        base_snapshot_id=rev_a.snapshot_id,
+        changed_paths=_changed_paths_rev_b(),
+    )
+    before_sources = {
+        str(row["locator"]): (
+            str(row["observed_revision"]),
+            str(row["current_observation_id"]),
+            str(row["stale_status"]),
+        )
+        for row in conn.execute(
+            """
+            SELECT locator, observed_revision, current_observation_id, stale_status
+            FROM gov_workspace_sources
+            WHERE tenant_id = ? AND workspace_object_id = ?
+            """,
+            (ids.tenant_alpha, ids.workspace_alpha_1),
+        )
+    }
+    before_events = conn.execute(
+        "SELECT COUNT(*) AS n FROM gov_domain_events WHERE tenant_id = ?",
+        (ids.tenant_alpha,),
+    ).fetchone()["n"]
+    before_receipts = conn.execute(
+        "SELECT COUNT(*) AS n FROM gov_command_receipts WHERE tenant_id = ?",
+        (ids.tenant_alpha,),
+    ).fetchone()["n"]
+
+    failed = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="atom-stale",
+        expected_active_snapshot_id=rev_a.snapshot_id,
+    )
+    assert failed.status is SnapshotStatus.FAILED
+
+    after_sources = {
+        str(row["locator"]): (
+            str(row["observed_revision"]),
+            str(row["current_observation_id"]),
+            str(row["stale_status"]),
+        )
+        for row in conn.execute(
+            """
+            SELECT locator, observed_revision, current_observation_id, stale_status
+            FROM gov_workspace_sources
+            WHERE tenant_id = ? AND workspace_object_id = ?
+            """,
+            (ids.tenant_alpha, ids.workspace_alpha_1),
+        )
+    }
+    assert after_sources == before_sources
+    active = graphs.get_active_snapshot(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert active is not None and active.snapshot_id == rev_b.snapshot_id
+    # Failure records build-requested + build-failed events and a receipt, but
+    # source pointers and the active graph must be unchanged.
+    after_events = conn.execute(
+        "SELECT COUNT(*) AS n FROM gov_domain_events WHERE tenant_id = ?",
+        (ids.tenant_alpha,),
+    ).fetchone()["n"]
+    after_receipts = conn.execute(
+        "SELECT COUNT(*) AS n FROM gov_command_receipts WHERE tenant_id = ?",
+        (ids.tenant_alpha,),
+    ).fetchone()["n"]
+    assert after_events >= before_events + 1
+    assert after_receipts == before_receipts + 1
+    assert "workspace.code_graph.snapshot_activated" not in failed.event_types
+    assert "workspace.code_graph.build_failed" in failed.event_types
+
+
+def test_activation_fault_after_point_sources_rolls_back() -> None:
+    conn, service, ids, binding_id, intel, graphs, _queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="fault-a",
+    )
+    before = {
+        str(row["locator"]): str(row["observed_revision"])
+        for row in conn.execute(
+            """
+            SELECT locator, observed_revision FROM gov_workspace_sources
+            WHERE tenant_id = ? AND workspace_object_id = ?
+            """,
+            (ids.tenant_alpha, ids.workspace_alpha_1),
+        )
+    }
+    service._activation_fault_before = "after:point_sources"
+    failed = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_B,
+        tree="rev_b",
+        idempotency_key="fault-b",
+        base_snapshot_id=rev_a.snapshot_id,
+        changed_paths=_changed_paths_rev_b(),
+    )
+    assert failed.status is SnapshotStatus.FAILED
+    active = graphs.get_active_snapshot(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    assert active is not None and active.snapshot_id == rev_a.snapshot_id
+    after = {
+        str(row["locator"]): str(row["observed_revision"])
+        for row in conn.execute(
+            """
+            SELECT locator, observed_revision FROM gov_workspace_sources
+            WHERE tenant_id = ? AND workspace_object_id = ?
+            """,
+            (ids.tenant_alpha, ids.workspace_alpha_1),
+        )
+    }
+    assert after == before
+
+
+def test_entity_only_budget_excludes_contains_and_reads() -> None:
+    from holodeck_governance.domain.workspace.intelligence.code_graph.queries import (
+        TraversalDirection,
+        neighbors_of,
+    )
+
+    file_ent = _entity(path="pkg/mod.py", kind=EntityKind.FILE)
+    fn = _entity(path="pkg/mod.py", kind=EntityKind.FUNCTION, qualified_name="f")
+    other = _entity(path="pkg/other.py", kind=EntityKind.FUNCTION, qualified_name="g")
+    contains = _relation(kind=RelationKind.CONTAINS, source=file_ent, target=fn)
+    reads = _relation(kind=RelationKind.READS, source=fn, target=other)
+    calls = _relation(kind=RelationKind.CALLS, source=fn, target=other)
+    budget = QueryBudget(
+        max_depth=1,
+        max_results=50,
+        max_visited_nodes=50,
+        entity_kinds=(EntityKind.FUNCTION,),
+        relation_kinds=(),
+    )
+    hits, _omissions = neighbors_of(
+        seed_entity_fact_id=fn.entity_fact_id,
+        entities=(file_ent, fn, other),
+        relations=(contains, reads, calls),
+        direction=TraversalDirection.BOTH,
+        budget=budget,
+    )
+    kinds = {hit.relation.relation_kind for hit in hits}
+    assert RelationKind.CALLS in kinds
+    assert RelationKind.CONTAINS not in kinds
+    assert RelationKind.READS not in kinds
+
+
+def test_bounded_find_entities_does_not_scan_entire_synthetic_graph() -> None:
+    _conn, service, ids, binding_id, _intel, graphs, queries = _service()
+    rev_a = _build(
+        service,
+        ids,
+        binding_id,
+        graphs=graphs,
+        revision=REV_A,
+        tree="rev_a",
+        idempotency_key="bound-base",
+    )
+    assert rev_a.entity_count > 20
+    graphs.entities_rows_fetched = 0
+    scope = GraphQueryScope(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
+    budget = QueryBudget(max_depth=1, max_results=5, max_visited_nodes=50)
+    result = queries.find_entities(scope, budget=budget)
+    assert len(result.entities) == 5
+    assert "max_results" in result.omissions.reasons
+    # Storage fetches limit+1 rows — never the full snapshot entity set.
+    assert graphs.entities_rows_fetched <= 6
+    assert graphs.entities_rows_fetched < rev_a.entity_count

@@ -16,8 +16,7 @@
     "entity_count": 45,
     "entity_fingerprint_count": 45,
     "relation_count": 53,
-    "relation_fingerprint_count": 53,
-    "seconds": 0.0131
+    "relation_fingerprint_count": 53
   },
   "incremental": {
     "entity_count": 45,
@@ -26,8 +25,7 @@
     "rebuilt_relation_count": 42,
     "relation_count": 53,
     "reused_entity_count": 13,
-    "reused_relation_count": 11,
-    "seconds": 0.0143
+    "reused_relation_count": 11
   },
   "residual_risks": [
     "Neighborhood re-extraction stamps new observations on impact neighbors even when file bytes are unchanged.",

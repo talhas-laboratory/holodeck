@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -68,7 +69,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (  # noqa: E402
+from python_reference import (  # noqa: E402  # noqa: E402
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -223,7 +224,17 @@ def _build(
     idempotency_key: str,
     base_snapshot_id: str | None = None,
     changed_paths: tuple[str, ...] = (),
+    expected_active_snapshot_id: str | None = None,
+    expect_no_active_snapshot: bool | None = None,
 ) -> object:
+    if expect_no_active_snapshot is None and expected_active_snapshot_id is None:
+        if base_snapshot_id is not None:
+            expected_active_snapshot_id = base_snapshot_id
+            expect_no_active_snapshot = False
+        else:
+            expect_no_active_snapshot = True
+    elif expect_no_active_snapshot is None:
+        expect_no_active_snapshot = False
     return service.build_graph(
         GraphBuildRequest(
             tenant_id=ids.tenant_alpha,
@@ -236,6 +247,8 @@ def _build(
             limits=LIMITS,
             at=NOW,
             base_snapshot_id=base_snapshot_id,
+            expected_active_snapshot_id=expected_active_snapshot_id,
+            expect_no_active_snapshot=bool(expect_no_active_snapshot),
             changed_paths=changed_paths,
         )
     )
@@ -360,7 +373,7 @@ def test_merge_reuses_unchanged_and_rebuilds_changed() -> None:
     assert len(relations) == 2
 
 
-def test_incremental_matches_full_normalized_facts_on_golden() -> None:
+def test_incremental_matches_full_normalized_facts_on_golden(tmp_path: Path) -> None:
     conn, service, ids, binding_id, _intel, graphs = _service()
     changed = _changed_paths_rev_b()
 
@@ -377,6 +390,7 @@ def test_incremental_matches_full_normalized_facts_on_golden() -> None:
         revision=REV_B,
         tree="rev_b",
         idempotency_key="rev-b-full",
+        expected_active_snapshot_id=rev_a.snapshot_id,
     )
     full_elapsed = time.perf_counter() - started_full
     assert full_b.status is SnapshotStatus.ACTIVE
@@ -473,8 +487,33 @@ def test_incremental_matches_full_normalized_facts_on_golden() -> None:
             "full fallback or an adapter-provided path set.",
         ],
     }
-    artifact = ROOT / "artifacts" / "m2-024-incremental-refresh-metrics.json"
-    artifact.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    run_artifact = tmp_path / "m2-024-incremental-refresh-metrics.run.json"
+    run_artifact.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    golden = ROOT / "artifacts" / "m2-024-incremental-refresh-metrics.json"
+    if os.environ.get("HOLODECK_UPDATE_ACCEPTANCE_ARTIFACTS") == "1":
+        golden.parent.mkdir(parents=True, exist_ok=True)
+        golden.write_text(
+            json.dumps(_stable_incremental_metrics(metrics), indent=2, sort_keys=True)
+            + "\n"
+        )
+    else:
+        assert golden.is_file(), "committed golden incremental metrics missing"
+        golden_payload = json.loads(golden.read_text())
+        assert _stable_incremental_metrics(metrics) == _stable_incremental_metrics(
+            golden_payload
+        )
+
+
+def _stable_incremental_metrics(payload: object) -> object:
+    if isinstance(payload, dict):
+        return {
+            key: _stable_incremental_metrics(value)
+            for key, value in payload.items()
+            if key != "seconds"
+        }
+    if isinstance(payload, list):
+        return [_stable_incremental_metrics(item) for item in payload]
+    return payload
 
 
 def test_incremental_reuses_unchanged_fact_ids() -> None:

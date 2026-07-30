@@ -7,10 +7,11 @@ is data only — it never grants instruction authority or raises readiness.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Iterator, Protocol
 
 from holodeck_governance.application.repository_extractor import (
     ExtractionCoverage,
@@ -101,7 +102,12 @@ def _build_claim_lease_seconds(limits: ExtractionLimits) -> int:
 
 @dataclass(frozen=True, slots=True)
 class GraphBuildRequest:
-    """One idempotent graph build/rebuild against an immutable revision."""
+    """One idempotent graph build/rebuild against an immutable revision.
+
+    ``base_snapshot_id`` is only for incremental reuse/lineage. Activation CAS
+    uses ``expected_active_snapshot_id`` or ``expect_no_active_snapshot`` —
+    ``None`` never means “skip comparison.”
+    """
 
     tenant_id: str
     workspace_object_id: str
@@ -113,6 +119,8 @@ class GraphBuildRequest:
     limits: ExtractionLimits
     at: datetime
     base_snapshot_id: str | None = None
+    expected_active_snapshot_id: str | None = None
+    expect_no_active_snapshot: bool = False
     path_includes: tuple[str, ...] = ()
     path_excludes: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
@@ -130,6 +138,26 @@ class GraphBuildRequest:
         require_immutable_repository_revision(self.requested_revision)
         if self.base_snapshot_id is not None:
             require_opaque_id(self.base_snapshot_id, "base_snapshot_id")
+        if self.expected_active_snapshot_id is not None:
+            require_opaque_id(
+                self.expected_active_snapshot_id, "expected_active_snapshot_id"
+            )
+        if (
+            self.expect_no_active_snapshot
+            and self.expected_active_snapshot_id is not None
+        ):
+            raise MalformedCommandError(
+                "expect_no_active_snapshot cannot be combined with "
+                "expected_active_snapshot_id"
+            )
+        if (
+            not self.expect_no_active_snapshot
+            and self.expected_active_snapshot_id is None
+        ):
+            raise MalformedCommandError(
+                "graph builds require expected_active_snapshot_id or "
+                "expect_no_active_snapshot=True"
+            )
         if self.changed_paths and self.base_snapshot_id is None:
             raise MalformedCommandError("changed_paths require base_snapshot_id")
         if self.at.tzinfo is None:
@@ -184,10 +212,23 @@ class GraphStatusView:
     active_snapshot: RepositoryGraphSnapshot | None
     active_run: RepositoryExtractionRun | None
     factual_graph_readiness: FactualGraphReadiness = FactualGraphReadiness.ABSENT
+    observed_repository_revision: str | None = None
 
 
 class CollaborationBindingPort(Protocol):
     def get_repository_binding(self, binding_id: str) -> RepositoryBinding | None: ...
+
+
+class RepositoryHeadObservationPort(Protocol):
+    """Optional adapter/store of the authoritative observed repository head."""
+
+    def observe_repository_head(
+        self,
+        *,
+        tenant_id: str,
+        workspace_object_id: str,
+        repository_binding_id: str,
+    ) -> str | None: ...
 
 
 class IntelligenceSourcePort(Protocol):
@@ -204,7 +245,7 @@ class IntelligenceSourcePort(Protocol):
         self, workspace_object_id: str, *, tenant_id: str
     ) -> None: ...
 
-    def ensure_repository_file_source_observation(
+    def stage_repository_file_source_observation(
         self,
         *,
         source_id: str,
@@ -212,6 +253,16 @@ class IntelligenceSourcePort(Protocol):
         tenant_id: str,
         workspace_object_id: str,
         locator: str,
+        observed_revision: str,
+        actor_id: str,
+        at: datetime,
+    ) -> None: ...
+
+    def activate_source_observation_pointer(
+        self,
+        *,
+        source_id: str,
+        observation_id: str,
         observed_revision: str,
         actor_id: str,
         at: datetime,
@@ -234,6 +285,9 @@ class IntelligenceSourcePort(Protocol):
         at: datetime,
     ) -> object: ...
 
+    @contextmanager
+    def participate_in_external_transaction(self) -> Iterator[None]: ...
+
 
 class CodeGraphStorePort(Protocol):
     def persist_building_graph(
@@ -252,6 +306,19 @@ class CodeGraphStorePort(Protocol):
         tenant_id: str,
         activated_at: datetime,
         expected_active_snapshot_id: str | None = None,
+        expect_no_active_snapshot: bool = False,
+    ) -> RepositoryGraphSnapshot: ...
+
+    def run_activation_unit_of_work(
+        self,
+        *,
+        snapshot_id: str,
+        tenant_id: str,
+        activated_at: datetime,
+        expected_active_snapshot_id: str | None,
+        expect_no_active_snapshot: bool,
+        steps: tuple[tuple[str, Callable[[], None]], ...],
+        fault_before: str | None = None,
     ) -> RepositoryGraphSnapshot: ...
 
     def claim_build_idempotency(
@@ -344,6 +411,8 @@ class CodeGraphIngestionService:
         events: DomainEventPort,
         receipts: CommandReceiptPort,
         commit,
+        repository_head: RepositoryHeadObservationPort | None = None,
+        activation_fault_before: str | None = None,
     ) -> None:
         self._collaboration = collaboration
         self._intelligence = intelligence
@@ -352,6 +421,8 @@ class CodeGraphIngestionService:
         self._events = events
         self._receipts = receipts
         self._commit = commit
+        self._repository_head = repository_head
+        self._activation_fault_before = activation_fault_before
 
     def get_status(
         self,
@@ -359,6 +430,7 @@ class CodeGraphIngestionService:
         tenant_id: str,
         workspace_object_id: str,
         repository_binding_id: str,
+        observed_repository_revision: str | None = None,
     ) -> GraphStatusView:
         require_opaque_id(tenant_id, "tenant_id")
         require_opaque_id(workspace_object_id, "workspace_object_id")
@@ -379,15 +451,23 @@ class CodeGraphIngestionService:
         run = None
         if active is not None:
             run = self._graphs.get_extraction_run(active.extraction_run_id)
+        head = observed_repository_revision
+        if head is None and self._repository_head is not None:
+            head = self._repository_head.observe_repository_head(
+                tenant_id=tenant_id,
+                workspace_object_id=workspace_object_id,
+                repository_binding_id=binding.binding_id,
+            )
         readiness = evaluate_factual_graph_readiness(
             active_snapshot=active,
             active_run=run,
-            binding_repository_revision=None,
+            binding_repository_revision=head,
         )
         return GraphStatusView(
             active_snapshot=active,
             active_run=run,
             factual_graph_readiness=readiness,
+            observed_repository_revision=head,
         )
 
     def build_graph(self, request: GraphBuildRequest) -> GraphBuildResult:
@@ -794,7 +874,7 @@ class CodeGraphIngestionService:
                 entities=extraction.candidate_entities,
                 relations=extraction.candidate_relations,
             )
-            self._ensure_sources_for_facts(
+            self._stage_sources_for_facts(
                 request=request,
                 entities=extraction.candidate_entities,
                 relations=extraction.candidate_relations,
@@ -973,12 +1053,118 @@ class CodeGraphIngestionService:
                 relations=relations,
             )
             try:
-                activated = self._graphs.activate_snapshot(
-                    snapshot_id,
-                    tenant_id=request.tenant_id,
-                    activated_at=request.at,
-                    expected_active_snapshot_id=request.base_snapshot_id,
+                source_keys = self._collect_source_keys(
+                    entities=entities, relations=relations
                 )
+
+                def _point_sources() -> None:
+                    for source_id, observation_id, _locator in source_keys:
+                        self._intelligence.activate_source_observation_pointer(
+                            source_id=source_id,
+                            observation_id=observation_id,
+                            observed_revision=request.requested_revision,
+                            actor_id=request.actor_id,
+                            at=request.at,
+                        )
+
+                deletion_notes: list[str] = []
+
+                def _record_deletions() -> None:
+                    notes = self._invalidate_deleted_sources(
+                        request=request,
+                        deleted_paths=deleted_paths,
+                    )
+                    deletion_notes.extend(notes)
+
+                activation_events: list[str] = []
+
+                def _append_activation_events() -> None:
+                    completed_event = (
+                        M2_EVENT_CODE_GRAPH_BUILD_PARTIAL
+                        if coverage.status is CoverageStatus.PARTIAL
+                        else M2_EVENT_CODE_GRAPH_BUILD_COMPLETED
+                    )
+                    activation_events.append(
+                        self._append_event(
+                            tenant_id=request.tenant_id,
+                            event_type=completed_event,
+                            actor_id=request.actor_id,
+                            workspace_object_id=request.workspace_object_id,
+                            causation_id=command_id,
+                            at=request.at,
+                            payload={
+                                "snapshot_id": snapshot_id,
+                                "extraction_run_id": extraction_run_id,
+                                "entity_count": len(entities),
+                                "relation_count": len(relations),
+                                "coverage_status": coverage.status.value,
+                            },
+                        )
+                    )
+                    activation_events.append(
+                        self._append_event(
+                            tenant_id=request.tenant_id,
+                            event_type=M2_EVENT_CODE_GRAPH_SNAPSHOT_ACTIVATED,
+                            actor_id=request.actor_id,
+                            workspace_object_id=request.workspace_object_id,
+                            causation_id=command_id,
+                            at=request.at,
+                            payload={
+                                "snapshot_id": snapshot_id,
+                                "repository_binding_id": binding.binding_id,
+                                "repository_revision": extraction.actual_revision,
+                            },
+                        )
+                    )
+
+                pending_result = GraphBuildResult(
+                    snapshot_id=snapshot_id,
+                    extraction_run_id=extraction_run_id,
+                    status=SnapshotStatus.ACTIVE,
+                    coverage_status=coverage.status,
+                    entity_count=len(entities),
+                    relation_count=len(relations),
+                    actual_revision=extraction.actual_revision,
+                    event_types=(),
+                    replayed=False,
+                    coverage_notes=coverage.notes,
+                    diagnostics=tuple(d.code for d in extraction.diagnostics),
+                    reused_entity_count=stats.reused_entities,
+                    rebuilt_entity_count=stats.rebuilt_entities,
+                    reused_relation_count=stats.reused_relations,
+                    rebuilt_relation_count=stats.rebuilt_relations,
+                    incremental=incremental,
+                    fallback_full=fallback_full,
+                )
+
+                def _save_success_receipt() -> None:
+                    # Receipt is finalized after notes are known; placeholder
+                    # identity is enough inside the txn — see post-activate.
+                    self._save_receipt(
+                        request=request,
+                        command_id=command_id,
+                        fingerprint=fingerprint,
+                        result=pending_result,
+                        outcome="accepted",
+                        error_code=None,
+                        commit=False,
+                    )
+
+                with self._intelligence.participate_in_external_transaction():
+                    activated = self._graphs.run_activation_unit_of_work(
+                        snapshot_id=snapshot_id,
+                        tenant_id=request.tenant_id,
+                        activated_at=request.at,
+                        expected_active_snapshot_id=request.expected_active_snapshot_id,
+                        expect_no_active_snapshot=request.expect_no_active_snapshot,
+                        steps=(
+                            ("point_sources", _point_sources),
+                            ("record_deletions", _record_deletions),
+                            ("activation_events", _append_activation_events),
+                            ("command_receipt", _save_success_receipt),
+                        ),
+                        fault_before=self._activation_fault_before,
+                    )
             except ContentionError as exc:
                 if str(exc) != _BASE_SNAPSHOT_NOT_CURRENT:
                     raise
@@ -1087,49 +1273,7 @@ class CodeGraphIngestionService:
             )
             return result
 
-        completed_event = (
-            M2_EVENT_CODE_GRAPH_BUILD_PARTIAL
-            if coverage.status is CoverageStatus.PARTIAL
-            else M2_EVENT_CODE_GRAPH_BUILD_COMPLETED
-        )
-        event_types.append(
-            self._append_event(
-                tenant_id=request.tenant_id,
-                event_type=completed_event,
-                actor_id=request.actor_id,
-                workspace_object_id=request.workspace_object_id,
-                causation_id=command_id,
-                at=request.at,
-                payload={
-                    "snapshot_id": activated.snapshot_id,
-                    "extraction_run_id": extraction_run_id,
-                    "entity_count": activated.entity_count,
-                    "relation_count": activated.relation_count,
-                    "coverage_status": activated.coverage_status.value,
-                },
-            )
-        )
-        event_types.append(
-            self._append_event(
-                tenant_id=request.tenant_id,
-                event_type=M2_EVENT_CODE_GRAPH_SNAPSHOT_ACTIVATED,
-                actor_id=request.actor_id,
-                workspace_object_id=request.workspace_object_id,
-                causation_id=command_id,
-                at=request.at,
-                payload={
-                    "snapshot_id": activated.snapshot_id,
-                    "repository_binding_id": binding.binding_id,
-                    "repository_revision": activated.repository_revision,
-                },
-            )
-        )
-        deletion_notes = self._invalidate_deleted_sources(
-            request=request,
-            deleted_paths=deleted_paths,
-        )
-        self._commit()
-
+        event_types.extend(activation_events)
         coverage_notes = tuple(
             dict.fromkeys((*activated.coverage_notes, *deletion_notes))
         )
@@ -1151,14 +1295,6 @@ class CodeGraphIngestionService:
             rebuilt_relation_count=stats.rebuilt_relations,
             incremental=incremental,
             fallback_full=fallback_full,
-        )
-        self._save_receipt(
-            request=request,
-            command_id=command_id,
-            fingerprint=fingerprint,
-            result=result,
-            outcome="accepted",
-            error_code=None,
         )
         return result
 
@@ -1191,73 +1327,55 @@ class CodeGraphIngestionService:
             notes.append(f"recorded repository file removal for {path!r}")
         return tuple(notes)
 
-    def _ensure_sources_for_facts(
+    def _collect_source_keys(
+        self,
+        *,
+        entities: tuple[CodeEntityFact, ...],
+        relations: tuple[CodeRelationFact, ...],
+    ) -> tuple[tuple[str, str, str], ...]:
+        seen: dict[tuple[str, str], str] = {}
+        for entity in entities:
+            key = (entity.source_id, entity.source_observation_id)
+            seen.setdefault(key, entity.repository_relative_path)
+        for relation in relations:
+            key = (relation.evidence_source_id, relation.evidence_observation_id)
+            if key not in seen:
+                locator = next(
+                    (
+                        e.repository_relative_path
+                        for e in entities
+                        if e.source_id == relation.evidence_source_id
+                    ),
+                    f"evidence/{relation.evidence_source_id}",
+                )
+                seen[key] = locator
+        return tuple(
+            (source_id, observation_id, locator)
+            for (source_id, observation_id), locator in seen.items()
+        )
+
+    def _stage_sources_for_facts(
         self,
         *,
         request: GraphBuildRequest,
         entities: tuple[CodeEntityFact, ...],
         relations: tuple[CodeRelationFact, ...],
     ) -> None:
-        """Ensure file sources and observations so fact FKs resolve before insert."""
+        """Stage immutable observation rows without flipping current pointers."""
 
-        seen: set[tuple[str, str, str]] = set()
-        for entity in entities:
-            key = (
-                entity.repository_relative_path,
-                entity.source_id,
-                entity.source_observation_id,
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            self._ensure_source(
-                request=request,
-                locator=entity.repository_relative_path,
-                source_id=entity.source_id,
-                observation_id=entity.source_observation_id,
-            )
-        for relation in relations:
-            key = (
-                f"evidence:{relation.evidence_source_id}",
-                relation.evidence_source_id,
-                relation.evidence_observation_id,
-            )
-            if key in seen:
-                continue
-            locator = next(
-                (
-                    e.repository_relative_path
-                    for e in entities
-                    if e.source_id == relation.evidence_source_id
-                ),
-                f"evidence/{relation.evidence_source_id}",
-            )
-            seen.add(key)
-            self._ensure_source(
-                request=request,
+        for source_id, observation_id, locator in self._collect_source_keys(
+            entities=entities, relations=relations
+        ):
+            self._intelligence.stage_repository_file_source_observation(
+                source_id=source_id,
+                observation_id=observation_id,
+                tenant_id=request.tenant_id,
+                workspace_object_id=request.workspace_object_id,
                 locator=locator,
-                source_id=relation.evidence_source_id,
-                observation_id=relation.evidence_observation_id,
+                observed_revision=request.requested_revision,
+                actor_id=request.actor_id,
+                at=request.at,
             )
-
-    def _ensure_source(
-        self,
-        *,
-        request: GraphBuildRequest,
-        locator: str,
-        source_id: str,
-        observation_id: str,
-    ) -> None:
-        self._intelligence.ensure_repository_file_source_observation(
-            source_id=source_id,
-            observation_id=observation_id,
-            tenant_id=request.tenant_id,
-            workspace_object_id=request.workspace_object_id,
-            locator=locator,
-            observed_revision=request.requested_revision,
-            actor_id=request.actor_id,
-            at=request.at,
-        )
 
     def _require_active_binding(
         self,
@@ -1295,6 +1413,8 @@ class CodeGraphIngestionService:
                 "provider_schema_version": caps.provider.provider_schema_version,
                 "configuration_hash": caps.provider.configuration_hash,
                 "base_snapshot_id": request.base_snapshot_id,
+                "expected_active_snapshot_id": request.expected_active_snapshot_id,
+                "expect_no_active_snapshot": request.expect_no_active_snapshot,
                 "path_includes": list(request.path_includes),
                 "path_excludes": list(request.path_excludes),
                 "changed_paths": list(request.changed_paths),
@@ -1317,6 +1437,7 @@ class CodeGraphIngestionService:
         result: GraphBuildResult,
         outcome: str,
         error_code: str | None,
+        commit: bool = True,
     ) -> None:
         receipt = CommandReceipt(
             receipt_id=generate_uuidv7(),
@@ -1336,7 +1457,8 @@ class CodeGraphIngestionService:
             idempotency_key=request.idempotency_key,
             semantic_hash=fingerprint,
         )
-        self._commit()
+        if commit:
+            self._commit()
 
     def _result_from_receipt(
         self, receipt: CommandReceipt, *, replayed: bool

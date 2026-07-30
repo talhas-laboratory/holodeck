@@ -703,9 +703,7 @@ class CodeGraphQueryService:
             return (), ()
         traversal = _traversal_budget(budget)
         relation_kinds = tuple(kind.value for kind in traversal.relation_kinds)
-        entities_by_id: dict[str, CodeEntityFact] = {
-            seed.entity_fact_id: seed
-        }
+        entities_by_id: dict[str, CodeEntityFact] = {seed.entity_fact_id: seed}
         relations_by_id: dict[str, CodeRelationFact] = {}
         frontier: list[str] = [seed.entity_fact_id]
         visited: set[str] = {seed.entity_fact_id}
@@ -760,15 +758,23 @@ class CodeGraphQueryService:
             next_frontier: list[str] = []
             for relation in batch:
                 neighbor_ids: list[str] = []
-                if direction in (
-                    TraversalDirection.OUTGOING,
-                    TraversalDirection.BOTH,
-                ) and relation.source_entity_fact_id in frontier_set:
+                if (
+                    direction
+                    in (
+                        TraversalDirection.OUTGOING,
+                        TraversalDirection.BOTH,
+                    )
+                    and relation.source_entity_fact_id in frontier_set
+                ):
                     neighbor_ids.append(relation.target_entity_fact_id)
-                if direction in (
-                    TraversalDirection.INCOMING,
-                    TraversalDirection.BOTH,
-                ) and relation.target_entity_fact_id in frontier_set:
+                if (
+                    direction
+                    in (
+                        TraversalDirection.INCOMING,
+                        TraversalDirection.BOTH,
+                    )
+                    and relation.target_entity_fact_id in frontier_set
+                ):
                     neighbor_ids.append(relation.source_entity_fact_id)
                 for neighbor_id in neighbor_ids:
                     if neighbor_id in visited:

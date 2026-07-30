@@ -58,7 +58,7 @@ _FIXTURE_PARENT = ROOT / "tests" / "fixtures" / "code_graph"
 if str(_FIXTURE_PARENT) not in sys.path:
     sys.path.insert(0, str(_FIXTURE_PARENT))
 
-from python_reference import (
+from python_reference import (  # noqa: E402
     REVISIONS_PATH,
     TREES_ROOT,
     fixture_revision_id,
@@ -223,7 +223,13 @@ def _build(
     tree: str,
     revision: str,
     key: str,
+    graphs: object,
 ) -> object:
+    active = graphs.get_active_snapshot(
+        tenant_id=ids.tenant_alpha,
+        workspace_object_id=ids.workspace_alpha_1,
+        repository_binding_id=binding_id,
+    )
     return ingestion.build_graph(
         GraphBuildRequest(
             tenant_id=ids.tenant_alpha,
@@ -235,17 +241,29 @@ def _build(
             idempotency_key=key,
             limits=LIMITS,
             at=NOW,
+            expected_active_snapshot_id=(
+                None if active is None else active.snapshot_id
+            ),
+            expect_no_active_snapshot=active is None,
         )
     )
 
 
 def test_rev_a_and_rev_b_sentinel_goldens_activate_expected_kinds() -> None:
-    ingestion, queries, ids, binding_id, _graphs = _harness()
+    ingestion, queries, ids, binding_id, graphs = _harness()
     for tree, revision, key in (
         ("rev_a", REV_A, "sent-a"),
         ("rev_b", REV_B, "sent-b"),
     ):
-        _build(ingestion, ids, binding_id, tree=tree, revision=revision, key=key)
+        _build(
+            ingestion,
+            ids,
+            binding_id,
+            tree=tree,
+            revision=revision,
+            key=key,
+            graphs=graphs,
+        )
         result = queries.evaluate_sentinels(_scope(ids, binding_id), budget=BUDGET)
         kinds = {finding.kind for finding in result.findings}
         assert SentinelKind.API_ENTRY in kinds
@@ -261,8 +279,16 @@ def test_rev_a_and_rev_b_sentinel_goldens_activate_expected_kinds() -> None:
 
 
 def test_change_sentinels_activate_on_service_and_test_paths() -> None:
-    ingestion, queries, ids, binding_id, _graphs = _harness()
-    _build(ingestion, ids, binding_id, tree="rev_a", revision=REV_A, key="chg-a")
+    ingestion, queries, ids, binding_id, graphs = _harness()
+    _build(
+        ingestion,
+        ids,
+        binding_id,
+        tree="rev_a",
+        revision=REV_A,
+        key="chg-a",
+        graphs=graphs,
+    )
     changed = _changed_paths_rev_b()
     result = queries.evaluate_sentinels(
         _scope(ids, binding_id), changed_paths=changed, budget=BUDGET
@@ -286,7 +312,13 @@ def test_change_sentinels_activate_on_service_and_test_paths() -> None:
 def test_sensitive_path_prefix_activates_empty_list_unresolved() -> None:
     ingestion, queries, ids, binding_id, graphs = _harness()
     built = _build(
-        ingestion, ids, binding_id, tree="rev_a", revision=REV_A, key="sens-a"
+        ingestion,
+        ids,
+        binding_id,
+        tree="rev_a",
+        revision=REV_A,
+        key="sens-a",
+        graphs=graphs,
     )
     scope = _scope(ids, binding_id)
     empty = queries.evaluate_sentinels(scope, budget=BUDGET)
@@ -332,8 +364,16 @@ def test_sensitive_path_prefix_activates_empty_list_unresolved() -> None:
 
 
 def test_sentinels_never_emit_cleared_status() -> None:
-    ingestion, queries, ids, binding_id, _graphs = _harness()
-    _build(ingestion, ids, binding_id, tree="rev_a", revision=REV_A, key="clr-a")
+    ingestion, queries, ids, binding_id, graphs = _harness()
+    _build(
+        ingestion,
+        ids,
+        binding_id,
+        tree="rev_a",
+        revision=REV_A,
+        key="clr-a",
+        graphs=graphs,
+    )
     result = queries.evaluate_sentinels(
         _scope(ids, binding_id),
         changed_paths=_changed_paths_rev_b(),
